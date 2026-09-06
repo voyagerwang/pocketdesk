@@ -1,7 +1,8 @@
 <!--
   [INPUT]: 依赖 style.css 的设计令牌与 app.js 的 Dock、触控板手势与 WebSocket 通道。
   [OUTPUT]: 单页布局：顶部（标题 + 当前应用 + 连接状态）、单行滚动 Dock、可展开触控板卡片（设置默认收起）、
-            输入区（输入框下方的历史发送面板：清空带二次确认、收起按钮；图片预览）；目标选中态跟随 Mac 前台应用。
+            输入区（输入框下方的历史发送面板：清空带二次确认、收起按钮；图片预览）；目标选中态跟随 Mac 前台应用；
+            右下角主题切换按钮（Muji ↔ classic，localStorage 持久化，head 内联脚本预应用避免闪烁）。
   [POS]: Web 的唯一页面入口；只收集文本与手势，绝不处理或上传语音。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -10,9 +11,16 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="theme-color" content="#eef1f7">
+    <meta name="theme-color" content="#f5f3ee">
     <title>PocketDesk</title>
-    <link rel="stylesheet" href="/style.css?v=1.7.1">
+    <!-- 主题在样式表加载前内联应用，避免刷新闪现默认主题。 -->
+    <script>
+      (function () {
+        var t = localStorage.getItem('voicedeck.theme') || 'muji';
+        if (t === 'classic') document.documentElement.setAttribute('data-theme', 'classic');
+      })();
+    </script>
+    <link rel="stylesheet" href="/style.css?v=1.8.1">
   </head>
   <body>
     <main>
@@ -21,7 +29,6 @@
         <span id="pad-target" class="app-chip">ChatGPT</span>
         <span id="connection" class="pill" role="status" aria-live="polite">连接中</span>
       </header>
-
       <section class="deck" aria-label="输入到哪个应用">
         <div id="targets" class="targets" role="radiogroup" aria-label="目标应用列表"></div>
       </section>
@@ -74,6 +81,8 @@
       </section>
     </main>
 
-    <script src="/app.js?v=1.7.1"></script>
+    <button id="theme-toggle" class="theme-toggle" type="button" title="切换主题" aria-label="切换主题">M</button>
+
+    <script src="/app.js?v=1.8.1"></script>
   </body>
 </html>

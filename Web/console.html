@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   [INPUT]: 依赖 /api/status、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility。
-  [OUTPUT]: 电脑端控制台：授权引导、手机扫码连接、目标应用搜索/排序/删除/自定义图标管理、快捷键管理（键盘录制后自动命名，支持重录/排序/删除）。
+  [OUTPUT]: 电脑端控制台：授权引导、局域网与 Tailscale 跨网扫码连接、目标应用搜索/排序/删除/自定义图标管理、快捷键管理（键盘录制兼容 code/key 并自动命名，支持重录/排序/删除）；默认 Muji 主题，:root[data-theme="classic"] 覆盖恢复蓝色玻璃，右下角按钮切换并 localStorage 持久化。
   [POS]: 电脑端唯一页面入口；目标顺序与快捷键都保存在 Mac 本机（App Support），手机端只渲染。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -10,52 +10,73 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PocketDesk 控制台</title>
+<script>
+  // 主题在样式表加载前内联应用，避免刷新闪现默认主题。
+  (function () {
+    var t = localStorage.getItem('voicedeck.theme') || 'muji';
+    if (t === 'classic') document.documentElement.setAttribute('data-theme', 'classic');
+  })();
+</script>
 <style>
-:root{color-scheme:light;--ink:#171c2c;--muted:#4a5266;--panel:#f1f2f5;--line:rgb(15 30 68 / 10%);--accent:#1f6bff;--danger:#d93843;--accent-soft:rgb(31 107 255 / 10%)}
+:root{color-scheme:light;--ink:#1a1a1a;--muted:#666;--faint:#999;--bg:#f5f3ee;--panel:#fbfaf7;--line:rgb(26 26 26 / 10%);--line-strong:rgb(26 26 26 / 22%);--accent:#b74127;--accent-soft:rgb(183 65 39 / 8%);--accent-line:rgb(183 65 39 / 40%);--danger:#b74127}
 *{box-sizing:border-box}
-body{margin:0;background:radial-gradient(560px 320px at 85% -5%, rgb(59 130 246 / 16%), transparent 62%),radial-gradient(480px 320px at -10% 102%, rgb(99 102 241 / 10%), transparent 60%),#eef1f7;color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;font-size:14px}
-main{max-width:860px;margin:auto;padding:36px 24px 60px;display:flex;flex-direction:column;gap:22px}
-header{display:flex;align-items:center;gap:12px}h1{margin:0;font-size:22px}
-.pill{margin-left:auto;padding:6px 10px;border:1px solid var(--line);border-radius:99px;font-size:12px;color:var(--muted)}
-.pill.ready{color:var(--accent);border-color:rgb(31 107 255 / 38%);background:rgb(31 107 255 / 10%)}
-.card{padding:20px;border:1px solid var(--line);border-radius:18px;background:rgb(255 255 255 / 80%);-webkit-backdrop-filter:blur(20px) saturate(1.5);backdrop-filter:blur(20px) saturate(1.5);box-shadow:0 1px 2px rgb(16 24 40 / 6%)}
-.card h2{margin:0 0 4px;font-size:15px}.card .sub{margin:0 0 14px;color:var(--muted);font-size:12px}
-.step{display:grid;place-items:center;width:24px;height:24px;margin-right:8px;border-radius:8px;background:rgb(31 107 255 / 10%);color:var(--accent);font-weight:800;font-size:12px}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",sans-serif;font-size:14px;-webkit-font-smoothing:antialiased}
+main{max-width:860px;margin:auto;padding:40px 24px 60px;display:flex;flex-direction:column;gap:24px}
+header{display:flex;align-items:center;gap:12px}h1{margin:0;font-size:20px;font-weight:600;letter-spacing:0.02em}
+.pill{margin-left:auto;padding:6px 12px;border:1px solid var(--line);border-radius:4px;font-size:12px;color:var(--muted)}
+.pill.ready{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
+.card{padding:22px;border:1px solid var(--line);border-radius:6px;background:#fff}
+.card h2{margin:0 0 4px;font-size:15px;font-weight:600}.card .sub{margin:0 0 16px;color:var(--muted);font-size:12px;line-height:1.6}
+.step{display:grid;place-items:center;width:22px;height:22px;margin-right:10px;border:1px solid var(--accent-line);border-radius:4px;background:var(--accent-soft);color:var(--accent);font-weight:600;font-size:12px}
 h2{display:flex;align-items:center}
 .row{display:flex;align-items:center;gap:12px}
 button{font:inherit;cursor:pointer}
-.btn{padding:8px 14px;border:1px solid var(--line);border-radius:10px;background:#ffffff;color:var(--ink);font-size:13px}
-.btn.primary{background:linear-gradient(135deg,#3b82f6,#2450f0);border-color:transparent;color:#ffffff;font-weight:800;box-shadow:0 8px 28px -10px rgb(37 99 235 / 55%)}
+.btn{padding:8px 16px;border:1px solid var(--line-strong);border-radius:4px;background:#fff;color:var(--ink);font-size:13px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 .btn.ghost{border-color:transparent;background:transparent;color:var(--muted)}
-.btn:disabled{opacity:.5;cursor:wait}
+.btn:disabled{opacity:.45;cursor:wait}
 #authState{font-size:13px}#authState.ok{color:var(--accent)}#authState.bad{color:var(--danger)}
-#connect{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
-.qr-item{display:flex;flex-direction:column;gap:6px}
-.qr-item b{font-size:12px}
-#qr,#qr-ip{width:128px;height:128px;border-radius:12px;background:#fff;padding:6px}
-#qr.error,#qr-ip.error{background:var(--panel)}
-.mono{font-family:ui-monospace,Menlo,monospace;color:var(--accent);word-break:break-all;font-size:12px}
+#connect{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
+.qr-item{display:flex;flex-direction:column;gap:8px}
+.qr-item[hidden]{display:none}
+.qr-item b{font-size:12px;font-weight:600}
+#qr,#qr-ip,#qr-remote{width:132px;height:132px;border:1px solid var(--line);border-radius:4px;background:#fff;padding:6px}
+#qr.error,#qr-ip.error,#qr-remote.error{background:var(--panel)}
+.mono{font-family:ui-monospace,Menlo,monospace;color:var(--muted);word-break:break-all;font-size:12px}
 .connect-info{display:flex;flex-direction:column;gap:8px;flex:1;min-width:220px}
-#url{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--accent);word-break:break-all}
+#url{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--ink);word-break:break-all}
 #phoneState{font-size:13px;color:var(--muted)}
 #phoneState.ok{color:var(--accent)}
-.hint{color:var(--muted);font-size:12px;line-height:1.6}
-#search{width:100%;padding:11px 14px;border:1px solid var(--line);border-radius:12px;background:#ffffff;color:var(--ink);font:inherit}
-#search:focus{outline:2px solid var(--accent);outline-offset:1px}
-#results{margin-top:10px;border:1px solid var(--line);border-radius:12px;background:#ffffff;max-height:260px;overflow-y:auto;display:none}
+.hint{color:var(--muted);font-size:12px;line-height:1.7}
+#search{width:100%;padding:11px 14px;border:1px solid var(--line-strong);border-radius:4px;background:#fff;color:var(--ink);font:inherit}
+#search:focus{outline:none;border-color:var(--accent)}
+#results{margin-top:10px;border:1px solid var(--line);border-radius:4px;background:#fff;max-height:260px;overflow-y:auto;display:none}
 #results.open{display:block}
-.app-row{display:flex;align-items:center;gap:12px;padding:9px 12px;border-bottom:1px solid rgb(15 30 68 / 8%)}
+.app-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border-bottom:1px solid rgb(26 26 26 / 6%)}
 .app-row:last-child{border-bottom:0}
-.app-row img{width:28px;height:28px;border-radius:7px}
+.app-row img{width:28px;height:28px;border-radius:6px}
 .app-row .meta{flex:1;min-width:0}.app-row .meta b{font-weight:600;font-size:13px}.app-row .meta small{display:block;color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #current{margin-top:18px;display:flex;flex-direction:column;gap:8px}
-.target-row{display:flex;align-items:center;gap:12px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:#ffffff}
-.target-row img{width:34px;height:34px;border-radius:8px}
+.target-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:4px;background:#fff}
+.target-row img{width:34px;height:34px;border-radius:6px}
 .target-row b{font-weight:600;font-size:13px;flex:1}
 .target-row .missing{color:var(--danger);font-size:11px;margin-right:8px}
 #saveState{margin-left:8px;font-size:12px;color:var(--muted)}
-.btn.recording{color:#fff;background:var(--accent);border-color:transparent}
-.keycap{display:inline-block;min-width:22px;margin-left:4px;padding:2px 7px;border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;background:#fff;color:var(--ink);font-size:11px;text-align:center}
+.btn.recording{color:#fff;background:var(--accent);border-color:var(--accent)}
+/* 主题切换按钮：页脚右下角。 */
+.theme-toggle{position:fixed;right:24px;bottom:24px;z-index:10;display:grid;place-items:center;width:40px;height:40px;padding:0;border:1px solid var(--line);border-radius:50%;background:#fff;color:var(--muted);font-size:13px;font-weight:600}
+/* classic 主题令牌覆盖：恢复原蓝色玻璃风格。 */
+:root[data-theme="classic"]{--bg:#eef1f7;--panel:#f1f2f5;--line:rgb(15 30 68 / 10%);--line-strong:rgb(15 30 68 / 24%);--accent:#1f6bff;--danger:#d93843;--accent-soft:rgb(31 107 255 / 10%);--accent-line:rgb(31 107 255 / 38%);--ink:#171c2c;--muted:#4a5266}
+:root[data-theme="classic"] body{background:radial-gradient(560px 320px at 85% -5%, rgb(59 130 246 / 16%), transparent 62%),radial-gradient(480px 320px at -10% 102%, rgb(99 102 241 / 10%), transparent 60%),#eef1f7}
+:root[data-theme="classic"] .card{border-radius:18px;background:rgb(255 255 255 / 80%);-webkit-backdrop-filter:blur(20px) saturate(1.5);backdrop-filter:blur(20px) saturate(1.5);box-shadow:0 1px 2px rgb(16 24 40 / 6%)}
+:root[data-theme="classic"] .btn{border-radius:10px}
+:root[data-theme="classic"] .btn.primary{background:linear-gradient(135deg,#3b82f6,#2450f0);border-color:transparent;color:#fff;font-weight:800;box-shadow:0 8px 28px -10px rgb(37 99 235 / 55%)}
+:root[data-theme="classic"] .pill{border-radius:99px}
+:root[data-theme="classic"] .step{border-radius:8px;font-weight:800}
+:root[data-theme="classic"] #search,:root[data-theme="classic"] #results,:root[data-theme="classic"] .target-row{border-radius:12px}
+:root[data-theme="classic"] #qr,:root[data-theme="classic"] #qr-ip{border-radius:12px}
+:root[data-theme="classic"] .keycap{border-radius:6px}
+.keycap{display:inline-block;min-width:22px;margin-left:4px;padding:2px 7px;border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:4px;background:#fff;color:var(--ink);font-size:11px;text-align:center}
 /* 垃圾桶图标按钮：平时只显示图标，悬停泛红；确认态展开"确认移除"文字并填充红底。 */
 .icon-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;height:30px;padding:0;overflow:hidden;transition:width .18s ease,background .18s ease,color .18s ease}
 .icon-btn svg{width:17px;height:17px;flex:0 0 17px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}.icon-btn .confirm-text{display:none;font-size:12px;font-weight:600;white-space:nowrap}
@@ -78,7 +99,7 @@ button{font:inherit;cursor:pointer}
 
   <section class="card">
     <h2><span class="step">2</span>手机扫码连接</h2>
-    <p class="sub">iPhone 扫左码（地址永久不变，保存到主屏幕即可）；安卓手机不解析 .local 域名，请扫右边的 IP 码或直接输入 IP 网址。</p>
+    <p class="sub">同一 Wi-Fi 可扫局域网码；异地使用时，让手机和这台 Mac 都连接 Tailscale，再扫跨网码。</p>
     <div id="connect">
       <div class="qr-item">
         <img id="qr" alt="永久地址二维码">
@@ -90,10 +111,15 @@ button{font:inherit;cursor:pointer}
         <b>当前网络 IP · 安卓</b>
         <span id="ipUrl" class="hint mono">生成中…</span>
       </div>
+      <div id="remoteQrItem" class="qr-item" hidden>
+        <img id="qr-remote" alt="Tailscale 跨网二维码">
+        <b>跨网地址 · Tailscale</b>
+        <span id="remoteUrl" class="hint mono">生成中…</span>
+      </div>
       <div class="connect-info">
         <span id="phoneState">等待连接…</span>
+        <span id="remoteHint" class="hint">跨网连接检测中…</span>
         <span class="hint">iPhone：Safari 打开后点分享 →"添加到主屏幕"，即可像 App 一样点开。</span>
-        <span class="hint">安卓：建议在浏览器收藏 IP 网址；IP 由路由器分配，若变化重新扫一次即可。</span>
       </div>
     </div>
   </section>
@@ -119,6 +145,15 @@ button{font:inherit;cursor:pointer}
   </section>
 </main>
 <input id="iconFile" type="file" accept="image/*" hidden>
+<button id="theme-toggle" class="theme-toggle" type="button" title="切换主题" aria-label="切换主题" aria-pressed="false">M</button>
+<script>
+const THEME_KEY='voicedeck.theme';
+const themeToggle=document.getElementById('theme-toggle');
+function currentTheme(){return document.documentElement.getAttribute('data-theme')==='classic'?'classic':'muji'}
+function syncThemeToggle(){themeToggle.textContent=currentTheme()==='muji'?'C':'M';themeToggle.setAttribute('aria-pressed',String(currentTheme()==='classic'))}
+syncThemeToggle();
+themeToggle.onclick=()=>{const next=currentTheme()==='muji'?'classic':'muji';if(next==='classic')document.documentElement.setAttribute('data-theme','classic');else document.documentElement.removeAttribute('data-theme');localStorage.setItem(THEME_KEY,next);syncThemeToggle()};
+</script>
 <script>
 const $ = id => document.getElementById(id);
 let state = { targets: [], platform: 'macOS', status: null };
@@ -153,6 +188,19 @@ async function refresh() {
       $('qr-ip').src = '/api/qr?type=ip';
       $('url').textContent = status.lanURL || '未找到局域网地址，请确认 Wi-Fi 已连接。';
       $('ipUrl').textContent = status.ipURL || '未找到局域网地址';
+    }
+    if (status.remoteURL) {
+      $('remoteQrItem').hidden = false;
+      $('remoteUrl').textContent = status.remoteURL;
+      $('remoteHint').textContent = '跨网已就绪：手机也需打开 Tailscale，然后扫描跨网码。UU 远程只负责显示和操作画面。';
+      if ($('qr-remote').dataset.url !== status.remoteURL) {
+        $('qr-remote').dataset.url = status.remoteURL;
+        $('qr-remote').classList.remove('error');
+        $('qr-remote').src = '/api/qr?type=tailscale&t=' + Date.now();
+      }
+    } else {
+      $('remoteQrItem').hidden = true;
+      $('remoteHint').innerHTML = '未检测到 Tailscale。请先在这台 Mac 和手机安装并登录同一账户，再刷新本页。';
     }
     const seen = status.phoneLastSeen * 1000;
     const phoneState = $('phoneState');
@@ -300,9 +348,13 @@ document.addEventListener('keydown', event => {
   if (event.shiftKey) modifiers.push('shift');
   if (event.altKey) modifiers.push('option');
   if (event.ctrlKey) modifiers.push('control');
-  const named = CODE_MAP[event.code];
-  const letter = event.code.startsWith('Key') ? event.code.slice(3).toLowerCase() : null;
-  const digit = event.code.startsWith('Digit') ? event.code.slice(5) : null;
+  // 优先使用物理键位；部分输入环境缺少 code 时，回退到可识别的 key。
+  const code = event.code || '';
+  const key = event.key || '';
+  const named = CODE_MAP[code] || CODE_MAP[key] || (key === ' ' ? 'space' : null);
+  const letter = /^Key[A-Z]$/i.test(code) ? code.slice(3).toLowerCase()
+    : /^[a-z]$/i.test(key) ? key.toLowerCase() : null;
+  const digit = /^Digit[0-9]$/.test(code) ? code.slice(5) : /^[0-9]$/.test(key) ? key : null;
   const keyName = named || letter || digit;
   if (!keyName) return; // 忽略纯修饰键按下
   let keycode;
@@ -402,6 +454,7 @@ function scKeyName(keycode) {
 $('qr').onload = () => { $('qr').dataset.loaded = '1'; };
 $('qr').onerror = () => { $('qr').classList.add('error'); };
 $('qr-ip').onerror = () => { $('qr-ip').classList.add('error'); };
+$('qr-remote').onerror = () => { $('qr-remote').classList.add('error'); };
 refresh(); setInterval(refresh, 3000);
 </script>
 </body>

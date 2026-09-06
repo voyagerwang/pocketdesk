@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace 与 Foundation 的 JSON 编解码；消费 Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
- * [OUTPUT]: 对外提供 Server（HTTP :46387 全部端点：状态/二维码（URL 内嵌配对 token）/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活/发送/图片预上传/快捷键触发、静态页面服务；非回环写请求强制 Bearer 校验）。
+ * [OUTPUT]: 对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活/发送/图片预上传/快捷键触发、静态页面服务；非回环写请求强制 Bearer 校验）。
  * [POS]: Sources 的传输层；只翻译协议不做系统调用，与 WSServer（触控板通道）平行为一对传输兄弟。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -120,6 +120,7 @@ final class Server {
         case ("GET", "/api/status"):
             let stableURL = Util.stableURL(port)
             let lanIP = Util.primaryLANAddress()
+            let tailscaleURL = Util.tailscaleURL(port)
             // 前台应用若命中某个已配置目标，手机端选中态会跟随它；未命中则把 frontmostName
             // 交给手机端做"注入当前前台"的伪目标（不切换应用）。
             let frontmost = NSWorkspace.shared.frontmostApplication
@@ -135,6 +136,7 @@ final class Server {
                 "phoneLastSeen": Int(phoneLastSeen),
                 "lanURL": (stableURL ?? lanIP.map { "http://\($0):\(port)" }) as Any?,
                 "ipURL": lanIP.map { "http://\($0):\(port)" } as Any?,
+                "remoteURL": tailscaleURL ?? "",
                 "hostName": Util.stableHost() ?? "",
                 "frontmostId": frontmostId as Any?,
                 "frontmostName": frontmost?.localizedName as Any?,
@@ -151,17 +153,20 @@ final class Server {
         case ("GET", "/console"), ("GET", "/console.html"):
             serveFile("console.html", connection: connection)
         case ("GET", "/api/qr"):
-            // type=ip 生成局域网 IP 地址版二维码；默认生成 .local 主机名版（iOS 可保存为永久地址，
-            // 但安卓 Chrome 不解析 mDNS，需用 IP 版）。URL 内嵌配对 token——扫 QR 即完成配对。
+            // type=ip 生成局域网 IP 地址版，type=tailscale 生成跨网私有地址版；默认生成 .local
+            // 主机名版。所有 URL 内嵌配对 token，扫码即完成配对。
             let lanIP = Util.primaryLANAddress()
             let target: String?
-            if Self.queryValue("type", in: rawPath) == "ip" {
+            switch Self.queryValue("type", in: rawPath) {
+            case "ip":
                 target = lanIP.map { "http://\($0):\(port)" }
-            } else {
+            case "tailscale":
+                target = Util.tailscaleURL(port)
+            default:
                 target = Util.stableURL(port) ?? lanIP.map { "http://\($0):\(port)" }
             }
             guard let url = target.map({ "\($0)/?token=\(Auth.token)" }), let png = Util.qrPNG(url) else {
-                respond(connection, status: 503, json: ["error": "未找到局域网地址，无法生成二维码。"]); return
+                respond(connection, status: 503, json: ["error": "未找到对应网络地址，无法生成二维码。"]); return
             }
             respond(connection, status: 200, data: png, contentType: "image/png")
         case ("POST", "/api/pair"):
