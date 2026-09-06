@@ -19,7 +19,14 @@ function renderTargets(targets) {
     button.setAttribute('role', 'radio'); button.setAttribute('aria-checked', String(target.id === selected));
     const detail = target.available ? (target.id === 'feishu' ? 'Feishu / Lark' : '打开后输入') : '当前未检测到';
     button.innerHTML = `${target.name}<small>${detail}</small>`;
-    button.onclick = () => { selected = target.id; renderTargets(targets); };
+    button.onclick = async () => {
+      selected = target.id; renderTargets(targets); message(`正在唤醒 ${target.name}…`);
+      try {
+        const response = await fetch('/api/activate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({targetId:selected})});
+        const result = await response.json(); if (!response.ok) throw new Error(result.error || '无法唤醒应用。');
+        message(`${target.name} 已置于电脑前台，可以开始输入。`); textEl.focus();
+      } catch (error) { message(error.message, true); }
+    };
     targetsEl.append(button);
   });
 }

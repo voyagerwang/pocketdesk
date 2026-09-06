@@ -2,6 +2,8 @@
 
 把手机系统键盘、iPhone 听写或 Gboard 语音输入变成桌面应用的输入方式。手机只在浏览器中打开一个本地网页：选中 Codex、ChatGPT、飞书或 Chrome，输入整段文本，按发送后 Mac 激活应用、用 Quartz 注入 Unicode 文本，再按 Return。
 
+点击任一应用卡片时，Voice Deck 会立即启动或唤醒该应用，并把窗口置于 Mac 前台；输入框仍留在手机上等待听写。发送时会再次确认目标处于前台，再注入文本。
+
 > 这是 macOS 优先的本地 MVP；它不做 ASR、不采集音频、不使用云端服务。
 
 ## 架构
@@ -16,7 +18,7 @@ VoiceDeck Swift helper :46387
 Codex / ChatGPT / 飞书 / Chrome
 ```
 
-传输与执行分离。当前 HTTP 端点为 `POST /api/send`，请求体是稳定的 `SendCommand`：
+传输与执行分离。`POST /api/activate` 只负责唤醒并置顶应用，`POST /api/send` 负责置顶、输入和提交。发送请求体是稳定的 `SendCommand`：
 
 ```json
 {"targetId":"codex","text":"帮我检查这个页面"}
@@ -38,7 +40,7 @@ swiftc Sources/main.swift -o VoiceDeck -framework AppKit -framework Network
 ./scripts/install-app.sh
 ```
 
-它会安装并启动 `~/Applications/Voice Deck.app`。这样 macOS 的辅助功能授权会明确显示为 **Voice Deck**，不会归属到终端、ChatGPT 或 Codex 宿主。
+它会在临时目录构建，只安装并启动 `~/Applications/Voice Deck.app`，不会留下第二个可被 Spotlight 找到的构建副本。这样 macOS 的辅助功能授权会明确显示为 **Voice Deck**，不会归属到终端、ChatGPT 或 Codex 宿主。
 
 本机网页：<http://localhost:46387>
 
