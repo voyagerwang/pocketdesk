@@ -32,6 +32,14 @@ swiftc Sources/main.swift -o VoiceDeck -framework AppKit -framework Network
 ./VoiceDeck
 ```
 
+### 安装为独立应用（推荐）
+
+```bash
+./scripts/install-app.sh
+```
+
+它会安装并启动 `~/Applications/Voice Deck.app`。这样 macOS 的辅助功能授权会明确显示为 **Voice Deck**，不会归属到终端、ChatGPT 或 Codex 宿主。
+
 本机网页：<http://localhost:46387>
 
 手机使用字母主机名访问：`http://<这台Mac的LocalHostName>.local:46387`。例如本机的 LocalHostName 是 `YZdeMacBook-Air` 时，手机地址是 `http://YZdeMacBook-Air.local:46387`。Voice Deck 同时通过 Bonjour 以 **Voice Deck** 名称发布，不占用或伪装成 Workbench 的服务。
