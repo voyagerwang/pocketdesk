@@ -1,7 +1,7 @@
 <!--
   [INPUT]: 依赖 style.css 的设计令牌与 app.js 的 Dock、触控板手势与 WebSocket 通道。
   [OUTPUT]: 单页布局：顶部（标题 + 当前应用 + 连接状态）、单行滚动 Dock、可展开触控板卡片（设置默认收起）、
-            输入区（历史发送面板、图片预览、快捷键按钮条）；目标选中态跟随 Mac 前台应用。
+            输入区（输入框下方的历史发送面板：清空带二次确认、收起按钮；图片预览）；目标选中态跟随 Mac 前台应用。
   [POS]: Web 的唯一页面入口；只收集文本与手势，绝不处理或上传语音。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -12,7 +12,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#eef1f7">
     <title>PocketDesk</title>
-    <link rel="stylesheet" href="/style.css?v=1.7.0">
+    <link rel="stylesheet" href="/style.css?v=1.7.1">
   </head>
   <body>
     <main>
@@ -42,11 +42,17 @@
       </section>
 
       <section class="compose" aria-label="要输入的文本">
+        <textarea id="text" rows="7" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="点这里，用手机键盘或听写输入…"></textarea>
         <div id="history-panel" class="history-panel" hidden>
-          <div class="hist-head"><span>最近发送</span><button id="history-clear" class="hist-clear" type="button">清空</button></div>
+          <div class="hist-head">
+            <span>最近发送</span>
+            <span class="hist-actions">
+              <button id="history-clear" class="hist-clear" type="button">清空</button>
+              <button id="history-collapse" class="hist-collapse" type="button">收起</button>
+            </span>
+          </div>
           <div id="history-list"></div>
         </div>
-        <textarea id="text" rows="7" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="点这里，用手机键盘或听写输入…"></textarea>
         <div id="image-preview" class="image-preview" hidden>
           <img id="image-thumb" alt="待发送图片">
           <button id="image-remove" class="image-remove" type="button" title="移除图片" aria-label="移除图片">
@@ -68,6 +74,6 @@
       </section>
     </main>
 
-    <script src="/app.js?v=1.7.0"></script>
+    <script src="/app.js?v=1.7.1"></script>
   </body>
 </html>

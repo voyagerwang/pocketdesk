@@ -23,7 +23,7 @@ const scrollSpeedEl = document.querySelector('#scroll-speed');
 const padSettings = document.querySelector('#pad-settings');
 
 let targets = [];
-let selected = 'chatgpt';
+let selected = null;        // null = 尚未选择；boot 后由心跳对齐到 Mac 当前真实前台
 const FRONTMOST_ID = '__frontmost__';   // 伪目标：前台是非 Dock 应用时，发送直接注入当前前台
 let lastActivateAt = 0;     // 刚在手机上激活过应用时，短暂抑制前台跟随，避免竞态回跳
 let lastSeenFront = null;   // 边沿触发：只在电脑前台应用发生变化时跟随一次
@@ -67,9 +67,10 @@ function markSelected() {
     element.tabIndex = isSelected ? 0 : -1;   // Tab 下次进来落在选中项上
   });
   const front = targets.find(item => item.id === selected);
-  // 发送按钮必须把目标带上：用户要知道这段字会打进哪个窗口。
-  padTarget.textContent = front ? front.name : '当前前台';
-  sendEl.textContent = front ? `发送到 ${front.name}` : '发送到当前前台';
+  // 发送按钮必须把目标带上：用户要知道这段字会打进哪个窗口；没选就明说。
+  padTarget.textContent = front ? front.name : (selected === FRONTMOST_ID ? '当前前台' : '未选择');
+  sendEl.textContent = front ? `发送到 ${front.name}`
+    : selected === FRONTMOST_ID ? '发送到当前前台' : '先选择应用';
 }
 
 /* ---------- 选中与唤醒 ---------- */
@@ -264,7 +265,36 @@ histBtn.addEventListener('click', () => {
   historyPanel.hidden = !open;
   // aria-pressed 同时驱动按钮高亮态，面板开闭有明确的按钮反馈。
   histBtn.setAttribute('aria-pressed', String(open));
+  disarmClear();
   if (open) renderHistory();
+});
+
+// 清空二次确认：第一下点变"确认清空？"，再点才真清；3.5 秒不动作自动还原。
+let clearArmTimer = 0;
+
+function disarmClear() {
+  clearTimeout(clearArmTimer);
+  historyClear.textContent = '清空';
+  historyClear.classList.remove('armed');
+}
+
+historyClear.addEventListener('click', () => {
+  if (!historyClear.classList.contains('armed')) {
+    historyClear.classList.add('armed');
+    historyClear.textContent = '确认清空？';
+    clearArmTimer = setTimeout(disarmClear, 3500);
+    return;
+  }
+  disarmClear();
+  localStorage.removeItem(HIST_KEY);
+  renderHistory();
+});
+
+// 收起按钮：面板头部右侧，与时钟按钮同效（收起 + 取消高亮）。
+document.querySelector('#history-collapse').addEventListener('click', () => {
+  historyPanel.hidden = true;
+  histBtn.setAttribute('aria-pressed', 'false');
+  disarmClear();
 });
 
 function loadHistory() {
@@ -308,16 +338,12 @@ function renderHistory() {
       textEl.value = item.text;
       historyPanel.hidden = true;
       histBtn.setAttribute('aria-pressed', 'false');
+      disarmClear();
       textEl.focus();
     });
     historyList.append(div);
   });
 }
-
-historyClear.addEventListener('click', () => {
-  localStorage.removeItem(HIST_KEY);
-  renderHistory();
-});
 
 /* ---------- 图片发送：选图 → 预览 → 与文字一起发送（经 Mac 剪贴板粘贴） ---------- */
 
@@ -335,10 +361,27 @@ imageFile.addEventListener('change', () => {
   if (!file) return;
   if (!file.type.startsWith('image/')) { message('只能选择图片。', true); return; }
   compressImage(file, dataUrl => {
-    pendingImage = { dataUrl, base64: dataUrl.split(',')[1] };
+    pendingImage = { dataUrl };
     imageThumb.src = dataUrl;
     imagePreview.hidden = false;
-    message('图片已插入，输入文字后一起发送。');
+    // 选图即预上传：发送时只带标记，请求体保持轻量，粘贴也更早就绪。
+    message('图片上传中…');
+    fetch('/api/image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: dataUrl.split(',')[1] }),
+    }).then(async response => {
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || '图片上传失败。');
+      }
+      if (pendingImage) message('图片已就绪，输入文字后一起发送。');
+    }).catch(error => {
+      pendingImage = null;
+      imageThumb.src = '';
+      imagePreview.hidden = true;
+      message(error.message, true);
+    });
   });
 });
 
@@ -366,10 +409,11 @@ function compressImage(file, done) {
   reader.readAsDataURL(file);
 }
 
-/* ---------- 快捷键按钮条：点击向 Mac 前台应用注入组合键 ---------- */
+/* ---------- 快捷键按钮条：渲染电脑端自定义的快捷键，点击注入组合键到 Mac 前台 ---------- */
 
 const shortcutBar = document.querySelector('#shortcut-bar');
 let shortcuts = [];
+let customShortcuts = []; // 过滤默认示例（undo/copy/paste），手机上只展示用户自己录的
 
 const MODIFIER_PREFIX = { command: '⌘', shift: '⇧', option: '⌥', control: '⌃' };
 const KEY_NAMES = { 36: '⏎', 49: '空格', 51: '⌫', 48: '⇥', 53: 'esc',
@@ -385,8 +429,8 @@ function shortcutLabel(shortcut) {
 
 function renderShortcuts() {
   shortcutBar.innerHTML = '';
-  shortcutBar.hidden = !shortcuts.length;
-  shortcuts.forEach(shortcut => {
+  shortcutBar.hidden = !customShortcuts.length;
+  customShortcuts.forEach(shortcut => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'shortcut-key';
@@ -411,6 +455,15 @@ function renderShortcuts() {
     });
     shortcutBar.append(button);
   });
+}
+
+// 手机上只展示用户自定义的快捷键；服务端默认示例（undo/copy/paste 且无自定义内容时不展示）。
+function syncShortcuts(list) {
+  shortcuts = list || [];
+  const isDefault = s => ['undo', 'copy', 'paste'].includes(s.id) && s.label === { undo: '撤销', copy: '复制', paste: '粘贴' }[s.id];
+  const hasCustom = shortcuts.some(s => !isDefault(s));
+  customShortcuts = hasCustom ? shortcuts.filter(s => !isDefault(s)) : [];
+  renderShortcuts();
 }
 
 // 手动滑动 Dock 时暂停前台跟随，不抢用户的切换操作。
@@ -612,8 +665,7 @@ async function heartbeatTick() {
     const current = await fetch('/api/status').then(response => response.json());
     // 快捷键列表跟随服务端：控制台改完配置，手机 5 秒内自动刷新按钮。
     if (JSON.stringify(current.shortcuts || []) !== JSON.stringify(shortcuts)) {
-      shortcuts = current.shortcuts || [];
-      renderShortcuts();
+      syncShortcuts(current.shortcuts || []);
     }
     const frontId = current.frontmostId;      // 命中 Dock 目标时的 id，否则 null
     const frontName = current.frontmostName;  // 前台应用名（始终有值）
@@ -661,8 +713,7 @@ async function boot() {
   try {
     const status = await fetch('/api/status').then(response => response.json());
     targets = status.targets;
-    shortcuts = status.shortcuts || [];
-    renderShortcuts();
+    syncShortcuts(status.shortcuts || []);
     renderTargets();
     connectionEl.textContent = status.accessibility ? '已就绪' : '需授权';
     connectionEl.classList.toggle('ready', status.accessibility);
@@ -676,6 +727,10 @@ async function boot() {
 
 async function send() {
   if (sendEl.disabled) return; // 发送进行中忽略重复触发（回车与点击并发时）
+  if (!selected) {
+    message('先在上方 Dock 选择一个目标应用。', true);
+    return;
+  }
   const text = textEl.value.trim();
   if (!text && !pendingImage) {
     message('先输入一点内容或选择一张图片。', true);
@@ -689,7 +744,7 @@ async function send() {
     const response = await fetch('/api/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetId: selected, text, image: pendingImage?.base64 ?? null }),
+      body: JSON.stringify({ targetId: selected, text, usePendingImage: Boolean(pendingImage), image: null }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || '发送失败。');

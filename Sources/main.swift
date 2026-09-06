@@ -15,8 +15,15 @@ import Network
 struct SendCommand: Decodable {
     let targetId: String
     let text: String
-    // 可选：JPEG/PNG 的 base64（无 data: 前缀）。经 Mac 剪贴板 + Cmd+V 粘贴进目标应用。
+    // 可选：内联 base64 图片（兼容旧客户端）。新流程走 usePendingImage。
     let image: String?
+    // true = 图片已随 /api/image 预先上传，发送时由服务端取出。
+    let usePendingImage: Bool?
+}
+
+// 手机选图后立即预上传的请求体。
+struct PendingImage: Decodable {
+    let data: String
 }
 
 struct ActivateCommand: Decodable {
@@ -270,8 +277,31 @@ final class InputExecutor {
     static let frontmostPseudoId = "__frontmost__"
     private let queue = DispatchQueue(label: "dev.voicedeck.input")
     private let store: TargetStore
+    // 手机预上传的待发图片；send(usePendingImage) 时取出消费。
+    private var pendingImageData: Data?
+    private let pendingLock = NSLock()
 
     init(store: TargetStore) { self.store = store }
+
+    func stageImage(_ data: Data, completion: @escaping (Result<Void, InputError>) -> Void) {
+        queue.async {
+            guard data.count <= 10 * 1024 * 1024 else {
+                completion(.failure(.message("图片太大（>10MB）。"))); return
+            }
+            self.pendingLock.lock()
+            self.pendingImageData = data
+            self.pendingLock.unlock()
+            completion(.success(()))
+        }
+    }
+
+    private func takePendingImage() -> Data? {
+        pendingLock.lock()
+        defer { pendingLock.unlock() }
+        let data = pendingImageData
+        pendingImageData = nil
+        return data
+    }
 
     func activate(_ targetId: String, completion: @escaping (Result<Void, InputError>) -> Void) {
         queue.async { self.activateTarget(targetId, completion: completion) }
@@ -279,23 +309,19 @@ final class InputExecutor {
 
     func send(_ command: SendCommand, completion: @escaping (Result<Void, InputError>) -> Void) {
         queue.async {
+            // 新流程：图片随 /api/image 预上传，发送时只带标记。
+            let stagedImage = command.usePendingImage == true ? self.takePendingImage() : nil
+            let inlineImage = stagedImage == nil ? command.image.flatMap { Data(base64Encoded: $0) } : nil
+            let imageData = stagedImage ?? inlineImage
+            if command.usePendingImage == true && imageData == nil {
+                completion(.failure(.message("图片未找到或已过期，请重新选择。"))); return
+            }
             let hasText = !command.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            guard hasText || command.image != nil else {
+            guard hasText || imageData != nil else {
                 completion(.failure(.message("先输入一点内容或选择一张图片。"))); return
             }
             guard command.text.utf16.count <= 8_000 else {
                 completion(.failure(.message("单次文本最多 8,000 个 UTF-16 字符。"))); return
-            }
-            guard let imageData = command.image.flatMap({ Data(base64Encoded: $0) }), command.image != nil else {
-                if command.image != nil {
-                    completion(.failure(.message("图片数据无效。"))); return
-                }
-                // 没有图片字段：走纯文本路径。
-                self.dispatchSend(command, imageData: nil, completion: completion)
-                return
-            }
-            guard imageData.count <= 10 * 1024 * 1024 else {
-                completion(.failure(.message("图片太大（>10MB）。"))); return
             }
             self.dispatchSend(command, imageData: imageData, completion: completion)
         }
@@ -324,7 +350,8 @@ final class InputExecutor {
         }
     }
 
-    // 注入序列：有图先写剪贴板再 Cmd+V，有文再注入文本，最后 Return。
+    // 注入序列：有图先写剪贴板再 Cmd+V，等应用把图挂进输入框（ChatGPT 生成缩略图可近 1s），
+    // 之后有文注入文本；无论有无文字最后都按 Return——纯图片也要直接发出去。
     // 图片发送后留在剪贴板上（与手动复制粘贴语义一致，不额外清空）。
     private func performPaste(imageData: Data?, text: String) {
         if let imageData, let image = NSImage(data: imageData) {
@@ -332,12 +359,12 @@ final class InputExecutor {
             pasteboard.clearContents()
             pasteboard.writeObjects([image])
             postKey(9, flags: .maskCommand) // Cmd+V
-            usleep(350_000) // 等目标应用完成粘贴读取
+            usleep(1_000_000) // 等目标应用完成粘贴读取与缩略图挂载
         }
         if !text.isEmpty {
             postUnicode(text)
-            postKey(36) // Return
         }
+        postKey(36) // Return：图文一起发，或纯图直发
     }
 
     private func activateTarget(_ targetId: String, completion: @escaping (Result<Void, InputError>) -> Void) {
@@ -623,6 +650,18 @@ final class Server {
             }
             store.saveShortcuts(cleaned)
             respond(connection, status: 200, json: ["ok": true])
+        case ("POST", "/api/image"):
+            // 手机选图后立即预上传：先传图、后发文字，发送请求体保持轻量。
+            guard let upload = try? JSONDecoder().decode(PendingImage.self, from: bodyData),
+                  let png = Data(base64Encoded: upload.data) else {
+                respond(connection, status: 400, json: ["error": "图片数据无效。"]); return
+            }
+            executor.stageImage(png) { result in
+                switch result {
+                case .success: self.respond(connection, status: 200, json: ["ok": true])
+                case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
+                }
+            }
         case ("POST", "/api/shortcut-trigger"):
             guard let shortcut = try? JSONDecoder().decode(ShortcutConfig.self, from: bodyData) else {
                 respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
