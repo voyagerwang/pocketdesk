@@ -53,6 +53,8 @@ ChatGPT / 飞书 / Chrome / UU远程 …（控制台可配置）
 {"targetId":"chatgpt","text":"帮我检查这个页面"}
 ```
 
+图文发送先通过 `POST /api/image` 暂存图片，再以 `usePendingImage: true` 随文本提交。桌面端先输入文字并等待编辑器处理，再粘贴图片，等待 1 秒后按 Return，避免附件挂载期间的焦点变化吞掉文字。此等待不代表目标应用已完成上传，较慢应用仍需实机确认。
+
 Windows helper 未来只需实现同一个命令和目标解析层（例如 `SetForegroundWindow` + `SendInput`），网页不需要改变。
 
 ## 快速启动（macOS 13+）
@@ -107,7 +109,7 @@ Voice Deck→PocketDesk 的更名不影响该地址；只有修改电脑主机�
 
 ## 安全与已知限制
 
-- 服务默认监听局域网，**没有配对或身份验证**；仅在受信任网络运行，切勿向公网转发 46387 端口。控制台页面拥有目标应用的管理权，与手机页共用同一端口，跨网暴露前必须先补访问令牌。
+- **配对鉴权**：写操作（发送、激活、快捷键、目标与配置管理）要求配对 token。token 首次启动时生成并持久化在 `~/Library/Application Support/VoiceDeck/token`，通过控制台二维码单向分发——手机扫码 URL 即携带 token，之后写请求带 `Authorization: Bearer` 头、触控板 WebSocket 首帧握手校验（恒定时间比较防计时侧信道）。Mac 本机（localhost 控制台）豁免。局域网内未配对设备无法注入输入或控制指针。
 - 应用启动/切换使用固定 450 ms 等待；冷启动非常慢时，文字可能先于焦点到达。下一版可为每个应用提供可配置延迟或前台确认。
 - CGEvent 不能可靠地输入到安全输入框、macOS 登录界面、部分沙盒/提权窗口；Windows 也会受到 UIPI 限制。
 - 输入会直接提交 Return；适用于聊天/命令输入框，不适合希望保留换行的场景。网页中可用 Shift+Enter 保留换行。

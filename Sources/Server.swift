@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace 与 Foundation 的 JSON 编解码；消费 Models 的请求体类型、TargetStore 配置、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
- * [OUTPUT]: 对外提供 Server（HTTP :46387 全部端点：状态/二维码/配对心跳/应用搜索/图标/目标与快捷键管理/激活/发送/图片预上传/快捷键触发、静态页面服务）。
+ * [INPUT]: 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace 与 Foundation 的 JSON 编解码；消费 Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
+ * [OUTPUT]: 对外提供 Server（HTTP :46387 全部端点：状态/二维码（URL 内嵌配对 token）/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活/发送/图片预上传/快捷键触发、静态页面服务；非回环写请求强制 Bearer 校验）。
  * [POS]: Sources 的传输层；只翻译协议不做系统调用，与 WSServer（触控板通道）平行为一对传输兄弟。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -78,6 +78,27 @@ final class Server {
             .queryItems?.first(where: { $0.name == name })?.value
     }
 
+    private static func headerValue(_ name: String, in headerText: String) -> String? {
+        headerText.components(separatedBy: "\r\n")
+            .first { $0.lowercased().hasPrefix(name.lowercased() + ":") }?
+            .dropFirst(name.count + 1)
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    // 回环豁免：控制台页面在 Mac 本机浏览器打开（localhost 可能解析为 127.0.0.1 或 ::1），
+    // 本机即机主，无需 token。
+    private static func isLoopback(_ connection: NWConnection) -> Bool {
+        guard case .hostPort(let host, _)? = connection.currentPath?.remoteEndpoint else { return false }
+        switch host {
+        case .ipv4(let address):
+            return address.rawValue.withUnsafeBytes { $0.first == 127 }
+        case .ipv6(let address):
+            return address.rawValue.withUnsafeBytes { $0.dropLast().allSatisfy { $0 == 0 } && $0.last == 1 }
+        default:
+            return false
+        }
+    }
+
     private func route(headerText: String, body: [UInt8], connection: NWConnection) {
         let requestLine = headerText.components(separatedBy: "\r\n").first ?? ""
         let parts = requestLine.split(separator: " ")
@@ -85,6 +106,15 @@ final class Server {
         let rawPath = parts.dropFirst().first.map(String.init) ?? "/"
         let path = rawPath.components(separatedBy: "?").first ?? rawPath
         let bodyData = Data(body)
+        let authorization = Self.headerValue("Authorization", in: headerText)
+
+        // 写端点鉴权：手机 token 来自扫码 URL；控制台走 localhost 回环豁免（本机即机主）。
+        let isWrite = method != "GET"
+        let fromLoopback = Self.isLoopback(connection)
+        if isWrite && !fromLoopback && !Auth.verify(authorizationHeader: authorization) {
+            respond(connection, status: 401, json: ["error": "未授权：请重新扫码连接。"])
+            return
+        }
 
         switch (method, path) {
         case ("GET", "/api/status"):
@@ -122,7 +152,7 @@ final class Server {
             serveFile("console.html", connection: connection)
         case ("GET", "/api/qr"):
             // type=ip 生成局域网 IP 地址版二维码；默认生成 .local 主机名版（iOS 可保存为永久地址，
-            // 但安卓 Chrome 不解析 mDNS，需用 IP 版）。
+            // 但安卓 Chrome 不解析 mDNS，需用 IP 版）。URL 内嵌配对 token——扫 QR 即完成配对。
             let lanIP = Util.primaryLANAddress()
             let target: String?
             if Self.queryValue("type", in: rawPath) == "ip" {
@@ -130,7 +160,7 @@ final class Server {
             } else {
                 target = Util.stableURL(port) ?? lanIP.map { "http://\($0):\(port)" }
             }
-            guard let url = target, let png = Util.qrPNG(url) else {
+            guard let url = target.map({ "\($0)/?token=\(Auth.token)" }), let png = Util.qrPNG(url) else {
                 respond(connection, status: 503, json: ["error": "未找到局域网地址，无法生成二维码。"]); return
             }
             respond(connection, status: 200, data: png, contentType: "image/png")
@@ -215,7 +245,8 @@ final class Server {
                 var shortcut = entry
                 let base = shortcut.id.isEmpty ? "shortcut" : shortcut.id
                 if seen.contains(base) || shortcut.id.isEmpty { shortcut.id = base + "-\(seen.count + 1)" }
-                shortcut.label = String(shortcut.label.prefix(6))
+                // 四个修饰键符号 + F12 / esc 的完整简称最多 7 个字符。
+                shortcut.label = String(shortcut.label.prefix(7))
                 seen.insert(shortcut.id)
                 return shortcut
             }
