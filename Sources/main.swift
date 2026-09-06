@@ -163,6 +163,9 @@ let root = URL(fileURLWithPath: CommandLine.arguments.first ?? FileManager.defau
 let defaultPort: UInt16 = 46387
 let selectedPort = UInt16(ProcessInfo.processInfo.environment["VOICE_DECK_PORT"] ?? "") ?? defaultPort
 let server = Server(port: selectedPort, webRoot: root.appendingPathComponent("Web"))
+// 首次启动时让 macOS 显示其官方授权提示；授权决定仍完全由用户控制。
+let promptOptions = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+_ = AXIsProcessTrustedWithOptions(promptOptions)
 try server.start()
 print("Voice Deck 已启动。打开 http://localhost:\(selectedPort)")
 dispatchMain()
