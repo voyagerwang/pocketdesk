@@ -65,7 +65,7 @@ scutil --get LocalHostName
 
 ## 目标应用
 
-MVP 已配置 Codex、ChatGPT、飞书/Lark、Chrome、ZCode 和 Workbody。它优先通过正在运行的应用名与 macOS bundle identifier 定位目标，安装路径只作为兜底。当前 Codex 桌面端虽然位于 `/Applications/ChatGPT.app`，系统标识实际是 `com.openai.codex`，Voice Deck 已兼容这种名称差异。
+MVP 已配置 Codex、ChatGPT、飞书/Lark、Chrome、ZCode、Workbody 和微信。它优先通过正在运行的应用名与 macOS bundle identifier 定位目标，安装路径只作为兜底。当前 Codex 桌面端虽然位于 `/Applications/ChatGPT.app`，系统标识实际是 `com.openai.codex`，Voice Deck 已兼容这种名称差异；微信使用本机确认过的 `com.tencent.xinWeChat`。
 
 本机已检测到 Codex/ChatGPT、Lark、Chrome 和 ZCode；当前尚未检测到 Workbody。Workbody 启动后若系统显示名为 `Workbody`/`WorkBody`，Voice Deck 会直接识别；也预留了 `/Applications/Workbody.app` 路径。
 

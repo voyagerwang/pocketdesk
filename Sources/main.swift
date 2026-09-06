@@ -50,7 +50,8 @@ let targets = [
     Target(id: "feishu", name: "飞书", bundleIdentifiers: ["com.electron.lark", "com.bytedance.Feishu", "com.larksuite.suite"], applicationNames: ["飞书", "Feishu", "Lark"], paths: ["/Applications/Feishu.app", "/Applications/Lark.app"]),
     Target(id: "chrome", name: "Chrome", bundleIdentifiers: ["com.google.Chrome"], applicationNames: ["Google Chrome", "Chrome"], paths: ["/Applications/Google Chrome.app"]),
     Target(id: "zcode", name: "ZCode", bundleIdentifiers: ["dev.zcode.app"], applicationNames: ["ZCode"], paths: ["/Applications/ZCode.app"]),
-    Target(id: "workbody", name: "Workbody", bundleIdentifiers: [], applicationNames: ["Workbody", "WorkBody"], paths: ["/Applications/Workbody.app", "/Applications/WorkBody.app"])
+    Target(id: "workbody", name: "Workbody", bundleIdentifiers: [], applicationNames: ["Workbody", "WorkBody"], paths: ["/Applications/Workbody.app", "/Applications/WorkBody.app"]),
+    Target(id: "wechat", name: "微信", bundleIdentifiers: ["com.tencent.xinWeChat"], applicationNames: ["微信", "WeChat"], paths: ["/Applications/WeChat.app", "/Applications/微信.app"])
 ]
 
 final class InputExecutor {
