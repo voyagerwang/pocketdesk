@@ -187,9 +187,17 @@ let ws = null;
 let wsReady = false;
 let reconnectTimer = 0;
 
+// WS 端口自动推导：默认 46388；经端口映射访问时（页面端口 ≠ 46387）
+// 假设映射者把 WS 也做了 +1 端口平移（18087→18088），跟随页面主机与端口。
+function wsEndpoint() {
+  const isDefault = location.port === '' || location.port === '46387';
+  const port = isDefault ? WS_PORT : Number(location.port) + 1;
+  return `ws://${location.hostname}:${port}`;
+}
+
 function wsConnect() {
   try {
-    ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
+    ws = new WebSocket(wsEndpoint());
   } catch {
     scheduleReconnect();
     return;
@@ -462,8 +470,11 @@ function hotkeyLabel(hotkey) {
   }).join('');
 }
 
+// 按钮文案：键位符号 + 名称；名称与键位展示重复时只显示一个（如 label=↑、hotkey=Up 都显示 ↑），
+// 与控制台 renderShortcuts 的去重规则一致。
 function shortcutLabel(shortcut) {
-  return `${hotkeyLabel(shortcut.hotkey)} ${shortcut.label}`.trim();
+  const display = hotkeyLabel(shortcut.hotkey);
+  return shortcut.label === display ? display : `${display} ${shortcut.label}`.trim();
 }
 
 function renderShortcuts() {

@@ -128,8 +128,8 @@ final class InputExecutor {
         let length = units.count
         units.withUnsafeMutableBufferPointer { buffer in
             guard let base = buffer.baseAddress,
-                  let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { return }
+                  let down = CGEvent(keyboardEventSource: Self.eventSource, virtualKey: 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: Self.eventSource, virtualKey: 0, keyDown: false) else { return }
             // Unicode 输入不继承当前系统修饰键，防止被解释为快捷键。
             down.flags = []
             up.flags = []
@@ -140,13 +140,35 @@ final class InputExecutor {
         }
     }
 
-    private func postKey(_ code: CGKeyCode, flags: CGEventFlags = []) {
-        let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true)
-        let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false)
-        down?.flags = flags
-        up?.flags = flags
-        down?.post(tap: .cghidEventTap)
-        up?.post(tap: .cghidEventTap)
+    // 合成键盘事件的公共底座：真实事件源 + characters 补齐 + down/up 间隔。
+    // 无源 CGEvent 的 characters 为空，Zed 终端这类按 characters 解释回车/退格的应用会整键丢弃
+    //（方向键按键码识别不受影响，故此前"上下能动、回车无效"）；Hammerspoon 等注入工具同样带源。
+    private static let eventSource = CGEventSource(stateID: .combinedSessionState)
+    // 终端类应用按 characters 解释的特殊键；字母/数字/F 键按键码识别，无需补。
+    private static let keyCharacters: [CGKeyCode: String] = [
+        36: "\r", 51: "\u{7F}", 48: "\t", 53: "\u{1B}", 49: " ",
+    ]
+
+    @discardableResult
+    private func postKey(_ code: CGKeyCode, flags: CGEventFlags = []) -> Bool {
+        guard let down = CGEvent(keyboardEventSource: Self.eventSource, virtualKey: code, keyDown: true),
+              let up = CGEvent(keyboardEventSource: Self.eventSource, virtualKey: code, keyDown: false) else { return false }
+        for event in [down, up] {
+            event.flags = flags
+            if let text = Self.keyCharacters[code] {
+                var units = Array(text.utf16)
+                let count = units.count
+                units.withUnsafeMutableBufferPointer { buffer in
+                    if let base = buffer.baseAddress {
+                        event.keyboardSetUnicodeString(stringLength: count, unicodeString: base)
+                    }
+                }
+            }
+        }
+        down.post(tap: .cghidEventTap)
+        usleep(25_000) // 贴合物理按键的 press-release 间隔，避免快速采样应用漏判
+        up.post(tap: .cghidEventTap)
+        return true
     }
 
     // 快捷键：组合键注入当前前台应用，不切换目标；与 send 共用串行队列。
@@ -159,12 +181,7 @@ final class InputExecutor {
             guard let resolved = ShortcutKeys.resolve(shortcut.hotkey) else {
                 completion(.failure(.message("快捷键无法识别：\(shortcut.hotkey)"))); return
             }
-            if let down = CGEvent(keyboardEventSource: nil, virtualKey: resolved.keycode, keyDown: true),
-               let up = CGEvent(keyboardEventSource: nil, virtualKey: resolved.keycode, keyDown: false) {
-                down.flags = resolved.flags
-                up.flags = resolved.flags
-                down.post(tap: .cghidEventTap)
-                up.post(tap: .cghidEventTap)
+            if self.postKey(resolved.keycode, flags: resolved.flags) {
                 completion(.success(()))
             } else {
                 completion(.failure(.message("快捷键事件创建失败。")))
