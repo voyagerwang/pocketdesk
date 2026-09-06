@@ -95,6 +95,8 @@ final class Server {
 
     func start() throws {
         let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port)!)
+        // 在局域网服务浏览器中以独立身份出现，不借用 Workbench 等其他本机服务。
+        listener.service = NWListener.Service(name: "Voice Deck", type: "_http._tcp")
         listener.newConnectionHandler = { [weak self] in self?.accept($0) }
         listener.stateUpdateHandler = { state in
             if case let .failed(error) = state { fputs("服务器失败：\(error)\n", stderr) }
@@ -158,7 +160,9 @@ final class Server {
 }
 
 let root = URL(fileURLWithPath: CommandLine.arguments.first ?? FileManager.default.currentDirectoryPath).deletingLastPathComponent()
-let server = Server(port: 8765, webRoot: root.appendingPathComponent("Web"))
+let defaultPort: UInt16 = 46387
+let selectedPort = UInt16(ProcessInfo.processInfo.environment["VOICE_DECK_PORT"] ?? "") ?? defaultPort
+let server = Server(port: selectedPort, webRoot: root.appendingPathComponent("Web"))
 try server.start()
-print("Voice Deck 已启动。打开 http://localhost:8765")
+print("Voice Deck 已启动。打开 http://localhost:\(selectedPort)")
 dispatchMain()
