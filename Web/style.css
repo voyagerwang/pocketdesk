@@ -166,6 +166,35 @@ h1 {
   -webkit-overflow-scrolling: touch;
 }
 
+/* 右缘纸页渐隐：内容延伸出屏时像纸页一样淡出，暗示"还有更多"而不画轨道。 */
+.edge-fade {
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 24px), transparent);
+}
+
+/* 墨线指示：可继续滚动时右缘出现一枚 4px 赭红短横线，到底即淡出（JS 翻转 data attr）。 */
+.scroll-cue {
+  position: relative;
+}
+
+.scroll-cue::after {
+  content: "";
+  position: absolute;
+  right: var(--s-1);
+  bottom: var(--s-1);
+  width: 18px;
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+  pointer-events: none;
+}
+
+.scroll-cue[data-more="true"]::after {
+  opacity: 0.85;
+}
+
 .targets::-webkit-scrollbar {
   display: none;
 }
@@ -675,6 +704,26 @@ main:not(.pad-mode) .pad-gear {
   background: var(--surface-2);
   max-height: 200px;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* WebKit 细线滚动条：平时一道发丝灰，拖动/触按染墨（赭红），与纸面语言一致。 */
+.history-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.history-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.history-panel::-webkit-scrollbar-thumb {
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+}
+
+.history-panel::-webkit-scrollbar-thumb:active {
+  background: var(--accent);
 }
 
 .hist-head {

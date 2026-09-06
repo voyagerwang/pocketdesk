@@ -501,6 +501,26 @@ function syncShortcuts(list) {
 // 手动滑动 Dock 时暂停前台跟随，不抢用户的切换操作。
 row.addEventListener('scroll', () => { manualUntil = Date.now() + 4000; }, { passive: true });
 
+/* ---------- 横向滚动墨线指示：右侧还有内容时亮起，滚到底淡出 ---------- */
+
+// Dock 与快捷键条共用：内容不溢出时不显示，溢出时跟随滚动位置翻转。
+// 返回 update 供内容异步填充后手动触发（图标 img 加载会改变 scrollWidth）。
+function trackScrollCue(element) {
+  const update = () => {
+    const remaining = element.scrollWidth - element.scrollLeft - element.clientWidth;
+    element.dataset.more = remaining > 24 ? 'true' : 'false';
+  };
+  element.addEventListener('scroll', update, { passive: true });
+  window.addEventListener('resize', update);
+  // 布局与图片加载都晚于脚本：双 rAF 后首拍，再挂图片加载触发。
+  requestAnimationFrame(() => requestAnimationFrame(update));
+  element.addEventListener('load', update, true); // capture：img 的 load 不冒泡
+  return update;
+}
+
+trackScrollCue(row);
+trackScrollCue(document.querySelector('#shortcut-bar'));
+
 pad.addEventListener('pointerdown', event => {
   enterPadMode();
   if (momentumRaf) { cancelAnimationFrame(momentumRaf); momentumRaf = 0; } // 新手势接管，停掉惯性
@@ -707,6 +727,8 @@ async function heartbeatTick() {
     if (JSON.stringify(current.shortcuts || []) !== JSON.stringify(shortcuts)) {
       syncShortcuts(current.shortcuts || []);
     }
+    // 主题跟随服务端：电脑端切换后，手机下一拍（≤5s）自动换肤。
+    applyTheme(current.theme);
     const frontId = current.frontmostId;      // 命中 Dock 目标时的 id，否则 null
     const frontName = current.frontmostName;  // 前台应用名（始终有值）
     const key = frontId ?? frontName ?? null;
@@ -767,6 +789,7 @@ async function boot() {
     targets = status.targets;
     syncShortcuts(status.shortcuts || []);
     renderTargets();
+    applyTheme(status.theme);
     connectionEl.textContent = status.accessibility ? '已就绪' : '需授权';
     connectionEl.classList.toggle('ready', status.accessibility);
     if (!status.accessibility) message('请先在电脑端控制台完成授权，页面仍可输入。', true);
@@ -836,33 +859,16 @@ textEl.addEventListener('keydown', event => {
   }
 });
 
-/* ---------- 主题切换：Muji ↔ classic，状态持久化 ---------- */
+/* ---------- 主题跟随：唯一控制点在电脑端控制台，手机页经 /api/status 只读跟随 ---------- */
 
-const THEME_KEY = 'voicedeck.theme';
-const themeToggle = document.querySelector('#theme-toggle');
-
-function currentTheme() {
-  return document.documentElement.getAttribute('data-theme') === 'classic' ? 'classic' : 'muji';
-}
-
-function syncThemeToggle() {
-  // 按钮字标显示"另一边"：当前是 Muji 就显示 C（可切到 classic），反之 M。
-  themeToggle.textContent = currentTheme() === 'muji' ? 'C' : 'M';
-  themeToggle.setAttribute('aria-pressed', String(currentTheme() === 'classic'));
-}
-
-if (themeToggle) {
-  syncThemeToggle();
-  themeToggle.addEventListener('click', () => {
-    const next = currentTheme() === 'muji' ? 'classic' : 'muji';
-    if (next === 'classic') {
-      document.documentElement.setAttribute('data-theme', 'classic');
-    } else {
-      document.documentElement.removeAttribute('data-theme');
-    }
-    localStorage.setItem(THEME_KEY, next);
-    syncThemeToggle();
-  });
+function applyTheme(name) {
+  if (name === 'classic') {
+    document.documentElement.setAttribute('data-theme', 'classic');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+  // 记住最近一次已知主题：下次刷新时 head 内联脚本先应用，避免闪回默认。
+  try { localStorage.setItem('voicedeck.last-theme', name === 'classic' ? 'classic' : 'muji'); } catch (e) { /* 无痕模式 */ }
 }
 
 boot();

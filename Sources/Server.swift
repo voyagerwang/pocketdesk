@@ -134,6 +134,7 @@ final class Server {
                 "accessibility": AXIsProcessTrusted(),
                 "platform": "macOS",
                 "phoneLastSeen": Int(phoneLastSeen),
+                "theme": store.theme,
                 "lanURL": (stableURL ?? lanIP.map { "http://\($0):\(port)" }) as Any?,
                 "ipURL": lanIP.map { "http://\($0):\(port)" } as Any?,
                 "remoteURL": tailscaleURL ?? "",
@@ -177,6 +178,14 @@ final class Server {
                 NSWorkspace.shared.open(url)
             }
             respond(connection, status: 200, json: ["ok": true])
+        case ("POST", "/api/theme"):
+            // 主题唯一控制点在电脑端控制台；手机页经 /api/status 轮询跟随。
+            guard let body = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+                  let name = body["theme"] as? String else {
+                respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
+            }
+            store.saveTheme(name)
+            respond(connection, status: 200, json: ["ok": true, "theme": store.theme])
         case ("GET", "/api/apps"):
             let query = Self.queryValue("q", in: rawPath) ?? ""
             respond(connection, status: 200, json: ["apps": AppDiscovery.search(query)])

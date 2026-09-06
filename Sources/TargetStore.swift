@@ -84,4 +84,23 @@ final class TargetStore {
             try? data.write(to: TargetStore.shortcutFile, options: .atomic)
         }
     }
+
+    // MARK: 主题（Muji ↔ classic；电脑端控制台是唯一控制点，手机页经 /api/status 跟随）
+    static let themeFile = supportDirectory.appendingPathComponent("theme")
+
+    private(set) var theme: String = "muji"
+
+    func loadTheme() {
+        if let saved = try? String(contentsOf: TargetStore.themeFile, encoding: .utf8) {
+            let name = saved.trimmingCharacters(in: .whitespaces)
+            if name == "muji" || name == "classic" { theme = name }
+        }
+    }
+
+    func saveTheme(_ name: String) {
+        guard name == "muji" || name == "classic" else { return }
+        theme = name
+        try? FileManager.default.createDirectory(at: TargetStore.supportDirectory, withIntermediateDirectories: true)
+        try? name.write(to: TargetStore.themeFile, atomically: true, encoding: .utf8)
+    }
 }
