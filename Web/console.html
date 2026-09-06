@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   [INPUT]: 依赖 /api/status、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility。
-  [OUTPUT]: 电脑端控制台：授权引导、局域网与 Tailscale 跨网扫码连接、目标应用搜索/排序/删除/自定义图标管理、快捷键管理（键盘录制兼容 code/key 并自动命名，支持重录/排序/删除）；默认 Muji 主题，:root[data-theme="classic"] 覆盖恢复蓝色玻璃，右下角按钮切换并 localStorage 持久化。
+  [OUTPUT]: 电脑端控制台：授权引导、局域网与 Tailscale 跨网扫码连接、目标应用搜索/排序/删除/自定义图标管理、快捷键管理（键盘录制兼容 code/key 并自动命名，支持重录/排序/删除）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
   [POS]: 电脑端唯一页面入口；目标顺序与快捷键都保存在 Mac 本机（App Support），手机端只渲染。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -66,7 +66,12 @@ button{font:inherit;cursor:pointer}
 #saveState{margin-left:8px;font-size:12px;color:var(--muted)}
 .btn.recording{color:#fff;background:var(--accent);border-color:var(--accent)}
 /* 主题切换按钮：页脚右下角。 */
-.theme-toggle{position:fixed;right:24px;bottom:24px;z-index:10;display:grid;place-items:center;width:40px;height:40px;padding:0;border:1px solid var(--line);border-radius:50%;background:#fff;color:var(--muted);font-size:13px;font-weight:600}
+/* 主题分段开关：头部显眼位置，当前项反色高亮；点击写入 Mac 本机，手机页自动跟随。 */
+.theme-switch{margin-left:auto;display:flex;border:1px solid var(--line-strong);border-radius:4px;overflow:hidden}
+.theme-switch button{padding:7px 16px;border:0;background:transparent;color:var(--muted);font-size:12px;font-weight:600;letter-spacing:0.02em}
+.theme-switch button+button{border-left:1px solid var(--line)}
+.theme-switch button.on{background:var(--accent);color:#fff}
+.theme-switch button:not(.on):hover{color:var(--ink)}
 /* classic 主题令牌覆盖：恢复原蓝色玻璃风格。 */
 :root[data-theme="classic"]{--bg:#eef1f7;--panel:#f1f2f5;--line:rgb(15 30 68 / 10%);--line-strong:rgb(15 30 68 / 24%);--accent:#1f6bff;--danger:#d93843;--accent-soft:rgb(31 107 255 / 10%);--accent-line:rgb(31 107 255 / 38%);--ink:#171c2c;--muted:#4a5266}
 :root[data-theme="classic"] body{background:radial-gradient(560px 320px at 85% -5%, rgb(59 130 246 / 16%), transparent 62%),radial-gradient(480px 320px at -10% 102%, rgb(99 102 241 / 10%), transparent 60%),#eef1f7}
@@ -90,7 +95,7 @@ button{font:inherit;cursor:pointer}
 </head>
 <body>
 <main>
-  <header><h1>PocketDesk 控制台</h1><span id="conn" class="pill">连接中</span></header>
+  <header><h1>PocketDesk 控制台</h1><span id="theme-switch" class="theme-switch" role="group" aria-label="界面主题"><button type="button" data-theme-choice="classic">经典蓝</button><button type="button" data-theme-choice="muji">米白</button></span><span id="conn" class="pill">连接中</span></header>
 
   <section class="card">
     <h2><span class="step">1</span>系统授权</h2>
@@ -147,30 +152,34 @@ button{font:inherit;cursor:pointer}
   </section>
 </main>
 <input id="iconFile" type="file" accept="image/*" hidden>
-<button id="theme-toggle" class="theme-toggle" type="button" title="切换主题（手机端自动跟随）" aria-label="切换主题" aria-pressed="false">M</button>
 <script>
-// 主题唯一控制点：此按钮写入 Mac 本机（POST /api/theme），手机页经 /api/status 轮询自动跟随。
-const themeToggle=document.getElementById('theme-toggle');
+// 主题唯一控制点：头部分段开关写入 Mac 本机（POST /api/theme），手机页经 /api/status 轮询自动跟随。
+const themeSwitch=document.getElementById('theme-switch');
 function applyTheme(name){
   if(name==='classic')document.documentElement.setAttribute('data-theme','classic');
   else document.documentElement.removeAttribute('data-theme');
-  themeToggle.textContent=name==='classic'?'M':'C';
-  themeToggle.setAttribute('aria-pressed',String(name==='classic'));
+  themeSwitch.querySelectorAll('button').forEach(button=>{
+    const on=button.dataset.themeChoice===name;
+    button.classList.toggle('on',on);
+    button.setAttribute('aria-pressed',String(on));
+  });
 }
-// 初始主题来自服务端；本地 localStorage 只是刷新闪烁缓解。
-applyTheme((function(){try{return localStorage.getItem('voicedeck.last-theme')==='classic'?'classic':'muji'}catch(e){return 'muji'}})());
-themeToggle.onclick=async()=>{
-  const next=document.documentElement.getAttribute('data-theme')==='classic'?'muji':'classic';
-  themeToggle.disabled=true;
+// 初始主题先按上次已知值预应用（缓解闪烁），3 秒内的刷新循环会以服务端为准校正。
+applyTheme((function(){try{return localStorage.getItem('voicedeck.last-theme')==='muji'?'muji':'classic'}catch(e){return 'classic'}})());
+themeSwitch.addEventListener('click',async event=>{
+  const button=event.target.closest('button[data-theme-choice]');
+  if(!button||button.classList.contains('on'))return;
+  const next=button.dataset.themeChoice;
+  themeSwitch.dataset.busy='1';
   try{
     const response=await fetch('/api/theme',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({theme:next})});
     const result=await response.json();
     if(!response.ok)throw new Error(result.error||'保存失败');
     applyTheme(result.theme||next);
     try{localStorage.setItem('voicedeck.last-theme',result.theme||next)}catch(e){}
-  }catch(error){console.warn('主题保存失败，本地已预览：',error.message)}
-  themeToggle.disabled=false;
-};
+  }catch(error){console.warn('主题保存失败：',error.message)}
+  delete themeSwitch.dataset.busy;
+});
 </script>
 <script>
 const $ = id => document.getElementById(id);
@@ -191,8 +200,8 @@ async function refresh() {
     const status = await fetch('/api/status').then(r => r.json());
     state.status = status;
     $('conn').textContent = '已就绪'; $('conn').classList.add('ready');
-    // 主题以服务端为准：本页其他途径改动后 3 秒内自动校正（切换按钮写入时短暂禁用避免回跳）。
-    if (!themeToggle.disabled && status.theme) applyTheme(status.theme);
+    // 主题以服务端为准：其他途径改动后 3 秒内自动校正（开关写入请求进行中则跳过避免回跳）。
+    if (!themeSwitch.dataset.busy && status.theme) applyTheme(status.theme);
     const granted = status.accessibility;
     const authState = $('authState');
     authState.textContent = granted ? '已授权' : '未授权';

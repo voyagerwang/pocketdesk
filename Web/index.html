@@ -18,11 +18,11 @@
       (function () {
         try {
           var t = localStorage.getItem('voicedeck.last-theme');
-          if (t === 'classic') document.documentElement.setAttribute('data-theme', 'classic');
-        } catch (e) { /* 无痕模式等 */ }
+          if (t !== 'muji') document.documentElement.setAttribute('data-theme', 'classic');
+        } catch (e) { document.documentElement.setAttribute('data-theme', 'classic'); }
       })();
     </script>
-    <link rel="stylesheet" href="/style.css?v=1.8.2">
+    <link rel="stylesheet" href="/style.css?v=2.0.0">
   </head>
   <body>
     <main>
@@ -83,6 +83,6 @@
       </section>
     </main>
 
-    <script src="/app.js?v=1.8.2"></script>
+    <script src="/app.js?v=2.0.0"></script>
   </body>
 </html>
