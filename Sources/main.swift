@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation、Network、AppKit 与 Quartz 的本机 HTTP、应用激活和 CGEvent 能力。
- * [OUTPUT]: 对外提供 VoiceDeck 本地 HTTP 服务：静态网页、状态查询和 /api/send 命令端点。
+ * [OUTPUT]: 对外提供 VoiceDeck 本地 HTTP 服务：静态网页、状态查询、应用置顶和文本发送端点。
  * [POS]: Sources 的 macOS 执行边界；Web 层只发送稳定的 SendCommand，不接触系统 API。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -12,6 +12,10 @@ import Network
 struct SendCommand: Decodable {
     let targetId: String
     let text: String
+}
+
+struct ActivateCommand: Decodable {
+    let targetId: String
 }
 
 enum InputError: Error { case message(String) }
@@ -57,6 +61,10 @@ let targets = [
 final class InputExecutor {
     private let queue = DispatchQueue(label: "dev.voicedeck.input")
 
+    func activate(_ targetId: String, completion: @escaping (Result<Void, InputError>) -> Void) {
+        queue.async { self.activateTarget(targetId, completion: completion) }
+    }
+
     func send(_ command: SendCommand, completion: @escaping (Result<Void, InputError>) -> Void) {
         queue.async {
             guard !command.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -68,16 +76,8 @@ final class InputExecutor {
             guard AXIsProcessTrusted() else {
                 completion(.failure(.message("尚未授予“辅助功能”权限。请允许运行 VoiceDeck 的终端或应用。"))); return
             }
-            guard let target = targets.first(where: { $0.id == command.targetId }) else {
-                completion(.failure(.message("未找到目标应用。请确认它已安装在 /Applications。"))); return
-            }
-            guard let url = target.installedURL() else {
-                completion(.failure(.message("未找到 \(target.name)。请确认应用已安装或正在运行。"))); return
-            }
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = true
-            NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in
-                if let error { completion(.failure(.message("无法打开 \(target.name)：\(error.localizedDescription)"))); return }
+            self.activateTarget(command.targetId) { result in
+                guard case .success = result else { completion(result); return }
                 // 给桌面应用取得前台焦点；后续步骤都在同一串行队列中执行。
                 self.queue.asyncAfter(deadline: .now() + .milliseconds(450)) {
                     self.postUnicode(command.text)
@@ -85,6 +85,26 @@ final class InputExecutor {
                     completion(.success(()))
                 }
             }
+        }
+    }
+
+    private func activateTarget(_ targetId: String, completion: @escaping (Result<Void, InputError>) -> Void) {
+        guard let target = targets.first(where: { $0.id == targetId }) else {
+            completion(.failure(.message("未知的目标应用。"))); return
+        }
+        guard let url = target.installedURL() else {
+            completion(.failure(.message("未找到 \(target.name)。请确认应用已安装或正在运行。"))); return
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.addsToRecentItems = false
+        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { application, error in
+            if let error {
+                completion(.failure(.message("无法打开 \(target.name)：\(error.localizedDescription)"))); return
+            }
+            application?.unhide()
+            application?.activate(options: [.activateAllWindows])
+            completion(.success(()))
         }
     }
 
@@ -149,6 +169,16 @@ final class Server {
                 ["id": $0.id, "name": $0.name, "available": $0.installedURL() != nil]
             }
             respond(connection, status: 200, json: ["accessibility": AXIsProcessTrusted(), "targets": targetPayload])
+        } else if method == "POST" && path == "/api/activate" {
+            guard let command = try? JSONDecoder().decode(ActivateCommand.self, from: Data(body.utf8)) else {
+                respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
+            }
+            executor.activate(command.targetId) { result in
+                switch result {
+                case .success: self.respond(connection, status: 200, json: ["ok": true])
+                case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
+                }
+            }
         } else if method == "POST" && path == "/api/send" {
             guard let command = try? JSONDecoder().decode(SendCommand.self, from: Data(body.utf8)) else {
                 respond(connection, status: 400, json: ["error": "请求格式无效。"]); return

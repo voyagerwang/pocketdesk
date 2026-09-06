@@ -3,11 +3,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_APP="$ROOT_DIR/build/Voice Deck.app"
+TEMP_DIR="$(mktemp -d)"
+BUILD_APP="$TEMP_DIR/Voice Deck.app"
 INSTALL_DIR="$HOME/Applications"
 INSTALL_APP="$INSTALL_DIR/Voice Deck.app"
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
-rm -rf "$BUILD_APP"
 mkdir -p "$BUILD_APP/Contents/MacOS" "$BUILD_APP/Contents/Resources" "$INSTALL_DIR"
 swiftc "$ROOT_DIR/Sources/main.swift" -o "$BUILD_APP/Contents/MacOS/VoiceDeck" -framework AppKit -framework Network
 cp "$ROOT_DIR/Resources/Info.plist" "$BUILD_APP/Contents/Info.plist"
