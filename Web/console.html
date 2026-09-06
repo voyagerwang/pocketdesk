@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   [INPUT]: 依赖 /api/status、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility。
-  [OUTPUT]: 电脑端控制台：授权引导、局域网与 Tailscale 跨网扫码连接、目标应用搜索/排序/删除/自定义图标管理、快捷键管理（键盘录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"，拦截 isComposing 与纯修饰键，支持重录/排序/删除）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
+  [OUTPUT]: 电脑端控制台：授权引导、局域网与 Tailscale 跨网扫码连接、目标应用搜索/排序/删除/自定义图标管理、快捷键管理（录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"；主键只认 event.code 物理键位不回退 IME 可污染的 event.key，拦截 isComposing 与纯修饰键；键位标签用 .keycap 样式、label 与键位重复时只显示一个；支持重录/排序/删除）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
   [POS]: 电脑端唯一页面入口；目标顺序与快捷键都保存在 Mac 本机（App Support），手机端只渲染。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -331,7 +331,9 @@ let shortcuts = [];
 let recording = false;
 let pendingShortcut = null; // { hotkey: string, label: string }
 
-// 事件 → 语义串主键 token（与 Swift ShortcutKeys.keyMap 的键名对齐）。物理键位优先，code 缺失时回退 key。
+// 事件 → 语义串主键 token（与 Swift ShortcutKeys.keyMap 的键名对齐）。
+// event.code 是物理键位的唯一可信来源；event.key 在输入法/修饰键下会被改写（⌘Z 曾被污染成 9），
+// 只用于功能键名（F1-F12 的 key 与 code 一致，不受 IME 影响）。
 const KEY_TOKENS = { ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
   Enter: 'Return', NumpadEnter: 'Return', Backspace: 'Delete', Escape: 'Escape',
   Space: 'Space', Tab: 'Tab' };
@@ -339,22 +341,23 @@ const KEY_TOKENS = { ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowR
 function hotkeyToken(event) {
   const code = event.code || '';
   const key = event.key || '';
-  const named = KEY_TOKENS[code] || KEY_TOKENS[key] || (key === ' ' ? 'Space' : null);
-  const letter = /^Key([A-Z])$/.exec(code)?.[1] || (/^[a-z]$/i.test(key) ? key.toUpperCase() : null);
-  const digit = /^Digit([0-9])$/.exec(code)?.[1] || (/^[0-9]$/.test(key) ? key : null);
-  const fn = /^F([1-9]|1[0-2])$/.exec(key)?.[0];
+  const named = KEY_TOKENS[code];                       // 命名键：只认物理 code
+  const letter = /^Key([A-Z])$/.exec(code)?.[1] || null; // 字母：只认物理 code，不回退 key
+  const digit = /^Digit([0-9])$/.exec(code)?.[1] || null; // 数字：只认物理 code
+  const fn = /^F([1-9]|1[0-2])$/.exec(key)?.[0];        // 功能键：key 与 code 同形，取 key 即可
   return named || letter || digit || fn || null;
 }
 
 // 语义串展示：最后一个 token 是主键，其余是修饰键（服务端下发的是规范序串）。
+// enter/backspace/esc 等别名也归一到同一符号，迁移残留与重录产物显示一致。
 function hotkeyDisplay(hotkey) {
-  const named = { up: '↑', down: '↓', left: '←', right: '→', return: '⏎', delete: '⌫',
-    escape: 'esc', space: '空格', tab: '⇥' };
+  const named = { up: '↑', down: '↓', left: '←', right: '→', return: '⏎', enter: '⏎',
+    delete: '⌫', backspace: '⌫', escape: 'esc', space: '空格', tab: '⇥' };
   const mods = { cmd: '⌘', shift: '⇧', opt: '⌥', ctrl: '⌃' };
   const parts = (hotkey || '').split('+').map(part => part.trim());
-  const shown = parts.map((part, index) => {
-    const token = part.toLowerCase();
-    return index < parts.length - 1 ? (mods[token] || part) : (named[token] || part.toUpperCase());
+  const shown = parts.map((hotkey, index) => {
+    const token = hotkey.toLowerCase();
+    return index < parts.length - 1 ? (mods[token] || hotkey) : (named[token] || hotkey.toUpperCase());
   });
   return shown.join('');
 }
@@ -431,9 +434,12 @@ async function saveShortcuts() {
 function renderShortcuts() {
   const box = $('scList'); box.innerHTML = '';
   shortcuts.forEach((shortcut, index) => {
+    const display = hotkeyDisplay(shortcut.hotkey);
+    // label 与键位展示重复时只显示一个（如 label=↑、hotkey=Up 都显示 ↑），避免同列两个相同符号。
+    const label = shortcut.label === display ? '' : shortcut.label;
     const row = document.createElement('div'); row.className = 'target-row';
-    row.innerHTML = `<b class="sc-editable" data-act="rerecord" title="点击重新录制按键，名称自动识别" style="flex:0 0 auto;min-width:64px">${esc(shortcut.label)}</b>
-      <span class="hint mono" data-act="rerecord" title="点击重新录制组合键">${esc(hotkeyDisplay(shortcut.hotkey))}</span>
+    row.innerHTML = `<b class="sc-editable" data-act="rerecord" title="点击重新录制按键，名称自动识别" style="flex:0 0 auto;min-width:48px">${esc(label || display)}</b>
+      ${label ? `<span class="keycap" data-act="rerecord" title="点击重新录制组合键">${esc(display)}</span>` : ''}
       <button class="btn ghost" data-act="up" ${index === 0 ? 'disabled' : ''}>↑</button>
       <button class="btn ghost" data-act="down" ${index === shortcuts.length - 1 ? 'disabled' : ''}>↓</button>
       <button class="btn ghost icon-btn danger" data-act="remove" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;

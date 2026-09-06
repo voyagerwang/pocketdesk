@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Foundation 的 Codable 与 CoreGraphics 的 CGEventFlags/CGKeyCode。
  * [OUTPUT]: 对外提供传输与配置层的全部值类型：SendCommand/PendingImage/ActivateCommand/IconUpload
- *           请求体、ShortcutConfig/TargetConfig 配置实体、ShortcutKeys 语义串解析器、
+ *           请求体、ShortcutConfig/TargetConfig 配置实体、ShortcutKeys 语义串解析器（resolve 解析、canonicalize 别名归一、legacyHotkey 旧格式迁移）、
  *           ShortcutError/InputError 错误类型。
  * [POS]: Sources 的协议层；Server 反序列化请求体、TargetStore 持久化配置、InputExecutor 消费命令，全部以此为词汇表。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -114,17 +114,46 @@ enum ShortcutKeys {
         if main == nil, let digit = digitKeycodes.first(where: { Int($0.value) == keycode }) { main = digit.key }
         if main == nil { main = keyMap.first { Int($0.value) == keycode && !canonicalKeys.contains($0.key) }?.key }
         guard var mainName = main else { return nil }
-        // 输出规范序：Cmd → Shift → Opt → Ctrl，与录制端展示顺序一致。
-        let canonical: [String: String] = [
-            "command": "Cmd", "cmd": "Cmd", "meta": "Cmd", "gui": "Cmd",
-            "shift": "Shift", "option": "Opt", "opt": "Opt", "alt": "Opt",
-            "control": "Ctrl", "ctrl": "Ctrl",
-        ]
-        let order = ["Cmd": 0, "Shift": 1, "Opt": 2, "Ctrl": 3]
-        let names = modifiers.compactMap { canonical[normalize($0)] }
-            .sorted { (order[$0] ?? 9) < (order[$1] ?? 9) }
+        let names = modifiers.compactMap { Self.canonicalModifiers[normalize($0)] }
+            .sorted { (Self.modifierOrder[$0] ?? 9) < (Self.modifierOrder[$1] ?? 9) }
         mainName = mainName.prefix(1).uppercased() + mainName.dropFirst()
         return (names + [mainName]).joined(separator: "+")
+    }
+
+    // 修饰键 token → 规范显示名（Cmd/Shift/Opt/Ctrl）；legacyHotkey 与 canonicalize 共用。
+    static let canonicalModifiers: [String: String] = [
+        "command": "Cmd", "cmd": "Cmd", "meta": "Cmd", "gui": "Cmd",
+        "shift": "Shift", "option": "Opt", "opt": "Opt", "alt": "Opt",
+        "control": "Ctrl", "ctrl": "Ctrl",
+    ]
+    // 规范输出序：Cmd → Shift → Opt → Ctrl，与录制端展示顺序一致。
+    static let modifierOrder = ["Cmd": 0, "Shift": 1, "Opt": 2, "Ctrl": 3]
+
+    // 语义串归一化：别名（Enter/Backspace/Esc）收敛到规范名（Return/Delete/Escape）、
+    // 修饰键统一规范序与拼写。用于启动时清洗迁移残留与手写别名；不可解析原样返回，由保存校验兜底。
+    static func canonicalize(_ hotkey: String) -> String {
+        let canonicalKeys = ["return", "delete", "escape"]
+        var mods: [String] = []
+        var main: String?
+        for raw in hotkey.split(separator: "+") {
+            let token = normalize(String(raw))
+            guard !token.isEmpty else { continue }
+            if let canonical = canonicalModifiers[token] {
+                if !mods.contains(canonical) { mods.append(canonical) }
+                continue
+            }
+            guard main == nil,
+                  let code = keyMap[token] ?? letterKeycodes[token] ?? digitKeycodes[token] else { return hotkey }
+            // 反查主键规范名：36/51/53 优先规范别名，其余（字母/数字/F 键/方向）原样保留。
+            if let named = canonicalKeys.first(where: { keyMap[$0] == code }) { main = named }
+            else if let letter = letterKeycodes.first(where: { $0.value == code })?.key { main = letter }
+            else if let digit = digitKeycodes.first(where: { $0.value == code })?.key { main = digit }
+            else if let other = keyMap.first(where: { $0.value == code && !canonicalKeys.contains($0.key) })?.key { main = other }
+        }
+        guard var mainName = main else { return hotkey }
+        let sortedMods = mods.sorted { (modifierOrder[$0] ?? 9) < (modifierOrder[$1] ?? 9) }
+        mainName = mainName.prefix(1).uppercased() + mainName.dropFirst()
+        return (sortedMods + [mainName]).joined(separator: "+")
     }
 }
 

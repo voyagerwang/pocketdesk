@@ -3,8 +3,8 @@
 
 成员清单
 
-Models.swift: 传输与配置的值类型词汇表——SendCommand/PendingImage/ActivateCommand/IconUpload 请求体、ShortcutConfig/TargetConfig 配置实体、ShortcutKeys 语义串解析器（hotkey 串 → CGKeyCode/CGEventFlags，含旧 modifiers+keycode 到语义串的迁移翻译 legacyHotkey）、ShortcutError/InputError 错误，纯 Codable/Equatable 无系统依赖（仅 CoreGraphics 键码类型）。
-TargetStore.swift: 目标应用、快捷键与主题三份配置的持久化层，~/Library/Application Support/VoiceDeck 下的 targets.json/shortcuts.json/theme 读写，含 appURL 定位、自定义图标路径与孤儿图标清理；快捷键加载双轨：新格式（hotkey 语义串）直接去重、旧格式（modifiers+keycode）经 ShortcutKeys.legacyHotkey 翻译后回写完成迁移；Server 与 InputExecutor 共用。主题是产品级外观决策，唯一写入点在电脑端控制台（POST /api/theme），手机页只读跟随。
+Models.swift: 传输与配置的值类型词汇表——SendCommand/PendingImage/ActivateCommand/IconUpload 请求体、ShortcutConfig/TargetConfig 配置实体、ShortcutKeys 语义串解析器（resolve：hotkey 串 → CGKeyCode/CGEventFlags；canonicalize：Enter/Backspace/Esc 别名与修饰键序归一；legacyHotkey：旧 modifiers+keycode 迁移翻译）、ShortcutError/InputError 错误，纯 Codable/Equatable 无系统依赖（仅 CoreGraphics 键码类型）。
+TargetStore.swift: 目标应用、快捷键与主题三份配置的持久化层，~/Library/Application Support/VoiceDeck 下的 targets.json/shortcuts.json/theme 读写，含 appURL 定位、自定义图标路径与孤儿图标清理；快捷键加载双轨：新格式（hotkey 语义串）读后经 ShortcutKeys.canonicalize 归一并按需回写（清洗 Enter 等别名残留），旧格式（modifiers+keycode）经 legacyHotkey 翻译后回写完成迁移；Server 与 InputExecutor 共用。主题是产品级外观决策，唯一写入点在电脑端控制台（POST /api/theme），手机页只读跟随。
 AppDiscovery.swift: 无状态的应用发现层，扫描 /Applications 等目录做名称/路径搜索，并为新增目标生成安全 slug；/api/apps 搜索与 /api/targets id 补齐依赖它。
 Util.swift: 无状态渲染工具层——主局域网 IP、macOS utun 上的 Tailscale 100.64.0.0/10 地址探测、稳定 .local 主机名、QR PNG、应用图标 PNG 提取；Server 的地址与图标端点调用它。
 Auth.swift: 鉴权层——配对 token 的首次生成（SecRandomCopyBytes 32 字节 base64url）、持久化到 Application Support/VoiceDeck/token、写请求 Bearer 校验与 WS 首帧校验（恒定时间比较）；Server 与 WSServer 共用。
