@@ -2,7 +2,7 @@
   [INPUT]: 依赖 style.css 的设计令牌与 app.js 的 Dock、触控板手势与 WebSocket 通道。
   [OUTPUT]: 单页布局：顶部（标题 + 当前应用 + 连接状态）、单行滚动 Dock、可展开触控板卡片（设置默认收起）、
             输入区（输入框下方的历史发送面板：清空带二次确认、收起按钮；图片预览）；目标选中态跟随 Mac 前台应用；
-            右下角主题切换按钮（Muji ↔ classic，localStorage 持久化，head 内联脚本预应用避免闪烁）。
+            主题跟随电脑端（/api/status 下发，Muji ↔ classic；localStorage 只做刷新闪烁缓解，无切换按钮）。
   [POS]: Web 的唯一页面入口；只收集文本与手势，绝不处理或上传语音。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -13,14 +13,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#f5f3ee">
     <title>PocketDesk</title>
-    <!-- 主题在样式表加载前内联应用，避免刷新闪现默认主题。 -->
+    <!-- 主题由电脑端控制台统一决定，手机页经 /api/status 跟随（boot 与心跳应用）；此处预读 localStorage 仅作上次已知值的闪烁缓解。 -->
     <script>
       (function () {
-        var t = localStorage.getItem('voicedeck.theme') || 'muji';
-        if (t === 'classic') document.documentElement.setAttribute('data-theme', 'classic');
+        try {
+          var t = localStorage.getItem('voicedeck.last-theme');
+          if (t === 'classic') document.documentElement.setAttribute('data-theme', 'classic');
+        } catch (e) { /* 无痕模式等 */ }
       })();
     </script>
-    <link rel="stylesheet" href="/style.css?v=1.8.1">
+    <link rel="stylesheet" href="/style.css?v=1.8.2">
   </head>
   <body>
     <main>
@@ -30,7 +32,7 @@
         <span id="connection" class="pill" role="status" aria-live="polite">连接中</span>
       </header>
       <section class="deck" aria-label="输入到哪个应用">
-        <div id="targets" class="targets" role="radiogroup" aria-label="目标应用列表"></div>
+        <div id="targets" class="targets edge-fade scroll-cue" role="radiogroup" aria-label="目标应用列表"></div>
       </section>
 
       <section class="pad-card" id="pad-card" aria-label="触控板">
@@ -66,7 +68,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
           </button>
         </div>
-        <div id="shortcut-bar" class="shortcut-bar" hidden></div>
+        <div id="shortcut-bar" class="shortcut-bar edge-fade scroll-cue" hidden></div>
         <div class="send-row">
           <button id="history-btn" class="hist-btn" type="button" title="历史发送" aria-pressed="false">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
@@ -81,8 +83,6 @@
       </section>
     </main>
 
-    <button id="theme-toggle" class="theme-toggle" type="button" title="切换主题" aria-label="切换主题">M</button>
-
-    <script src="/app.js?v=1.8.1"></script>
+    <script src="/app.js?v=1.8.2"></script>
   </body>
 </html>

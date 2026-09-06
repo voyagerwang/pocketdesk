@@ -11,10 +11,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PocketDesk 控制台</title>
 <script>
-  // 主题在样式表加载前内联应用，避免刷新闪现默认主题。
+  // 主题在样式表加载前内联应用，避免刷新闪现默认主题；真实值以 /api/status 为准（3 秒内校正）。
   (function () {
-    var t = localStorage.getItem('voicedeck.theme') || 'muji';
-    if (t === 'classic') document.documentElement.setAttribute('data-theme', 'classic');
+    try {
+      var t = localStorage.getItem('voicedeck.last-theme');
+      if (t === 'classic') document.documentElement.setAttribute('data-theme', 'classic');
+    } catch (e) { /* 无痕模式等 */ }
   })();
 </script>
 <style>
@@ -145,14 +147,30 @@ button{font:inherit;cursor:pointer}
   </section>
 </main>
 <input id="iconFile" type="file" accept="image/*" hidden>
-<button id="theme-toggle" class="theme-toggle" type="button" title="切换主题" aria-label="切换主题" aria-pressed="false">M</button>
+<button id="theme-toggle" class="theme-toggle" type="button" title="切换主题（手机端自动跟随）" aria-label="切换主题" aria-pressed="false">M</button>
 <script>
-const THEME_KEY='voicedeck.theme';
+// 主题唯一控制点：此按钮写入 Mac 本机（POST /api/theme），手机页经 /api/status 轮询自动跟随。
 const themeToggle=document.getElementById('theme-toggle');
-function currentTheme(){return document.documentElement.getAttribute('data-theme')==='classic'?'classic':'muji'}
-function syncThemeToggle(){themeToggle.textContent=currentTheme()==='muji'?'C':'M';themeToggle.setAttribute('aria-pressed',String(currentTheme()==='classic'))}
-syncThemeToggle();
-themeToggle.onclick=()=>{const next=currentTheme()==='muji'?'classic':'muji';if(next==='classic')document.documentElement.setAttribute('data-theme','classic');else document.documentElement.removeAttribute('data-theme');localStorage.setItem(THEME_KEY,next);syncThemeToggle()};
+function applyTheme(name){
+  if(name==='classic')document.documentElement.setAttribute('data-theme','classic');
+  else document.documentElement.removeAttribute('data-theme');
+  themeToggle.textContent=name==='classic'?'M':'C';
+  themeToggle.setAttribute('aria-pressed',String(name==='classic'));
+}
+// 初始主题来自服务端；本地 localStorage 只是刷新闪烁缓解。
+applyTheme((function(){try{return localStorage.getItem('voicedeck.last-theme')==='classic'?'classic':'muji'}catch(e){return 'muji'}})());
+themeToggle.onclick=async()=>{
+  const next=document.documentElement.getAttribute('data-theme')==='classic'?'muji':'classic';
+  themeToggle.disabled=true;
+  try{
+    const response=await fetch('/api/theme',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({theme:next})});
+    const result=await response.json();
+    if(!response.ok)throw new Error(result.error||'保存失败');
+    applyTheme(result.theme||next);
+    try{localStorage.setItem('voicedeck.last-theme',result.theme||next)}catch(e){}
+  }catch(error){console.warn('主题保存失败，本地已预览：',error.message)}
+  themeToggle.disabled=false;
+};
 </script>
 <script>
 const $ = id => document.getElementById(id);
@@ -173,6 +191,8 @@ async function refresh() {
     const status = await fetch('/api/status').then(r => r.json());
     state.status = status;
     $('conn').textContent = '已就绪'; $('conn').classList.add('ready');
+    // 主题以服务端为准：本页其他途径改动后 3 秒内自动校正（切换按钮写入时短暂禁用避免回跳）。
+    if (!themeToggle.disabled && status.theme) applyTheme(status.theme);
     const granted = status.accessibility;
     const authState = $('authState');
     authState.textContent = granted ? '已授权' : '未授权';

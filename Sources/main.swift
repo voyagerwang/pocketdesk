@@ -29,6 +29,7 @@ let defaultPort: UInt16 = 46387
 let selectedPort = UInt16(ProcessInfo.processInfo.environment["VOICE_DECK_PORT"] ?? "") ?? defaultPort
 let targetStore = TargetStore()
 targetStore.loadShortcuts()
+targetStore.loadTheme()
 let server = Server(port: selectedPort, webRoot: root.appendingPathComponent("Web"), store: targetStore)
 // 首次启动时让 macOS 显示其官方授权提示；授权决定仍完全由用户控制。
 let promptOptions = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
