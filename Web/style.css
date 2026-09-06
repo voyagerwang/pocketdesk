@@ -49,6 +49,14 @@
   --s-6: 24px;
   --s-8: 32px;
 
+  /* 文房墨系：全套控件与量尺刻度同一血缘。
+     静息 = 淡墨刻度；交互 = 落墨；发送 = 印泥赭。 */
+  --ink-dot: 1.2px;            /* 墨点半径，全站刻度统一 */
+  --ink-dwell: 22%;            /* 静息控件墨色浓度 */
+  --ink-active: 90%;           /* 落墨浓度 */
+  --seal: var(--accent);       /* 印泥：发送按钮的印 */
+  --seal-soft: var(--accent-soft);
+
   /* 圆角：Muji 偏方正，只用小圆角。 */
   --r-field: 4px;
   --r-icon: 10px;
@@ -321,9 +329,15 @@ textarea {
   resize: none;
 }
 
+/* 聚焦 = 落墨：不是整圈描边，是下缘一道墨线，像笔尖落到纸上。 */
+textarea {
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
 textarea:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--border);
+  box-shadow: 0 1.5px 0 0 var(--accent);
 }
 
 #send {
@@ -331,20 +345,23 @@ textarea:focus {
   padding: var(--s-3) 0;
   border: 0;
   border-radius: var(--r-field);
-  background: var(--accent);
+  background: var(--seal);
   color: var(--accent-ink);
   font-size: var(--text-lg);
   font-weight: 600;
   letter-spacing: 0.08em;
+  transition: transform var(--dur) var(--ease), filter var(--dur) var(--ease);
+}
+
+/* 落印：按下时整印下沉，像盖章的力道。 */
+#send:active {
+  transform: translateY(1px) scale(0.99);
+  filter: brightness(0.94);
 }
 
 #send:focus-visible {
   outline: 2px solid var(--fg);
   outline-offset: 2px;
-}
-
-#send:active {
-  transform: translateY(1px);
 }
 
 #send:disabled {
@@ -626,6 +643,8 @@ main:not(.pad-mode) .pad-hint {
   display: grid;
 }
 
+/* 设置入口：无边框墨点角标——线条 + 墨点本身就是图标，不套盒子。
+   静息淡墨，激活（面板展开）落墨成赭红。 */
 .pad-gear {
   position: absolute;
   top: var(--s-2);
@@ -636,10 +655,16 @@ main:not(.pad-mode) .pad-hint {
   width: 34px;
   height: 34px;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--r-field);
-  background: var(--surface-1);
+  background: transparent;
   color: var(--fg-muted);
+  opacity: var(--ink-dwell);
+  transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.pad-gear:active {
+  opacity: var(--ink-active);
 }
 
 /* 收起的精简条不放设置入口：展开触控板后才出现。 */
@@ -648,17 +673,17 @@ main:not(.pad-mode) .pad-gear {
 }
 
 .pad-gear svg {
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 2;
+  stroke-width: 1.5;
   stroke-linecap: round;
 }
 
 .pad-card.show-tuning .pad-gear {
   color: var(--accent);
-  border-color: var(--accent-line);
+  opacity: var(--ink-active);
 }
 
 /* 历史发送：面板在发送按钮上方展开，点条目回填输入框。 */
@@ -671,31 +696,59 @@ main:not(.pad-mode) .pad-gear {
   flex: 1;
 }
 
+/* 历史/图片按钮：与设置角标同一墨点血缘——无框、淡墨静息、交互落墨。
+   图标下缘一枚小墨点作"印"，激活时墨点染赭并放大，与量尺刻度呼应。 */
 .hist-btn {
   flex: 0 0 52px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--border);
+  position: relative;
+  border: 0;
   border-radius: var(--r-field);
-  background: var(--surface-1);
+  background: transparent;
   color: var(--fg-muted);
+  opacity: var(--ink-dwell);
+  transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.hist-btn:active {
+  opacity: var(--ink-active);
 }
 
 .hist-btn svg {
-  width: 20px;
-  height: 20px;
+  width: 21px;
+  height: 21px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 2;
+  stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-/* 历史面板展开时按钮高亮：赭红描边与底色。 */
+/* 印墨点：图标下方居中，直径 3px 的墨点。 */
+.hist-btn::after {
+  content: "";
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  margin-left: -1.5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+  transition: transform var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+
+/* 历史面板展开：按钮落墨（赭红），印点放大——同刻度尺着墨语言。 */
 .hist-btn[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: var(--accent-soft);
   color: var(--accent);
+  opacity: var(--ink-active);
+}
+
+.hist-btn[aria-pressed="true"]::after {
+  transform: scale(1.7);
+  opacity: 1;
 }
 
 /* 待发送图片预览：缩略图 + 右上角移除叉。 */
@@ -855,22 +908,41 @@ main:not(.pad-mode) .pad-gear {
   display: none;
 }
 
+/* 快捷键胶囊：墨点血缘——左侧一枚刻度墨点代替描边盒子，点按落墨。 */
 .shortcut-key {
   flex: 0 0 auto;
-  padding: var(--s-2) var(--s-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-field);
-  background: var(--surface-1);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
   color: var(--fg);
   font-size: var(--text-sm);
   font-weight: 500;
   white-space: nowrap;
 }
 
+/* 刻度墨点：与量尺同径，静息淡墨。 */
+.shortcut-key::before {
+  content: "";
+  width: calc(var(--ink-dot) * 2);
+  height: calc(var(--ink-dot) * 2);
+  border-radius: 50%;
+  background: var(--fg);
+  opacity: 0.35;
+  transition: background var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+
 .shortcut-key:active {
   background: var(--accent-soft);
-  border-color: var(--accent);
   color: var(--accent);
+}
+
+.shortcut-key:active::before {
+  background: var(--accent);
+  opacity: var(--ink-active);
 }
 
 /* ---------- 触控板字标：收起态的入口提示 ---------- */
