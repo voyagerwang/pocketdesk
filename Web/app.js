@@ -1,97 +1,720 @@
 /**
- * [INPUT]: 依赖浏览器 fetch 与 index.html 的目标按钮、文本框、状态节点。
- * [OUTPUT]: 提供本地状态加载、应用唤醒、图标长按排序和 send 命令提交。
+ * [INPUT]: 依赖浏览器 fetch/WebSocket/Pointer Events 与 index.html 的 Dock、文本框、触控板节点。
+ * [OUTPUT]: 提供本地状态加载、应用唤醒、send 命令提交、在线心跳（可见 5s、隐藏停轮）与前台应用跟随（选中态自动对齐 Mac 前台）；
+ *           触控板卡片经 ws:46388 发送 move/click/down/up/scroll/zoom 手势命令（每帧合并一次，降低包率），支持指针手势与键盘方向键；
+ *           快捷键按钮条：渲染 /api/status 下发的 shortcuts，点击 POST /api/shortcut-trigger 注入组合键到 Mac 前台应用；
+ *           Dock 选中项采用 roving tabindex，方向键在组内移动选中。
  * [POS]: Web 的交互适配层；与未来 WebSocket transport 共享 SendCommand JSON 形状。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-const targetsEl = document.querySelector('#targets');
+
+const row = document.querySelector('#targets');
 const textEl = document.querySelector('#text');
 const sendEl = document.querySelector('#send');
 const messageEl = document.querySelector('#message');
 const connectionEl = document.querySelector('#connection');
-const ORDER_KEY = 'voice-deck-target-order-v1';
-let selected = 'codex';
 
-function message(text, error = false) { messageEl.textContent = text; messageEl.className = error ? 'error' : ''; }
-function orderedTargets(targets) {
-  let saved = [];
-  try { saved = JSON.parse(localStorage.getItem(ORDER_KEY) || '[]'); } catch { localStorage.removeItem(ORDER_KEY); }
-  return [...targets].sort((a, b) => {
-    const ai = saved.indexOf(a.id); const bi = saved.indexOf(b.id);
-    return (ai < 0 ? Number.MAX_SAFE_INTEGER : ai) - (bi < 0 ? Number.MAX_SAFE_INTEGER : bi);
-  });
+const mainEl = document.querySelector('main');
+const padCard = document.querySelector('#pad-card');
+const pad = document.querySelector('#pad');
+const padTarget = document.querySelector('#pad-target');
+const sensEl = document.querySelector('#sens');
+const scrollSpeedEl = document.querySelector('#scroll-speed');
+const padSettings = document.querySelector('#pad-settings');
+
+let targets = [];
+let selected = 'chatgpt';
+const FRONTMOST_ID = '__frontmost__';   // 伪目标：前台是非 Dock 应用时，发送直接注入当前前台
+let lastActivateAt = 0;     // 刚在手机上激活过应用时，短暂抑制前台跟随，避免竞态回跳
+let lastSeenFront = null;   // 边沿触发：只在电脑前台应用发生变化时跟随一次
+let manualUntil = 0;        // 手动滑动 Dock 期间暂停跟随，避免抢用户的操作
+
+/* ---------- 通用 ---------- */
+
+function message(text, error = false) {
+  messageEl.textContent = text;
+  messageEl.className = error ? 'error' : '';
 }
-function saveTargetOrder() {
-  const order = [...targetsEl.querySelectorAll('.target')].map(element => element.dataset.targetId);
-  localStorage.setItem(ORDER_KEY, JSON.stringify(order));
-}
-function enableLongPressSort(button) {
-  let timer; let startX = 0; let startY = 0; let sorting = false; let suppressClick = false;
-  const finish = () => {
-    clearTimeout(timer);
-    if (!sorting) return;
-    sorting = false; suppressClick = true; button.classList.remove('dragging'); targetsEl.classList.remove('sorting');
-    saveTargetOrder(); message('图标顺序已保存在这台手机上。');
-    setTimeout(() => { suppressClick = false; }, 350);
-  };
-  button.addEventListener('pointerdown', event => {
-    startX = event.clientX; startY = event.clientY;
-    timer = setTimeout(() => {
-      sorting = true; button.classList.add('dragging'); targetsEl.classList.add('sorting');
-      button.setPointerCapture(event.pointerId); navigator.vibrate?.(20); message('拖动图标调整位置…');
-    }, 450);
-  });
-  button.addEventListener('pointermove', event => {
-    if (!sorting && Math.hypot(event.clientX - startX, event.clientY - startY) > 8) clearTimeout(timer);
-    if (!sorting) return;
-    event.preventDefault();
-    const peer = document.elementFromPoint(event.clientX, event.clientY)?.closest('.target');
-    if (!peer || peer === button || peer.parentElement !== targetsEl) return;
-    const before = event.clientX < peer.getBoundingClientRect().left + peer.offsetWidth / 2;
-    targetsEl.insertBefore(button, before ? peer : peer.nextSibling);
-  });
-  button.addEventListener('pointerup', finish); button.addEventListener('pointercancel', finish);
-  button.addEventListener('contextmenu', event => event.preventDefault());
-  return () => suppressClick;
-}
-function renderTargets(targets) {
-  targetsEl.innerHTML = '';
-  orderedTargets(targets).forEach(target => {
-    const button = document.createElement('button'); button.type = 'button'; button.className = `target${target.id === selected ? ' selected' : ''}`;
+
+/* ---------- 渲染 ---------- */
+
+function renderTargets() {
+  row.innerHTML = '';
+  targets.forEach(target => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `target${target.id === selected ? ' selected' : ''}`;
     button.dataset.targetId = target.id;
-    button.setAttribute('role', 'radio'); button.setAttribute('aria-checked', String(target.id === selected));
-    const fallback = target.name.slice(0, 1).toUpperCase();
-    button.innerHTML = `<span class="target-icon"><img src="/api/icon?id=${encodeURIComponent(target.id)}" alt=""><span>${fallback}</span></span><small>${target.name}</small>`;
-    const image = button.querySelector('img'); image.addEventListener('error', () => image.classList.add('missing'));
-    const wasLongPress = enableLongPressSort(button);
-    button.onclick = async () => {
-      if (wasLongPress()) return;
-      selected = target.id; renderTargets(targets); message(`正在唤醒 ${target.name}…`);
-      try {
-        const response = await fetch('/api/activate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({targetId:selected})});
-        const result = await response.json(); if (!response.ok) throw new Error(result.error || '无法唤醒应用。');
-        message(`${target.name} 已置于电脑前台，可以开始输入。`); textEl.focus();
-      } catch (error) { message(error.message, true); }
-    };
-    targetsEl.append(button);
+    button.setAttribute('role', 'radio');
+    button.setAttribute('aria-checked', String(target.id === selected));
+    // roving tabindex：整组只留一个 Tab 停靠点，就是当前选中项。
+    button.tabIndex = target.id === selected ? 0 : -1;
+    // 应用图标由服务端从系统取；取不到时露出首字兜底（首字只给眼睛看，读屏念下方名称）。
+    button.innerHTML = `<span class="target-icon"><img src="/api/icon?id=${encodeURIComponent(target.id)}" alt="" draggable="false"><span class="target-initial" aria-hidden="true"></span></span><small></small>`;
+    const image = button.querySelector('img');
+    image.addEventListener('error', () => image.classList.add('missing'));
+    button.querySelector('.target-initial').textContent = target.name.slice(0, 1).toUpperCase();
+    button.querySelector('small').textContent = target.name;
+    row.append(button);
   });
 }
+
+function markSelected() {
+  row.querySelectorAll('.target').forEach(element => {
+    const isSelected = element.dataset.targetId === selected;
+    element.classList.toggle('selected', isSelected);
+    element.setAttribute('aria-checked', String(isSelected));
+    element.tabIndex = isSelected ? 0 : -1;   // Tab 下次进来落在选中项上
+  });
+  const front = targets.find(item => item.id === selected);
+  // 发送按钮必须把目标带上：用户要知道这段字会打进哪个窗口。
+  padTarget.textContent = front ? front.name : '当前前台';
+  sendEl.textContent = front ? `发送到 ${front.name}` : '发送到当前前台';
+}
+
+/* ---------- 选中与唤醒 ---------- */
+
+async function activateTarget(targetId) {
+  lastActivateAt = Date.now();
+  const target = targets.find(item => item.id === targetId);
+  message(`正在唤醒 ${target ? target.name : targetId}…`);
+  try {
+    const response = await fetch('/api/activate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetId }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '无法唤醒应用。');
+    message(`${target ? target.name : targetId} 已置于电脑前台，可开始输入。`);
+    // 不自动聚焦输入框：键盘弹起会滚动页面，触控板与 Dock 的屏幕位置随之错位，
+    // 随后点触控板极易误触到 Dock 图标。想打字时用户自己点输入框。
+  } catch (error) {
+    message(error.message, true);
+  }
+}
+
+async function selectTarget(button) {
+  selected = button.dataset.targetId;
+  markSelected();
+  await activateTarget(selected);
+}
+
+row.addEventListener('click', event => {
+  const button = event.target.closest('.target');
+  if (!button || button.parentElement !== row) return;
+  selectTarget(button);
+});
+
+row.addEventListener('contextmenu', event => {
+  if (event.target.closest('.target')) event.preventDefault();
+});
+
+// 键盘：方向键 / Home / End 移动选中与焦点（只改选中，不顺手唤醒应用）；回车或空格激活。
+row.addEventListener('keydown', event => {
+  const button = event.target.closest('.target');
+  if (!button) return;
+  const buttons = [...row.querySelectorAll('.target')];
+  const at = buttons.indexOf(button);
+  let to = -1;
+  if (event.key === 'ArrowRight') to = Math.min(buttons.length - 1, at + 1);
+  else if (event.key === 'ArrowLeft') to = Math.max(0, at - 1);
+  else if (event.key === 'Home') to = 0;
+  else if (event.key === 'End') to = buttons.length - 1;
+  else return;
+  event.preventDefault();
+  const next = buttons[to];
+  if (!next) return;
+  if (next !== button) {
+    selected = next.dataset.targetId;
+    markSelected();
+  }
+  next.focus();
+  next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+});
+
+/* ---------- 触控板卡片：触碰自动展开，点输入框自动收起 ---------- */
+
+function enterPadMode() {
+  mainEl.classList.add('pad-mode');
+  textEl.blur(); // 收起手机键盘，把屏幕让给触控板
+}
+
+function exitPadMode() {
+  mainEl.classList.remove('pad-mode');
+  // 收起设置面板：滑杆只在触控板展开时有意义，切回输入不残留。
+  padCard.classList.remove('show-tuning');
+  padSettings.setAttribute('aria-expanded', 'false');
+}
+
+pad.addEventListener('pointerdown', enterPadMode);
+textEl.addEventListener('pointerdown', exitPadMode);
+textEl.addEventListener('focus', exitPadMode);
+
+/* ---------- 触控板：WebSocket 通道 ---------- */
+
+const WS_PORT = 46388;
+let ws = null;
+let wsReady = false;
+let reconnectTimer = 0;
+
+function wsConnect() {
+  try {
+    ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
+  } catch {
+    scheduleReconnect();
+    return;
+  }
+  ws.onopen = () => { wsReady = true; };
+  ws.onclose = () => { wsReady = false; scheduleReconnect(); };
+  ws.onerror = () => { try { ws.close(); } catch { /* 已关闭 */ } };
+}
+
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(wsConnect, 2000);
+}
+
+wsConnect();
+
+// 手势增量在 rAF 帧内合并成一条消息；down/up/click 立即发送。
+let pendingMove = { x: 0, y: 0 };
+let pendingScroll = { x: 0, y: 0 };
+let pendingZoom = 0;
+let flushQueued = false;
+
+function flushPad() {
+  flushQueued = false;
+  if (!wsReady) return;
+  if (Math.abs(pendingMove.x) > 0.001 || Math.abs(pendingMove.y) > 0.001) {
+    ws.send(JSON.stringify({ t: 'move', dx: pendingMove.x, dy: pendingMove.y }));
+    pendingMove = { x: 0, y: 0 };
+  }
+  if (Math.abs(pendingScroll.x) > 0.001 || Math.abs(pendingScroll.y) > 0.001) {
+    ws.send(JSON.stringify({ t: 'scroll', dx: pendingScroll.x, dy: pendingScroll.y }));
+    pendingScroll = { x: 0, y: 0 };
+  }
+  if (Math.abs(pendingZoom) > 0.002) {
+    ws.send(JSON.stringify({ t: 'zoom', delta: pendingZoom }));
+    pendingZoom = 0;
+  }
+}
+
+function queuePad(message) {
+  if (!wsReady) return;
+  if (message.t === 'move') {
+    pendingMove.x += message.dx; pendingMove.y += message.dy;
+  } else if (message.t === 'scroll') {
+    pendingScroll.x += message.dx; pendingScroll.y += message.dy;
+  } else if (message.t === 'zoom') {
+    pendingZoom += message.delta;
+  } else {
+    ws.send(JSON.stringify(message));
+    return;
+  }
+  if (!flushQueued) {
+    flushQueued = true;
+    requestAnimationFrame(flushPad);
+  }
+}
+
+/* ---------- 触控板：手势状态机 ---------- */
+
+const pointers = new Map();   // pointerId -> {x, y, ts}
+let gesture = null;           // 'pending' | 'cursor' | 'two' | 'idle'；drag 由 dragArmed 表示
+let holdTimer = 0;
+let dragArmed = false;        // 长按已触发，左键在 Mac 上处于按下状态
+let sawTwoFingers = false;
+let pendingRightClick = false;
+let lastTap = null;           // 双击检测：350ms 内同一附近的第二次点按
+let twoInfo = null;           // 双指中点与间距
+let twoVy = 0;                // 双指滚动的松手速度（px/ms）
+let momentumRaf = 0;          // 惯性滚动动画帧
+const SCROLL_ZONE_PX = 52;    // 触控板右缘单指滚动区宽度
+let twoStartedAt = 0;
+let twoMoved = 0;
+
+const sens = () => parseFloat(sensEl.value);
+const scrollFactor = () => parseFloat(scrollSpeedEl.value);
+
+sensEl.value = localStorage.getItem('pd-sens') || sensEl.value;
+scrollSpeedEl.value = localStorage.getItem('pd-scroll') || scrollSpeedEl.value;
+sensEl.addEventListener('input', () => localStorage.setItem('pd-sens', sensEl.value));
+scrollSpeedEl.addEventListener('input', () => localStorage.setItem('pd-scroll', scrollSpeedEl.value));
+
+/* ---------- 设置齿轮：默认收起，点开才显示滑杆 ---------- */
+
+padSettings.addEventListener('pointerdown', event => event.stopPropagation()); // 不触发触控板手势与 Mac 点击
+padSettings.addEventListener('click', event => {
+  event.stopPropagation();
+  const open = padCard.classList.toggle('show-tuning');
+  padSettings.setAttribute('aria-expanded', String(open));
+});
+
+/* ---------- 历史发送 ---------- */
+
+const histBtn = document.querySelector('#history-btn');
+const historyPanel = document.querySelector('#history-panel');
+const historyList = document.querySelector('#history-list');
+const historyClear = document.querySelector('#history-clear');
+const HIST_KEY = 'pd-history';
+
+histBtn.addEventListener('click', () => {
+  const open = historyPanel.hidden;
+  historyPanel.hidden = !open;
+  // aria-pressed 同时驱动按钮高亮态，面板开闭有明确的按钮反馈。
+  histBtn.setAttribute('aria-pressed', String(open));
+  if (open) renderHistory();
+});
+
+function loadHistory() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushHistory(text, targetName) {
+  const items = loadHistory();
+  // 相同内容去重：只保留最新一条，不重复占位（时间与目标随之刷新）。
+  const deduped = items.filter(item => item.text !== text);
+  deduped.unshift({ text, target: targetName, ts: Date.now() });
+  localStorage.setItem(HIST_KEY, JSON.stringify(deduped.slice(0, 20)));
+}
+
+function renderHistory() {
+  const items = loadHistory();
+  historyList.innerHTML = '';
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'hist-item empty';
+    empty.textContent = '还没有发送记录';
+    historyList.append(empty);
+    return;
+  }
+  items.forEach(item => {
+    const div = document.createElement('div');
+    div.className = 'hist-item';
+    const textDiv = document.createElement('div');
+    textDiv.className = 'hist-text';
+    textDiv.textContent = item.text;
+    const meta = document.createElement('small');
+    const time = new Date(item.ts);
+    meta.textContent = `${item.target || ''} · ${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}`;
+    div.append(textDiv, meta);
+    div.addEventListener('click', () => {
+      textEl.value = item.text;
+      historyPanel.hidden = true;
+      histBtn.setAttribute('aria-pressed', 'false');
+      textEl.focus();
+    });
+    historyList.append(div);
+  });
+}
+
+historyClear.addEventListener('click', () => {
+  localStorage.removeItem(HIST_KEY);
+  renderHistory();
+});
+
+/* ---------- 图片发送：选图 → 预览 → 与文字一起发送（经 Mac 剪贴板粘贴） ---------- */
+
+const imageBtn = document.querySelector('#image-btn');
+const imageFile = document.querySelector('#image-file');
+const imagePreview = document.querySelector('#image-preview');
+const imageThumb = document.querySelector('#image-thumb');
+const imageRemove = document.querySelector('#image-remove');
+let pendingImage = null; // { dataUrl, base64 }
+
+imageBtn.addEventListener('click', () => imageFile.click());
+imageFile.addEventListener('change', () => {
+  const file = imageFile.files[0];
+  imageFile.value = '';
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { message('只能选择图片。', true); return; }
+  compressImage(file, dataUrl => {
+    pendingImage = { dataUrl, base64: dataUrl.split(',')[1] };
+    imageThumb.src = dataUrl;
+    imagePreview.hidden = false;
+    message('图片已插入，输入文字后一起发送。');
+  });
+});
+
+imageRemove.addEventListener('click', () => {
+  pendingImage = null;
+  imageThumb.src = '';
+  imagePreview.hidden = true;
+});
+
+// 大图压到 2048px JPEG（质量 0.85）：聊天场景够清晰，base64 体可控制在数 MB 内。
+function compressImage(file, done) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, 2048 / Math.max(image.width, image.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(image.width * scale);
+      canvas.height = Math.round(image.height * scale);
+      canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+      done(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    image.src = String(reader.result);
+  };
+  reader.readAsDataURL(file);
+}
+
+/* ---------- 快捷键按钮条：点击向 Mac 前台应用注入组合键 ---------- */
+
+const shortcutBar = document.querySelector('#shortcut-bar');
+let shortcuts = [];
+
+const MODIFIER_PREFIX = { command: '⌘', shift: '⇧', option: '⌥', control: '⌃' };
+const KEY_NAMES = { 36: '⏎', 49: '空格', 51: '⌫', 48: '⇥', 53: 'esc',
+  123: '←', 124: '→', 125: '↓', 126: '↑',
+  96: 'F5', 97: 'F6', 98: 'F7', 99: 'F3', 100: 'F8', 101: 'F9',
+  109: 'F10', 111: 'F12', 118: 'F4', 120: 'F2', 122: 'F1', 103: 'F11' };
+
+function shortcutLabel(shortcut) {
+  const mods = (shortcut.modifiers || []).map(name => MODIFIER_PREFIX[name.toLowerCase()] || '').join('');
+  const key = KEY_NAMES[shortcut.keycode] || '';
+  return `${mods}${key} ${shortcut.label}`.trim();
+}
+
+function renderShortcuts() {
+  shortcutBar.innerHTML = '';
+  shortcutBar.hidden = !shortcuts.length;
+  shortcuts.forEach(shortcut => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'shortcut-key';
+    button.textContent = shortcutLabel(shortcut);
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/shortcut-trigger', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: shortcut.id, label: shortcut.label, modifiers: shortcut.modifiers, keycode: shortcut.keycode }),
+        });
+        if (!response.ok) {
+          const result = await response.json().catch(() => ({}));
+          message(result.error || '快捷键触发失败。', true);
+        }
+      } catch {
+        message('无法连接本机服务。', true);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    shortcutBar.append(button);
+  });
+}
+
+// 手动滑动 Dock 时暂停前台跟随，不抢用户的切换操作。
+row.addEventListener('scroll', () => { manualUntil = Date.now() + 4000; }, { passive: true });
+
+pad.addEventListener('pointerdown', event => {
+  enterPadMode();
+  if (momentumRaf) { cancelAnimationFrame(momentumRaf); momentumRaf = 0; } // 新手势接管，停掉惯性
+  try { pad.setPointerCapture(event.pointerId); } catch { /* 指针已失效时忽略，不影响手势 */ }
+  const rect = pad.getBoundingClientRect();
+  const zone = pointers.size === 0 && event.clientX > rect.right - SCROLL_ZONE_PX ? 'scroll' : 'cursor';
+  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, sx: event.clientX, sy: event.clientY, ts: performance.now(), zone, vy: 0, lastT: 0 });
+  pad.classList.add('pad-active');
+  if (pointers.size === 1) {
+    gesture = 'pending';
+    dragArmed = false;
+    sawTwoFingers = false;
+    pendingRightClick = false;
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      if (pointers.size === 1 && gesture === 'pending') {
+        dragArmed = true;
+        pad.classList.add('pad-drag');
+        queuePad({ t: 'down' });
+      }
+    }, 500);
+  } else if (pointers.size === 2) {
+    // 第二根手指落下：取消长按与单击判定，进入滚动/捏合。
+    clearTimeout(holdTimer);
+    sawTwoFingers = true;
+    gesture = 'two';
+    twoVy = 0;
+    const [a, b] = [...pointers.values()];
+    twoInfo = { mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, dist: Math.hypot(a.x - b.x, a.y - b.y), t: performance.now() };
+    twoStartedAt = twoInfo.t;
+    twoMoved = 0;
+  }
+});
+
+// 松手后的惯性滚动：速度按帧衰减，衰减完发送 scrollEnd 让 Mac 停稳。
+function startMomentum(v) {
+  if (momentumRaf) cancelAnimationFrame(momentumRaf);
+  let last = performance.now();
+  const step = now => {
+    const dt = Math.min(48, now - last);
+    last = now;
+    if (!wsReady || Math.abs(v) < 0.06) {
+      queuePad({ t: 'scrollEnd' });
+      momentumRaf = 0;
+      return;
+    }
+    queuePad({ t: 'scroll', dx: 0, dy: v * dt * scrollFactor() });
+    v *= Math.pow(0.94, dt / 16);
+    momentumRaf = requestAnimationFrame(step);
+  };
+  momentumRaf = requestAnimationFrame(step);
+}
+
+pad.addEventListener('pointermove', event => {
+  const point = pointers.get(event.pointerId);
+  if (!point) return;
+  const samples = event.getCoalescedEvents ? event.getCoalescedEvents() : [];
+  const moves = samples.length ? samples : [event];
+
+  // 右缘滚动区：单指上下滑直接滚动，并记录松手速度用于惯性。
+  if (pointers.size === 1 && point.zone === 'scroll') {
+    const nowT = performance.now();
+    const dt = point.lastT ? nowT - point.lastT : 0;
+    let dy = 0;
+    for (const sample of moves) {
+      dy += sample.clientY - point.y;
+      point.y = sample.clientY;
+    }
+    if (dt > 0) point.vy = point.vy * 0.65 + (dy / dt) * 0.35;
+    point.lastT = nowT;
+    if (gesture === 'pending') { gesture = 'scroll'; clearTimeout(holdTimer); }
+    if (gesture === 'scroll') queuePad({ t: 'scroll', dx: 0, dy: dy * scrollFactor() });
+    return;
+  }
+
+  if (pointers.size === 1) {
+    let dx = 0;
+    let dy = 0;
+    for (const sample of moves) {
+      dx += sample.clientX - point.x;
+      dy += sample.clientY - point.y;
+      point.x = sample.clientX;
+      point.y = sample.clientY;
+    }
+    if (gesture === 'pending' && Math.hypot(point.x - point.sx, point.y - point.sy) > 8) {
+      // 累计位移超过 8px 才算移动光标；手指静置抖动仍保持点按判定。
+      gesture = 'cursor';
+    }
+    if (gesture === 'cursor') {
+      // 长按拿起后服务端处于 dragging 状态，move 即拖动；否则移动光标。
+      queuePad({ t: 'move', dx: dx * sens(), dy: dy * sens() });
+    }
+  } else if (pointers.size >= 2 && gesture === 'two') {
+    const last = moves[moves.length - 1];
+    point.x = last.clientX;
+    point.y = last.clientY;
+    const [a, b] = [...pointers.values()];
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    const tx = mx - twoInfo.mx;
+    const ty = my - twoInfo.my;
+    const scale = dist / (twoInfo.dist || 1) - 1;
+    twoMoved += Math.hypot(tx, ty);
+    const dt = performance.now() - (twoInfo.t || performance.now());
+    if (dt > 0) twoVy = twoVy * 0.65 + (ty / dt) * 0.35;
+    if (Math.abs(scale) > 0.02) {
+      // 指间距变化为主：捏合缩放（Cmd+滚轮）。
+      queuePad({ t: 'zoom', delta: scale * 2 });
+    } else {
+      queuePad({ t: 'scroll', dx: tx * scrollFactor(), dy: ty * scrollFactor() });
+    }
+    twoInfo = { mx, my, dist, t: performance.now() };
+  }
+});
+
+function padLift(event) {
+  if (!pointers.has(event.pointerId)) return;
+  const lift = pointers.get(event.pointerId);
+  pointers.delete(event.pointerId);
+
+  if (pointers.size === 0) {
+    clearTimeout(holdTimer);
+    pad.classList.remove('pad-active', 'pad-drag');
+    if (dragArmed) {
+      queuePad({ t: 'up' });
+      dragArmed = false;
+    } else if (sawTwoFingers) {
+      if (pendingRightClick && performance.now() - twoStartedAt < 300) {
+        queuePad({ t: 'click', button: 'right' });
+      }
+    } else if (gesture === 'pending' && performance.now() - lift.ts < 300) {
+      const now = performance.now();
+      let count = 1;
+      if (lastTap && now - lastTap.ts < 350 && Math.hypot(lift.x - lastTap.x, lift.y - lastTap.y) < 28) count = 2;
+      lastTap = count === 2 ? null : { ts: now, x: lift.x, y: lift.y };
+      queuePad({ t: 'click', button: 'left', count });
+    } else if (lift.zone === 'scroll') {
+      // 滚动区松手：有速度带惯性滑行，否则立即停稳。
+      if (Math.abs(lift.vy) > 0.15) startMomentum(lift.vy);
+      else queuePad({ t: 'scrollEnd' });
+    }
+    gesture = null;
+    sawTwoFingers = false;
+    pendingRightClick = false;
+  } else if (pointers.size === 1) {
+    // 双指抬起一指：够快且几乎没动才保留右键判定；剩余手指不再触发任何手势。
+    pendingRightClick = gesture === 'two' && twoMoved < 12;
+    if (!pendingRightClick) {
+      if (Math.abs(twoVy) > 0.15) startMomentum(twoVy);
+      else queuePad({ t: 'scrollEnd' });
+    }
+    gesture = 'idle';
+  }
+}
+
+pad.addEventListener('pointerup', padLift);
+pad.addEventListener('pointercancel', padLift);
+
+// 键盘驱动触控板：方向键移光标、回车/空格单击、Esc 退出。走现成的 queuePad 封装，不动 ws 协议。
+const PAD_KEY_STEP = 14;
+
+pad.addEventListener('keydown', event => {
+  const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+  if (dir) {
+    event.preventDefault();
+    queuePad({ t: 'move', dx: dir[0] * PAD_KEY_STEP * sens(), dy: dir[1] * PAD_KEY_STEP * sens() });
+    return;
+  }
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    queuePad({ t: 'click', button: 'left', count: 1 });
+    return;
+  }
+  if (event.key === 'Escape') {
+    exitPadMode();
+    pad.blur();
+  }
+});
+
+pad.addEventListener('focus', enterPadMode);
+
+/* ---------- 连接与发送 ---------- */
+
+const HEARTBEAT_MS = 5000;
+let heartbeat = 0;
+
+// 心跳 + 前台跟随（边沿触发）：前台命中 Dock 目标时选中态跟过去一次；
+// 前台是非目标应用（如 Finder）则进入伪目标态，发送直接注入当前前台。
+// 手动滑动 Dock、刚手动激活的短时间内不跟随，之后可自由手动切换。
+async function heartbeatTick() {
+  try {
+    fetch('/api/pair', { method: 'POST', keepalive: true });
+    const current = await fetch('/api/status').then(response => response.json());
+    // 快捷键列表跟随服务端：控制台改完配置，手机 5 秒内自动刷新按钮。
+    if (JSON.stringify(current.shortcuts || []) !== JSON.stringify(shortcuts)) {
+      shortcuts = current.shortcuts || [];
+      renderShortcuts();
+    }
+    const frontId = current.frontmostId;      // 命中 Dock 目标时的 id，否则 null
+    const frontName = current.frontmostName;  // 前台应用名（始终有值）
+    const key = frontId ?? frontName ?? null;
+    // 抑制期内不消费变化：lastSeenFront 保持原值，抑制结束后下一轮仍会应用这次切换。
+    if (!key || key === lastSeenFront) return;
+    if (Date.now() <= manualUntil || Date.now() - lastActivateAt < 2500) return;
+    lastSeenFront = key;
+    if (frontId && targets.some(item => item.id === frontId)) {
+      selected = frontId;
+      markSelected();
+      sendEl.textContent = '发送';
+      const name = (targets.find(item => item.id === frontId) || { name: frontId }).name;
+      message(`${name} 已在电脑前台，可直接输入。`);
+    } else if (frontName) {
+      selected = FRONTMOST_ID;
+      padTarget.textContent = frontName;
+      sendEl.textContent = `发送到 ${frontName}`;
+      message(`已切到 ${frontName}（未添加），发送将直接输入到它。`);
+    }
+  } catch { /* 网络抖动忽略 */ }
+}
+
+function startHeartbeat() {
+  clearInterval(heartbeat);
+  heartbeat = setInterval(heartbeatTick, HEARTBEAT_MS);
+}
+
+function stopHeartbeat() {
+  clearInterval(heartbeat);
+  heartbeat = 0;
+}
+
+// 切到后台不再轮询；回到前台先补一次状态刷新再恢复计时。
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopHeartbeat();
+    return;
+  }
+  heartbeatTick();
+  startHeartbeat();
+});
+
 async function boot() {
   try {
     const status = await fetch('/api/status').then(response => response.json());
-    renderTargets(status.targets); connectionEl.textContent = status.accessibility ? '已就绪' : '需授权'; connectionEl.classList.add('ready');
-    if (!status.accessibility) message('请先在 Mac 上授予辅助功能权限，页面仍可输入。', true);
-  } catch { connectionEl.textContent = '未连接'; message('无法连接本机服务。确认手机与 Mac 在同一网络。', true); }
+    targets = status.targets;
+    shortcuts = status.shortcuts || [];
+    renderShortcuts();
+    renderTargets();
+    connectionEl.textContent = status.accessibility ? '已就绪' : '需授权';
+    connectionEl.classList.toggle('ready', status.accessibility);
+    if (!status.accessibility) message('请先在电脑端控制台完成授权，页面仍可输入。', true);
+    startHeartbeat();
+  } catch {
+    connectionEl.textContent = '未连接';
+    message('无法连接本机服务。确认手机与 Mac 在同一网络。', true);
+  }
 }
+
 async function send() {
-  const text = textEl.value.trim(); if (!text) { message('先输入一点内容。', true); textEl.focus(); return; }
-  sendEl.disabled = true; message('正在打开应用并输入…');
+  if (sendEl.disabled) return; // 发送进行中忽略重复触发（回车与点击并发时）
+  const text = textEl.value.trim();
+  if (!text && !pendingImage) {
+    message('先输入一点内容或选择一张图片。', true);
+    textEl.focus();
+    return;
+  }
+  exitPadMode();
+  sendEl.disabled = true;
+  message(selected === FRONTMOST_ID ? '直接输入到当前前台应用…' : '正在打开应用并输入…');
   try {
-    const response = await fetch('/api/send', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({targetId:selected, text})});
-    const result = await response.json(); if (!response.ok) throw new Error(result.error || '发送失败。');
-    textEl.value = ''; message('已发送。');
-  } catch (error) { message(error.message, true); } finally { sendEl.disabled = false; }
+    const response = await fetch('/api/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetId: selected, text, image: pendingImage?.base64 ?? null }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '发送失败。');
+    // 发送成功就进历史：即使注入效果不符预期，内容也不会丢，可从历史一键回填重发。
+    pushHistory(text || '[图片]', selected === FRONTMOST_ID ? '当前前台' : (targets.find(item => item.id === selected) || { name: selected }).name);
+    textEl.value = '';
+    pendingImage = null;
+    imageThumb.src = '';
+    imagePreview.hidden = true;
+    message('已发送。');
+  } catch (error) {
+    message(error.message, true);
+  } finally {
+    sendEl.disabled = false;
+  }
 }
-sendEl.onclick = send;
-textEl.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } });
+
+sendEl.addEventListener('click', send);
+textEl.addEventListener('keydown', event => {
+  // 中文/日文输入法在选词、候选期间按回车是给 IME 用的，不能当成“发送”。
+  if (event.isComposing || event.keyCode === 229) return;
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    send();
+  }
+});
+
 boot();

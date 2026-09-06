@@ -2,3 +2,7 @@
 VoiceDeck
 build/
 .DS_Store
+
+# 本地 agent 工具与评审存档，不随仓库分发
+.agents/
+.impeccable/
