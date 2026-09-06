@@ -1,2 +1,794 @@
-/* [INPUT]: 依赖 index.html 的语义结构。 [OUTPUT]: 提供移动优先的 Voice Deck 视觉层。 [POS]: Web 的统一主题。 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md */
-:root{color-scheme:dark;--ink:#edf1ff;--muted:#9aa5c6;--panel:#171d31;--line:#2d3658;--accent:#83f0c8;--danger:#ff9a9a}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 85% 0,#243452,transparent 36%),#0b1020;color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}main{max-width:620px;margin:auto;min-height:100svh;padding:calc(24px + env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:30px}header{display:flex;align-items:center;gap:12px}.mark{display:grid;place-items:center;width:44px;height:44px;border:1px solid #4b608e;border-radius:14px;background:#18233b;color:var(--accent);font-weight:800}.eyebrow,.label{margin:0;color:var(--muted);font-size:11px;letter-spacing:.1em;font-weight:700}h1{margin:2px 0 0;font-size:22px}.pill{margin-left:auto;padding:6px 9px;border:1px solid var(--line);border-radius:99px;font-size:12px;color:var(--muted)}.pill.ready{color:var(--accent);border-color:#397360}.target-heading{display:flex;align-items:center;justify-content:space-between}.target-heading span{color:var(--muted);font-size:11px}.targets{display:flex;gap:13px;margin:10px -20px 0;padding:3px 20px 10px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;scrollbar-width:none;-webkit-overflow-scrolling:touch}.targets::-webkit-scrollbar{display:none}.targets.sorting{scroll-snap-type:none;overflow-x:hidden}.target{flex:0 0 68px;padding:0;border:0;background:transparent;color:var(--ink);text-align:center;scroll-snap-align:start;touch-action:pan-x;user-select:none;-webkit-user-select:none}.target-icon{position:relative;display:grid;place-items:center;width:60px;height:60px;margin:3px auto 7px;border:2px solid transparent;border-radius:16px;background:#202842;box-shadow:0 5px 16px #0005;overflow:hidden;transition:transform .16s,border-color .16s}.target-icon img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.target-icon img.missing{display:none}.target-icon>span{font-size:24px;font-weight:800;color:var(--accent)}.target small{display:block;overflow:hidden;color:var(--muted);font-size:11px;line-height:1.25;text-overflow:ellipsis;white-space:nowrap}.target.selected .target-icon{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 7px 20px #0007,0 0 0 2px #18352f}.target.selected small{color:var(--ink)}.target.dragging{z-index:3;touch-action:none}.target.dragging .target-icon{transform:scale(1.12);border-color:#fff;box-shadow:0 12px 30px #000a}.compose{padding:16px;border:1px solid var(--line);border-radius:20px;background:linear-gradient(135deg,#171d31,#12182a)}textarea{display:block;width:100%;margin-top:10px;padding:14px;border:1px solid var(--line);border-radius:14px;background:#0d1323;color:var(--ink);font:16px/1.5 inherit;resize:vertical}textarea:focus{outline:2px solid var(--accent);outline-offset:2px}.hint{margin:10px 0 16px;color:var(--muted);font-size:13px;line-height:1.5}button{font:inherit;cursor:pointer}#send{width:100%;padding:15px;border:0;border-radius:14px;background:var(--accent);color:#092018;font-weight:800;font-size:16px}#send:disabled{opacity:.55;cursor:wait}#send span{float:right}#message{min-height:20px;margin:-15px 0 0;color:var(--muted);font-size:14px}#message.error{color:var(--danger)}footer{margin-top:auto;text-align:center;color:#7180a7;font-size:12px}
+/*
+ * [INPUT]: 依赖 index.html 的语义结构。
+ * [OUTPUT]: PocketDesk 浅色玻璃主题：白色半透明卡片 + 毛玻璃 + 蓝色发光强调，设计语言对齐 Workbench 日间主题。
+ * [POS]: Web 的唯一样式来源；颜色、间距、圆角、字号、动效只允许从这里取值。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+
+:root {
+  color-scheme: light;
+
+  /* 颜色：浅灰蓝画布 + 白玻璃表面 + 发丝线边框，禁止在规则里写游离色值。 */
+  --bg: #eef1f7;
+  --bg-glow: rgb(59 130 246 / 18%);
+  --bg-glow-2: rgb(99 102 241 / 12%);
+  --surface-1: rgb(255 255 255 / 80%);
+  --surface-2: rgb(255 255 255 / 55%);
+  --surface-3: #eef2fb;
+  --field: rgb(255 255 255 / 75%);
+  --border: rgb(15 30 68 / 10%);
+  --border-strong: rgb(15 30 68 / 24%);
+  --fg: #171c2c;
+  --fg-muted: #4a5266;
+  --fg-faint: #7d8494;
+  --accent: #1f6bff;
+  --accent-ink: #ffffff;
+  --accent-soft: rgb(31 107 255 / 10%);
+  --accent-line: rgb(31 107 255 / 38%);
+  --danger: #cf2b36;
+  --shadow-tile: 0 1px 2px rgb(16 24 40 / 6%);
+
+  /* 高光：玻璃面上只用 1px 白色内描边表达；主按钮不用渐变与外发光。 */
+  --hairline-top: rgb(255 255 255 / 65%);
+  --inset-top: rgb(255 255 255 / 55%);
+
+  /* 蓝色光效：一律在 :root 里定值，规则里只引用令牌（DESIGN.md §3.3）。 */
+  --halo-pad: radial-gradient(320px 200px at 50% 40%, rgb(59 130 246 / 10%), transparent 70%);
+  --lift-tile: 0 3px 8px rgb(37 99 235 / 35%);
+  --glow-hint: 0 0 14px rgb(59 130 246 / 60%);
+  --glow-thumb: 0 0 10px rgb(37 99 235 / 40%);
+
+  /* 滑杆几何：命中区 44px，细轨道与滑块由伪元素表达。 */
+  --range-track-h: 4px;
+  --range-thumb: 20px;
+  --range-thumb-shift: -8px;
+
+  /* 间距：4px 基准刻度。 */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+
+  /* 圆角 */
+  --r-field: 12px;
+  --r-icon: 16px;
+  --r-panel: 20px;
+  --r-pill: 999px;
+
+  /* 字号 */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+
+  /* 动效 */
+  --dur: 200ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* 尺寸 */
+  --tile-w: 68px;
+  --icon-size: 60px;
+
+  /* 玻璃模糊：卡片与触控板共用。 */
+  --glass-blur: blur(22px) saturate(1.5);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(560px 320px at 85% -5%, var(--bg-glow), transparent 62%),
+    radial-gradient(480px 320px at -10% 102%, var(--bg-glow-2), transparent 60%),
+    var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  max-width: 620px;
+  min-height: 100vh;
+  min-height: 100svh;
+  margin: auto;
+  padding: calc(var(--s-6) + env(safe-area-inset-top)) var(--s-5) calc(var(--s-6) + env(safe-area-inset-bottom));
+}
+
+/* ---------- 顶部 ---------- */
+
+header {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+h1 {
+  margin: 0;
+  font-size: var(--text-xl);
+  letter-spacing: -0.01em;
+}
+
+.pill {
+  margin-left: 0;
+  padding: var(--s-1) var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+/* 顶部当前应用徽章：名字即选中态，点击交互在 Dock 完成。 */
+.app-chip {
+  margin-left: auto;
+  max-width: 42%;
+  padding: var(--s-1) var(--s-3);
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill.ready {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  /* 就绪态用描边+底色表达；12px 蓝字在浅底上只 3.6:1，不够 4.5。 */
+  color: var(--fg);
+}
+
+/* ---------- Dock ---------- */
+
+.deck {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.targets {
+  display: flex;
+  gap: var(--s-3);
+  margin: 0;
+  padding: var(--s-1) 0 var(--s-2);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.targets::-webkit-scrollbar {
+  display: none;
+}
+
+.target {
+  flex: 0 0 var(--tile-w);
+  position: relative;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: center;
+  touch-action: pan-x;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none; /* 长按不弹“存储图像/预览”菜单，否则点击手势被打断 */
+  transition: transform var(--dur) var(--ease);
+}
+
+.target-icon {
+  display: grid;
+  place-items: center;
+  position: relative;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  margin: var(--s-1) auto var(--s-2);
+  /* 图标自带圆角与透明边距：容器平时只留 1.5px 透明描边占位，选中时上色，避免状态切换抖动。 */
+  border: 1.5px solid transparent;
+  border-radius: var(--r-icon);
+  transition: transform var(--dur) var(--ease), border-color var(--dur) var(--ease), filter var(--dur) var(--ease);
+}
+
+/* 仅当图标缺失、露出首字兜底时才垫底色。 */
+.target-icon:has(img.missing) {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-tile);
+}
+
+.target-icon img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
+}
+
+.target-icon img.missing {
+  display: none;
+}
+
+.target-initial {
+  color: var(--accent);
+  font-size: var(--text-xl);
+  font-weight: 800;
+}
+
+.target small {
+  display: block;
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 选中态：描边 + 名称加粗提亮 + 轻微蓝色投影，三重信号在浅色底上依然可辨。 */
+.target.selected .target-icon {
+  border-color: var(--accent);
+  filter: drop-shadow(var(--lift-tile));
+  transform: translateY(-2px);
+}
+
+.target.selected small {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.target:active .target-icon {
+  transform: scale(0.96);
+}
+
+/* ---------- 按钮 ---------- */
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+/* ---------- 输入区 ---------- */
+
+.compose {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-height: 0;
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--surface-1);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-tile);
+}
+
+textarea::placeholder {
+  color: var(--fg-muted);
+  opacity: 1;
+}
+
+textarea {
+  display: block;
+  flex: 1;
+  width: 100%;
+  min-height: 140px;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--field);
+  color: var(--fg);
+  font: var(--text-lg)/1.5 inherit;
+  resize: none;
+}
+
+textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#send {
+  width: 100%;
+  padding: var(--s-3) 0;
+  border: 0;
+  border-radius: var(--r-field);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: var(--text-lg);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  box-shadow: inset 0 1px 0 var(--hairline-top);
+}
+
+#send:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+#send:active {
+  transform: translateY(1px);
+}
+
+#send:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+#message {
+  min-height: 20px;
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--text-md);
+}
+
+#message.error {
+  color: var(--danger);
+}
+
+/* ---------- 触控板卡片：碰到即进入触控板模式 ---------- */
+
+.pad-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--surface-1);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-tile);
+}
+
+/* 触控板模式：面板占满剩余空间，输入区压缩为一条；点输入框即切回。 */
+main.pad-mode #pad-card {
+  flex: 1 1 auto;
+}
+
+main.pad-mode #pad {
+  flex: 1 1 auto;
+  min-height: 240px;
+  border-color: var(--accent-line);
+  animation: pad-pop .22s var(--ease);
+}
+
+main.pad-mode .compose {
+  flex: 0 0 auto;
+}
+
+main.pad-mode .compose textarea {
+  flex: 0 0 auto;
+  height: 52px;
+  min-height: 0;
+}
+
+@keyframes pad-pop {
+  from {
+    opacity: .4;
+    transform: scale(.985);
+  }
+}
+
+/* ---------- 触控板 ---------- */
+
+#pad {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 72px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-field);
+  background:
+    var(--halo-pad),
+    var(--surface-2);
+  box-shadow: inset 0 1px 0 var(--inset-top);
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#pad.pad-active {
+  border-color: var(--accent-line);
+}
+
+#pad.pad-drag {
+  border-color: var(--accent);
+}
+
+#pad:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 右缘滚动区提示：单指在此上下滑 = 滚动；只在展开态显示，收起条保持干净。 */
+#pad::after {
+  content: "";
+  position: absolute;
+  top: var(--s-2);
+  bottom: var(--s-2);
+  right: var(--s-2);
+  width: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--surface-1);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+
+main.pad-mode #pad::after {
+  opacity: 1;
+}
+
+.pad-badge {
+  position: absolute;
+  top: var(--s-3);
+  left: var(--s-3);
+  padding: 2px var(--s-2);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-pill);
+  color: var(--fg);
+  font-size: var(--text-xs);
+  visibility: hidden;
+}
+
+#pad.pad-drag .pad-badge {
+  visibility: visible;
+}
+
+.pad-hint {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--text-md);
+  line-height: 1.9;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* 收起的精简条放不下完整提示：只在展开态显示，收起态保持干净。 */
+main:not(.pad-mode) .pad-hint {
+  display: none;
+}
+
+/* 中心光点：给触控板一个"感应区"的视觉锚点，蓝色发光。 */
+.pad-hint::before {
+  content: "";
+  display: block;
+  width: 10px;
+  height: 10px;
+  margin: 0 auto 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: var(--glow-hint);
+}
+
+/* 两个滑杆各占一列；min-width:0 让 input 的 129px 固有宽度可被压缩。 */
+.pad-tuning {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-2) var(--s-4);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.pad-tuning label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.pad-tuning input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  accent-color: var(--accent);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.pad-tuning input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--range-track-h);
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+}
+
+.pad-tuning input[type="range"]::-webkit-slider-thumb {
+  width: var(--range-thumb);
+  height: var(--range-thumb);
+  margin-top: var(--range-thumb-shift);
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: var(--glow-thumb);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.pad-tuning input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 320 宽放不下两列滑杆：退化成每行一个。 */
+@media (max-width: 359px) {
+  .pad-tuning {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .target,
+  .target-icon {
+    transition: none;
+  }
+
+  main.pad-mode #pad {
+    animation: none;
+  }
+}
+
+/* ---------- 设置齿轮与历史发送（置于文件末尾以覆盖基础规则） ---------- */
+
+/* 设置面板默认收起：点触控板右上角小图标展开。 */
+.pad-tuning {
+  display: none;
+}
+
+.pad-card.show-tuning .pad-tuning {
+  display: grid;
+}
+
+.pad-gear {
+  position: absolute;
+  top: var(--s-2);
+  right: calc(var(--s-2) + 50px);
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface-1);
+  color: var(--fg-muted);
+}
+
+/* 收起的精简条不放设置入口：展开触控板后才出现。 */
+main:not(.pad-mode) .pad-gear {
+  display: none;
+}
+
+.pad-gear svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.pad-card.show-tuning .pad-gear {
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
+
+/* 历史发送：面板在发送按钮上方展开，点条目回填输入框。 */
+.send-row {
+  display: flex;
+  gap: var(--s-2);
+}
+
+.send-row #send {
+  flex: 1;
+}
+
+.hist-btn {
+  flex: 0 0 52px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--field);
+  color: var(--fg-muted);
+}
+
+.hist-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 历史面板展开时按钮高亮：与选中目标同一套蓝色信号。 */
+.hist-btn[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 待发送图片预览：缩略图 + 右上角移除叉。 */
+.image-preview {
+  position: relative;
+  align-self: flex-start;
+}
+
+.image-preview img {
+  display: block;
+  max-width: 120px;
+  max-height: 90px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  object-fit: cover;
+}
+
+.image-remove {
+  position: absolute;
+  top: calc(-1 * var(--s-2));
+  right: calc(-1 * var(--s-2));
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface-1);
+  color: var(--fg-muted);
+  box-shadow: var(--shadow-tile);
+}
+
+.image-remove svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.history-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--surface-1);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.hist-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-2) var(--s-3);
+  background: var(--surface-3);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.hist-clear {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.hist-item {
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.hist-item:last-child {
+  border-bottom: 0;
+}
+
+.hist-item:active {
+  background: var(--accent-soft);
+}
+
+.hist-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.hist-item small {
+  color: var(--fg-faint);
+  font-size: var(--text-xs);
+}
+
+.hist-item.empty {
+  color: var(--fg-faint);
+  cursor: default;
+}
+
+/* ---------- 快捷键按钮条：输入框下方，点击向 Mac 前台应用注入组合键 ---------- */
+
+.shortcut-bar {
+  display: flex;
+  gap: var(--s-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.shortcut-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.shortcut-key {
+  flex: 0 0 auto;
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.shortcut-key:active {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+/* ---------- 快捷键字标：收起态的入口提示 ---------- */
+
+/* 收起时居左显示"触控板"三字，让用户知道这块可以摸；展开后自动隐藏。 */
+.pad-title {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding-left: var(--s-4);
+  color: var(--fg-muted);
+  font-size: var(--text-md);
+  font-weight: 700;
+  letter-spacing: 0.35em;
+  text-indent: 0.35em;
+  pointer-events: none;
+  transition: opacity var(--dur) var(--ease);
+}
+
+main.pad-mode .pad-title,
+.pad-card.show-tuning .pad-title {
+  opacity: 0;
+}

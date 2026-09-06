@@ -1,0 +1,428 @@
+<!doctype html>
+<!--
+  [INPUT]: 依赖 /api/status、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility。
+  [OUTPUT]: 电脑端控制台：授权引导、手机扫码连接、目标应用搜索/排序/删除/自定义图标管理、快捷键管理（键盘录制组合键，支持改名/重录/排序/删除）。
+  [POS]: 电脑端唯一页面入口；目标顺序与快捷键都保存在 Mac 本机（App Support），手机端只渲染。
+  [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PocketDesk 控制台</title>
+<style>
+:root{color-scheme:light;--ink:#171c2c;--muted:#4a5266;--panel:#f1f2f5;--line:rgb(15 30 68 / 10%);--accent:#1f6bff;--danger:#d93843;--accent-soft:rgb(31 107 255 / 10%)}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(560px 320px at 85% -5%, rgb(59 130 246 / 16%), transparent 62%),radial-gradient(480px 320px at -10% 102%, rgb(99 102 241 / 10%), transparent 60%),#eef1f7;color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;font-size:14px}
+main{max-width:860px;margin:auto;padding:36px 24px 60px;display:flex;flex-direction:column;gap:22px}
+header{display:flex;align-items:center;gap:12px}h1{margin:0;font-size:22px}
+.pill{margin-left:auto;padding:6px 10px;border:1px solid var(--line);border-radius:99px;font-size:12px;color:var(--muted)}
+.pill.ready{color:var(--accent);border-color:rgb(31 107 255 / 38%);background:rgb(31 107 255 / 10%)}
+.card{padding:20px;border:1px solid var(--line);border-radius:18px;background:rgb(255 255 255 / 80%);-webkit-backdrop-filter:blur(20px) saturate(1.5);backdrop-filter:blur(20px) saturate(1.5);box-shadow:0 1px 2px rgb(16 24 40 / 6%)}
+.card h2{margin:0 0 4px;font-size:15px}.card .sub{margin:0 0 14px;color:var(--muted);font-size:12px}
+.step{display:grid;place-items:center;width:24px;height:24px;margin-right:8px;border-radius:8px;background:rgb(31 107 255 / 10%);color:var(--accent);font-weight:800;font-size:12px}
+h2{display:flex;align-items:center}
+.row{display:flex;align-items:center;gap:12px}
+button{font:inherit;cursor:pointer}
+.btn{padding:8px 14px;border:1px solid var(--line);border-radius:10px;background:#ffffff;color:var(--ink);font-size:13px}
+.btn.primary{background:linear-gradient(135deg,#3b82f6,#2450f0);border-color:transparent;color:#ffffff;font-weight:800;box-shadow:0 8px 28px -10px rgb(37 99 235 / 55%)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--muted)}
+.btn:disabled{opacity:.5;cursor:wait}
+#authState{font-size:13px}#authState.ok{color:var(--accent)}#authState.bad{color:var(--danger)}
+#connect{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+.qr-item{display:flex;flex-direction:column;gap:6px}
+.qr-item b{font-size:12px}
+#qr,#qr-ip{width:128px;height:128px;border-radius:12px;background:#fff;padding:6px}
+#qr.error,#qr-ip.error{background:var(--panel)}
+.mono{font-family:ui-monospace,Menlo,monospace;color:var(--accent);word-break:break-all;font-size:12px}
+.connect-info{display:flex;flex-direction:column;gap:8px;flex:1;min-width:220px}
+#url{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--accent);word-break:break-all}
+#phoneState{font-size:13px;color:var(--muted)}
+#phoneState.ok{color:var(--accent)}
+.hint{color:var(--muted);font-size:12px;line-height:1.6}
+#search{width:100%;padding:11px 14px;border:1px solid var(--line);border-radius:12px;background:#ffffff;color:var(--ink);font:inherit}
+#search:focus{outline:2px solid var(--accent);outline-offset:1px}
+#results{margin-top:10px;border:1px solid var(--line);border-radius:12px;background:#ffffff;max-height:260px;overflow-y:auto;display:none}
+#results.open{display:block}
+.app-row{display:flex;align-items:center;gap:12px;padding:9px 12px;border-bottom:1px solid rgb(15 30 68 / 8%)}
+.app-row:last-child{border-bottom:0}
+.app-row img{width:28px;height:28px;border-radius:7px}
+.app-row .meta{flex:1;min-width:0}.app-row .meta b{font-weight:600;font-size:13px}.app-row .meta small{display:block;color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#current{margin-top:18px;display:flex;flex-direction:column;gap:8px}
+.target-row{display:flex;align-items:center;gap:12px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:#ffffff}
+.target-row img{width:34px;height:34px;border-radius:8px}
+.target-row b{font-weight:600;font-size:13px;flex:1}
+.target-row .missing{color:var(--danger);font-size:11px;margin-right:8px}
+#saveState{margin-left:8px;font-size:12px;color:var(--muted)}
+.btn.recording{color:#fff;background:var(--accent);border-color:transparent}
+.keycap{display:inline-block;min-width:22px;margin-left:4px;padding:2px 7px;border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;background:#fff;color:var(--ink);font-size:11px;text-align:center}
+/* 垃圾桶图标按钮：平时只显示图标，悬停泛红；确认态展开"确认移除"文字并填充红底。 */
+.icon-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;height:30px;padding:0;overflow:hidden;transition:width .18s ease,background .18s ease,color .18s ease}
+.icon-btn svg{width:17px;height:17px;flex:0 0 17px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.icon-btn .confirm-text{display:none;font-size:12px;font-weight:600;white-space:nowrap}
+.icon-btn.danger:hover{color:var(--danger)}
+.icon-btn.armed{width:92px;background:var(--danger);border-color:var(--danger);color:#fff}
+.icon-btn.armed .confirm-text{display:inline;margin-left:5px}
+</style>
+</head>
+<body>
+<main>
+  <header><h1>PocketDesk 控制台</h1><span id="conn" class="pill">连接中</span></header>
+
+  <section class="card">
+    <h2><span class="step">1</span>系统授权</h2>
+    <p class="sub" id="authSub">Mac 需要辅助功能权限才能把文字和鼠标事件注入目标应用。</p>
+    <div class="row"><span id="authState">检查中…</span><button id="openSettings" class="btn primary">打开系统设置</button></div>
+    <p class="hint" id="authHint" style="margin-top:12px">在"隐私与安全性 → 辅助功能"中打开 PocketDesk 的开关，完成后本页状态会自动变绿。</p>
+  </section>
+
+  <section class="card">
+    <h2><span class="step">2</span>手机扫码连接</h2>
+    <p class="sub">iPhone 扫左码（地址永久不变，保存到主屏幕即可）；安卓手机不解析 .local 域名，请扫右边的 IP 码或直接输入 IP 网址。</p>
+    <div id="connect">
+      <div class="qr-item">
+        <img id="qr" alt="永久地址二维码">
+        <b>永久地址 · iPhone</b>
+        <span id="url" class="hint mono">生成中…</span>
+      </div>
+      <div class="qr-item">
+        <img id="qr-ip" alt="IP 地址二维码">
+        <b>当前网络 IP · 安卓</b>
+        <span id="ipUrl" class="hint mono">生成中…</span>
+      </div>
+      <div class="connect-info">
+        <span id="phoneState">等待连接…</span>
+        <span class="hint">iPhone：Safari 打开后点分享 →"添加到主屏幕"，即可像 App 一样点开。</span>
+        <span class="hint">安卓：建议在浏览器收藏 IP 网址；IP 由路由器分配，若变化重新扫一次即可。</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2><span class="step">3</span>目标应用</h2>
+    <p class="sub">添加电脑上任意应用，调整手机面板的图标顺序；顺序保存在这台 Mac 上。</p>
+    <input id="search" type="search" placeholder="搜索已安装应用…" autocomplete="off">
+    <div id="results"></div>
+    <div id="current"></div>
+    <div class="row" style="margin-top:14px"><span id="saveState"></span></div>
+  </section>
+
+  <section class="card">
+    <h2><span class="step">4</span>快捷键</h2>
+    <p class="sub">手机输入框下方会显示这些按钮，点一下就把对应按键发给 Mac 当前前台应用；可以只按一个键，也可以带修饰键。最多 12 个。</p>
+    <div class="row" style="margin-bottom:12px">
+      <input id="scLabel" type="text" placeholder="按钮名称，如：撤销" maxlength="6" autocomplete="off"
+             style="flex:0 0 160px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font:inherit">
+      <button id="scRecord" class="btn" style="flex:1">录制按键</button>
+      <button id="scAdd" class="btn primary" disabled>添加</button>
+    </div>
+    <p class="hint" style="margin:0 0 12px">点「录制按键」后直接按键盘（如 ⌘Z 或单独一个 Z）；主键支持字母/数字和方向键、F1-F12、回车等。</p>
+    <div id="scList"></div>
+  </section>
+</main>
+<input id="iconFile" type="file" accept="image/*" hidden>
+<script>
+const $ = id => document.getElementById(id);
+let state = { targets: [], platform: 'macOS', status: null };
+let iconTargetId = null;
+
+function esc(text) { const div = document.createElement('div'); div.textContent = text ?? ''; return div.innerHTML; }
+
+async function post(url, body) {
+  const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                      body: body ? JSON.stringify(body) : '{}'});
+  if (!response.ok) { const e = await response.json().catch(() => ({})); throw new Error(e.error || '请求失败'); }
+  return response.json();
+}
+
+async function refresh() {
+  try {
+    const status = await fetch('/api/status').then(r => r.json());
+    state.status = status;
+    $('conn').textContent = '已就绪'; $('conn').classList.add('ready');
+    const granted = status.accessibility;
+    const authState = $('authState');
+    authState.textContent = granted ? '已授权' : '未授权';
+    authState.className = granted ? 'ok' : 'bad';
+    $('openSettings').disabled = granted;
+    if (status.platform !== 'macOS') { $('authHint').textContent = '在系统设置中允许 VoiceDeck 获得输入控制权限。'; }
+    if (!state.targets.length || !$('current').children.length) { state.targets = status.targets; renderTargets(); }
+    else { state.targets = status.targets; }
+    const incoming = status.shortcuts || [];
+    if (JSON.stringify(incoming) !== JSON.stringify(shortcuts)) { shortcuts = incoming; renderShortcuts(); }
+    if (!$('qr').src || $('qr').dataset.loaded !== '1') {
+      $('qr').src = '/api/qr';
+      $('qr-ip').src = '/api/qr?type=ip';
+      $('url').textContent = status.lanURL || '未找到局域网地址，请确认 Wi-Fi 已连接。';
+      $('ipUrl').textContent = status.ipURL || '未找到局域网地址';
+    }
+    const seen = status.phoneLastSeen * 1000;
+    const phoneState = $('phoneState');
+    if (!seen) { phoneState.textContent = '等待手机连接…'; phoneState.className = ''; }
+    else if (Date.now() - seen < 15000) { phoneState.textContent = '手机已连接'; phoneState.className = 'ok'; }
+    else { phoneState.textContent = `手机最后连接于 ${Math.round((Date.now() - seen) / 60000)} 分钟前`; phoneState.className = ''; }
+  } catch { $('conn').textContent = '服务未响应'; }
+}
+
+function renderTargets() {
+  const box = $('current'); box.innerHTML = '';
+  state.targets.forEach((target, index) => {
+    const row = document.createElement('div'); row.className = 'target-row';
+    row.innerHTML = `<img src="/api/icon?id=${encodeURIComponent(target.id)}&t=${Date.now()}" alt="">
+      <b>${esc(target.name)}</b>${target.available === false ? '<span class="missing">未安装</span>' : ''}
+      <button class="btn ghost" data-act="up" ${index === 0 ? 'disabled' : ''}>↑</button>
+      <button class="btn ghost" data-act="down" ${index === state.targets.length - 1 ? 'disabled' : ''}>↓</button>
+      <button class="btn ghost" data-act="icon">换图标</button>
+      <button class="btn ghost icon-btn danger" data-act="remove" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
+    row.addEventListener('click', async event => {
+      const button = event.target.closest('button[data-act]');
+      const act = button?.dataset.act; if (!act) return;
+      if (act === 'remove') { if (!armConfirm(button)) return; state.targets.splice(index, 1); await save(); }
+      if (act === 'up' && index > 0) { [state.targets[index - 1], state.targets[index]] = [state.targets[index], state.targets[index - 1]]; await save(); }
+      if (act === 'down' && index < state.targets.length - 1) { [state.targets[index + 1], state.targets[index]] = [state.targets[index], state.targets[index + 1]]; await save(); }
+      if (act === 'icon') { iconTargetId = target.id; $('iconFile').click(); }
+    });
+    box.append(row);
+  });
+}
+
+// 垃圾桶图标（24×24 线条风，与手机页控件图标同族）。
+const TRASH_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V5a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 5v2"/><path d="M6.5 7l.8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12"/><path d="M10 11v6M14 11v6"/></svg>';
+
+// 删除按钮二次确认：第一次点进入"确认移除"态，再点才真删；3.5 秒不动自动还原。
+function armConfirm(button) {
+  if (button.classList.contains('armed')) return true;
+  document.querySelectorAll('.icon-btn.armed').forEach(other => other.classList.remove('armed'));
+  button.classList.add('armed');
+  setTimeout(() => button.classList.remove('armed'), 3500);
+  return false;
+}
+
+async function save() {
+  $('saveState').textContent = '保存中…';
+  try {
+    await post('/api/targets', state.targets.map(t => ({id: t.id, name: t.name, bundleID: t.bundleID ?? null, path: t.path ?? null})));
+    $('saveState').textContent = '已保存到本机';
+    await refresh(); renderTargets();
+    setTimeout(() => { $('saveState').textContent = ''; }, 2500);
+  } catch (error) { $('saveState').textContent = error.message; }
+}
+
+let searchTimer = 0;
+$('search').addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(async () => {
+    const query = $('search').value.trim();
+    if (!query) { $('results').classList.remove('open'); $('results').innerHTML = ''; return; }
+    const data = await fetch('/api/apps?q=' + encodeURIComponent(query)).then(r => r.json()).catch(() => ({apps: []}));
+    const box = $('results'); box.innerHTML = ''; box.classList.add('open');
+    (data.apps || []).forEach(app => {
+      const row = document.createElement('div'); row.className = 'app-row';
+      row.innerHTML = `<img src="/api/app-icon?path=${encodeURIComponent(app.path)}" alt="">
+        <span class="meta"><b>${esc(app.name)}</b><small>${esc(app.path)}</small></span>
+        <button class="btn">添加</button>`;
+      row.querySelector('button').onclick = () => {
+        state.targets.push({id: '', name: app.name, bundleID: null, path: app.path, available: true});
+        renderTargets(); save();
+      };
+      box.append(row);
+    });
+    if (!(data.apps || []).length) box.innerHTML = '<div class="app-row"><span class="meta">没有匹配的应用</span></div>';
+  }, 250);
+});
+
+$('iconFile').addEventListener('change', () => {
+  const file = $('iconFile').files[0]; if (!file || !iconTargetId) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const data = String(reader.result).split(',')[1];
+    try { await post('/api/target-icon', {id: iconTargetId, data}); renderTargets(); } catch (error) { alert(error.message); }
+  };
+  reader.readAsDataURL(file);
+  $('iconFile').value = '';
+});
+
+$('openSettings').onclick = () => post('/api/open-accessibility');
+
+/* ---------- 快捷键设置：键盘录制组合键，保存到 /api/shortcuts ---------- */
+
+const MOD_NAMES = { command: '⌘', shift: '⇧', option: '⌥', control: '⌃' };
+// 事件 code → 存储主键名；服务端再翻译为虚拟键码。限定安全集合，避免误录系统级按键。
+const CODE_MAP = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+  Enter: 'return', Backspace: 'delete', Escape: 'escape', Space: 'space', Tab: 'tab',
+  F1: 'f1', F2: 'f2', F3: 'f3', F4: 'f4', F5: 'f5', F6: 'f6',
+  F7: 'f7', F8: 'f8', F9: 'f9', F10: 'f10', F11: 'f11', F12: 'f12' };
+let shortcuts = [];
+let recording = false;
+let pendingShortcut = null; // { modifiers: [], keycode: number, display: string }
+
+const CODE_TO_KEYCODE = { up: 126, down: 125, left: 123, right: 124, return: 36, delete: 51,
+  escape: 53, space: 49, tab: 48, f1: 122, f2: 120, f3: 99, f4: 118, f5: 96, f6: 97,
+  f7: 98, f8: 100, f9: 101, f10: 109, f11: 103, f12: 111 };
+
+// 组合键展示文案：字母/数字直接显示，命名键（方向键、回车等）用符号。
+function comboDisplay(modifiers, keyName) {
+  const mods = (modifiers || []).map(name => MOD_NAMES[name] || '').join('');
+  const named = { up: '↑', down: '↓', left: '←', right: '→', return: '⏎', delete: '⌫', escape: 'esc', space: '空格', tab: '⇥' };
+  const key = named[keyName] ?? keyName.toUpperCase();
+  return mods + key;
+}
+
+$('scRecord').onclick = () => {
+  recording = true; pendingShortcut = null;
+  $('scRecord').textContent = '按下按键…';
+  $('scRecord').classList.add('recording');
+};
+
+document.addEventListener('keydown', event => {
+  if (!recording) return;
+  event.preventDefault();
+  event.stopPropagation();
+  // Esc 且未带修饰键 = 取消录制。
+  if (event.key === 'Escape' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+    recording = false; pendingShortcut = null; rerecordIndex = -1;
+    $('scRecord').textContent = '录制按键';
+    $('scRecord').classList.remove('recording');
+    return;
+  }
+  const modifiers = [];
+  if (event.metaKey) modifiers.push('command');
+  if (event.shiftKey) modifiers.push('shift');
+  if (event.altKey) modifiers.push('option');
+  if (event.ctrlKey) modifiers.push('control');
+  const named = CODE_MAP[event.code];
+  const letter = event.code.startsWith('Key') ? event.code.slice(3).toLowerCase() : null;
+  const digit = event.code.startsWith('Digit') ? event.code.slice(5) : null;
+  const keyName = named || letter || digit;
+  if (!keyName) return; // 忽略纯修饰键按下
+  let keycode;
+  if (CODE_TO_KEYCODE[keyName] !== undefined) {
+    keycode = CODE_TO_KEYCODE[keyName];
+  } else if (letter) {
+    keycode = event.code.charCodeAt(3) - 65 + 0; // KeyA=0…KeyZ=12 与 macOS kVK_ANSI_A=0 一致
+  } else if (digit) {
+    const digitCodes = { 0: 29, 1: 18, 2: 19, 3: 20, 4: 21, 5: 23, 6: 22, 7: 26, 8: 28, 9: 25 };
+    keycode = digitCodes[digit];
+  }
+  if (keycode === undefined) return;
+  // 重录模式：直接写入目标行；否则挂到"添加"行等待确认。
+  if (rerecordIndex >= 0) {
+    shortcuts[rerecordIndex].modifiers = modifiers;
+    shortcuts[rerecordIndex].keycode = keycode;
+    rerecordIndex = -1;
+    recording = false;
+    $('scRecord').textContent = '录制按键';
+    $('scRecord').classList.remove('recording');
+    saveShortcuts();
+  } else {
+    pendingShortcut = { modifiers, keycode, display: comboDisplay(modifiers, keyName) };
+    recording = false;
+    $('scRecord').textContent = `已录制：${pendingShortcut.display}`;
+    $('scRecord').classList.remove('recording');
+    $('scAdd').disabled = false;
+  }
+}, true);
+
+$('scAdd').onclick = async () => {
+  const label = $('scLabel').value.trim();
+  if (!label || !pendingShortcut) { alert('请先填写按钮名称并录制按键。'); return; }
+  shortcuts.push({ id: '', label, modifiers: pendingShortcut.modifiers, keycode: pendingShortcut.keycode });
+  $('scLabel').value = '';
+  pendingShortcut = null;
+  $('scRecord').textContent = '录制按键';
+  $('scAdd').disabled = true;
+  await saveShortcuts();
+};
+
+async function saveShortcuts() {
+  $('saveState').textContent = '保存中…';
+  try {
+    await post('/api/shortcuts', shortcuts.map(s => ({ id: s.id, label: s.label, modifiers: s.modifiers, keycode: s.keycode })));
+    $('saveState').textContent = '已保存到本机';
+    await refresh();
+    setTimeout(() => { $('saveState').textContent = ''; }, 2500);
+  } catch (error) { $('saveState').textContent = error.message; }
+}
+
+function renderShortcuts() {
+  const box = $('scList'); box.innerHTML = '';
+  shortcuts.forEach((shortcut, index) => {
+    const mods = (shortcut.modifiers || []).map(name => MOD_NAMES[name] || '').join('');
+    const row = document.createElement('div'); row.className = 'target-row';
+    row.innerHTML = `<b class="sc-editable" data-act="rename" title="点击修改按钮名称" style="flex:0 0 auto;min-width:64px">${esc(shortcut.label)}</b>
+      <span class="hint mono" data-act="rerecord" title="点击重新录制组合键">${esc(mods)}<span class="keycap">${esc(scKeyName(shortcut.keycode))}</span></span>
+      <button class="btn ghost" data-act="up" ${index === 0 ? 'disabled' : ''}>↑</button>
+      <button class="btn ghost" data-act="down" ${index === shortcuts.length - 1 ? 'disabled' : ''}>↓</button>
+      <button class="btn ghost icon-btn danger" data-act="remove" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
+    row.addEventListener('click', async event => {
+      const act = event.target.closest('[data-act]')?.dataset?.act;
+      if (!act) return;
+      if (act === 'remove') { if (!armConfirm(event.target.closest('button[data-act]'))) return; shortcuts.splice(index, 1); await saveShortcuts(); }
+      if (act === 'up' && index > 0) { [shortcuts[index - 1], shortcuts[index]] = [shortcuts[index], shortcuts[index - 1]]; await saveShortcuts(); }
+      if (act === 'down' && index < shortcuts.length - 1) { [shortcuts[index + 1], shortcuts[index]] = [shortcuts[index], shortcuts[index + 1]]; await saveShortcuts(); }
+      if (act === 'rename') renameShortcut(index);
+      if (act === 'rerecord') rerecordShortcut(index);
+    });
+    box.append(row);
+  });
+}
+
+// 改名：行内替换为输入框，确认或失焦保存，Esc 取消。
+function renameShortcut(index) {
+  if (document.querySelector('.sc-rename-input')) return;
+  const box = $('scList');
+  const row = box.children[index];
+  const labelEl = row.querySelector('.sc-editable');
+  const input = document.createElement('input');
+  input.className = 'sc-rename-input';
+  input.type = 'text';
+  input.maxLength = 6;
+  input.value = shortcuts[index].label;
+  input.style.cssText = 'flex:0 0 auto;min-width:64px;width:96px;padding:4px 8px;border:1px solid var(--accent);border-radius:8px;font:inherit;font-size:13px';
+  labelEl.replaceWith(input);
+  input.focus();
+  input.select();
+  const commit = async () => {
+    const value = input.value.trim();
+    if (value && value !== shortcuts[index].label) {
+      shortcuts[index].label = value;
+      await saveShortcuts();
+    } else {
+      renderShortcuts();
+    }
+  };
+  input.addEventListener('keydown', event => {
+    event.stopPropagation();
+    if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
+    if (event.key === 'Escape') { input.value = shortcuts[index].label; input.blur(); }
+  });
+  input.addEventListener('blur', commit);
+}
+
+// 重录组合键：进入录制态，下一个按键写入这一行，Esc 取消。
+let rerecordIndex = -1;
+function rerecordShortcut(index) {
+  recording = true;
+  rerecordIndex = index;
+  $('scRecord').textContent = `为「${shortcuts[index].label}」按新按键…`;
+  $('scRecord').classList.add('recording');
+}
+
+function scKeyName(keycode) {
+  const byCode = Object.fromEntries(Object.entries(CODE_TO_KEYCODE).map(([name, code]) => [code, name]));
+  if (byCode[keycode] !== undefined) {
+    const name = byCode[keycode];
+    return { up: '↑', down: '↓', left: '←', right: '→', return: '⏎', delete: '⌫', escape: 'esc', space: '空格', tab: '⇥' }[name] || name.toUpperCase();
+  }
+  if (keycode <= 12) return String.fromCharCode(65 + keycode); // kVK_ANSI_A=0
+  const digitCodes = { 29: '0', 18: '1', 19: '2', 20: '3', 21: '4', 23: '5', 22: '6', 26: '7', 28: '8', 25: '9' };
+  return digitCodes[keycode] || `键码${keycode}`;
+}
+
+$('qr').onload = () => { $('qr').dataset.loaded = '1'; };
+$('qr').onerror = () => { $('qr').classList.add('error'); };
+$('qr-ip').onerror = () => { $('qr-ip').classList.add('error'); };
+refresh(); setInterval(refresh, 3000);
+</script>
+</body>
+</html>
