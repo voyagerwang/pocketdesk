@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   [INPUT]: 依赖 /api/status、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility。
-  [OUTPUT]: 电脑端控制台：授权引导、局域网与 Tailscale 跨网扫码连接、目标应用搜索/排序/删除/自定义图标管理、快捷键管理（键盘录制兼容 code/key 并自动命名，支持重录/排序/删除）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
+  [OUTPUT]: 电脑端控制台：授权引导、局域网与 Tailscale 跨网扫码连接、目标应用搜索/排序/删除/自定义图标管理、快捷键管理（键盘录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"，拦截 isComposing 与纯修饰键，支持重录/排序/删除）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
   [POS]: 电脑端唯一页面入口；目标顺序与快捷键都保存在 Mac 本机（App Support），手机端只渲染。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -321,39 +321,46 @@ $('iconFile').addEventListener('change', () => {
 
 $('openSettings').onclick = () => post('/api/open-accessibility');
 
-/* ---------- 快捷键设置：键盘录制组合键，保存到 /api/shortcuts ---------- */
+/* ---------- 快捷键设置：键盘录制语义串（"Cmd+Shift+Z"/"Return"），保存到 /api/shortcuts ---------- */
 
 const MOD_NAMES = { command: '⌘', shift: '⇧', option: '⌥', control: '⌃' };
-// 事件 code → 存储主键名；服务端再翻译为虚拟键码。限定安全集合，避免误录系统级按键。
-const CODE_MAP = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
-  Enter: 'return', Backspace: 'delete', Escape: 'escape', Space: 'space', Tab: 'tab',
-  F1: 'f1', F2: 'f2', F3: 'f3', F4: 'f4', F5: 'f5', F6: 'f6',
-  F7: 'f7', F8: 'f8', F9: 'f9', F10: 'f10', F11: 'f11', F12: 'f12' };
-// macOS ANSI 虚拟键码并非字母顺序；录制与反向展示共用此表。
-const LETTER_KEYCODES = { a: 0, s: 1, d: 2, f: 3, h: 4, g: 5, z: 6, x: 7, c: 8,
-  v: 9, b: 11, q: 12, w: 13, e: 14, r: 15, y: 16, t: 17, o: 31, u: 32,
-  i: 34, p: 35, l: 37, j: 38, k: 40, n: 45, m: 46 };
 const COMMON_SHORTCUT_LABELS = { '⌘C': '复制', '⌘V': '粘贴', '⌘X': '剪切', '⌘Z': '撤销',
   '⌘⇧Z': '重做', '⌘A': '全选', '⌘S': '保存', '⌘F': '查找', '⌘N': '新建',
   '⌘O': '打开', '⌘P': '打印', '⌘W': '关闭', '⌘Q': '退出', '⌘T': '新建标签页' };
-function automaticShortcutLabel(modifiers, keyName) {
-  const display = comboDisplay(modifiers, keyName);
-  return COMMON_SHORTCUT_LABELS[display] || display;
-}
 let shortcuts = [];
 let recording = false;
-let pendingShortcut = null; // { modifiers: [], keycode: number, label: string }
+let pendingShortcut = null; // { hotkey: string, label: string }
 
-const CODE_TO_KEYCODE = { up: 126, down: 125, left: 123, right: 124, return: 36, delete: 51,
-  escape: 53, space: 49, tab: 48, f1: 122, f2: 120, f3: 99, f4: 118, f5: 96, f6: 97,
-  f7: 98, f8: 100, f9: 101, f10: 109, f11: 103, f12: 111 };
+// 事件 → 语义串主键 token（与 Swift ShortcutKeys.keyMap 的键名对齐）。物理键位优先，code 缺失时回退 key。
+const KEY_TOKENS = { ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+  Enter: 'Return', NumpadEnter: 'Return', Backspace: 'Delete', Escape: 'Escape',
+  Space: 'Space', Tab: 'Tab' };
 
-// 组合键展示文案：字母/数字直接显示，命名键（方向键、回车等）用符号。
-function comboDisplay(modifiers, keyName) {
-  const mods = (modifiers || []).map(name => MOD_NAMES[name] || '').join('');
-  const named = { up: '↑', down: '↓', left: '←', right: '→', return: '⏎', delete: '⌫', escape: 'esc', space: '空格', tab: '⇥' };
-  const key = named[keyName] ?? keyName.toUpperCase();
-  return mods + key;
+function hotkeyToken(event) {
+  const code = event.code || '';
+  const key = event.key || '';
+  const named = KEY_TOKENS[code] || KEY_TOKENS[key] || (key === ' ' ? 'Space' : null);
+  const letter = /^Key([A-Z])$/.exec(code)?.[1] || (/^[a-z]$/i.test(key) ? key.toUpperCase() : null);
+  const digit = /^Digit([0-9])$/.exec(code)?.[1] || (/^[0-9]$/.test(key) ? key : null);
+  const fn = /^F([1-9]|1[0-2])$/.exec(key)?.[0];
+  return named || letter || digit || fn || null;
+}
+
+// 语义串展示：最后一个 token 是主键，其余是修饰键（服务端下发的是规范序串）。
+function hotkeyDisplay(hotkey) {
+  const named = { up: '↑', down: '↓', left: '←', right: '→', return: '⏎', delete: '⌫',
+    escape: 'esc', space: '空格', tab: '⇥' };
+  const mods = { cmd: '⌘', shift: '⇧', opt: '⌥', ctrl: '⌃' };
+  const parts = (hotkey || '').split('+').map(part => part.trim());
+  const shown = parts.map((part, index) => {
+    const token = part.toLowerCase();
+    return index < parts.length - 1 ? (mods[token] || part) : (named[token] || part.toUpperCase());
+  });
+  return shown.join('');
+}
+function automaticShortcutLabel(hotkey) {
+  const display = hotkeyDisplay(hotkey);
+  return COMMON_SHORTCUT_LABELS[display] || display;
 }
 
 $('scRecord').onclick = () => {
@@ -367,6 +374,8 @@ document.addEventListener('keydown', event => {
   if (!recording) return;
   event.preventDefault();
   event.stopPropagation();
+  // 输入法合成中的 keydown 不是真实按键（回车常被 IME 吞掉或变形），一律忽略。
+  if (event.isComposing || event.keyCode === 229) return;
   // Esc 且未带修饰键 = 取消录制。
   if (event.key === 'Escape' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
     recording = false; pendingShortcut = null; rerecordIndex = -1;
@@ -374,42 +383,25 @@ document.addEventListener('keydown', event => {
     $('scRecord').classList.remove('recording');
     return;
   }
-  const modifiers = [];
-  if (event.metaKey) modifiers.push('command');
-  if (event.shiftKey) modifiers.push('shift');
-  if (event.altKey) modifiers.push('option');
-  if (event.ctrlKey) modifiers.push('control');
-  // 优先使用物理键位；部分输入环境缺少 code 时，回退到可识别的 key。
-  const code = event.code || '';
-  const key = event.key || '';
-  const named = CODE_MAP[code] || CODE_MAP[key] || (key === ' ' ? 'space' : null);
-  const letter = /^Key[A-Z]$/i.test(code) ? code.slice(3).toLowerCase()
-    : /^[a-z]$/i.test(key) ? key.toLowerCase() : null;
-  const digit = /^Digit[0-9]$/.test(code) ? code.slice(5) : /^[0-9]$/.test(key) ? key : null;
-  const keyName = named || letter || digit;
-  if (!keyName) return; // 忽略纯修饰键按下
-  let keycode;
-  if (CODE_TO_KEYCODE[keyName] !== undefined) {
-    keycode = CODE_TO_KEYCODE[keyName];
-  } else if (letter) {
-    keycode = LETTER_KEYCODES[letter];
-  } else if (digit) {
-    const digitCodes = { 0: 29, 1: 18, 2: 19, 3: 20, 4: 21, 5: 23, 6: 22, 7: 26, 8: 28, 9: 25 };
-    keycode = digitCodes[digit];
-  }
-  if (keycode === undefined) return;
+  const main = hotkeyToken(event);
+  if (!main) return; // 忽略纯修饰键与不可识别键
+  const mods = [];
+  if (event.metaKey) mods.push('Cmd');
+  if (event.shiftKey) mods.push('Shift');
+  if (event.altKey) mods.push('Opt');
+  if (event.ctrlKey) mods.push('Ctrl');
+  const hotkey = [...mods, main].join('+');
   // 重录模式：直接写入目标行；否则挂到"添加"行等待确认。
   if (rerecordIndex >= 0) {
-    shortcuts[rerecordIndex].modifiers = modifiers;
-    shortcuts[rerecordIndex].keycode = keycode;
-    shortcuts[rerecordIndex].label = automaticShortcutLabel(modifiers, keyName);
+    shortcuts[rerecordIndex].hotkey = hotkey;
+    shortcuts[rerecordIndex].label = automaticShortcutLabel(hotkey);
     rerecordIndex = -1;
     recording = false;
     $('scRecord').textContent = '录制按键';
     $('scRecord').classList.remove('recording');
     saveShortcuts();
   } else {
-    pendingShortcut = { modifiers, keycode, label: automaticShortcutLabel(modifiers, keyName) };
+    pendingShortcut = { hotkey, label: automaticShortcutLabel(hotkey) };
     recording = false;
     $('scRecord').textContent = `已录制：${pendingShortcut.label}`;
     $('scRecord').classList.remove('recording');
@@ -419,8 +411,7 @@ document.addEventListener('keydown', event => {
 
 $('scAdd').onclick = async () => {
   if (!pendingShortcut) return;
-  const label = pendingShortcut.label;
-  shortcuts.push({ id: '', label, modifiers: pendingShortcut.modifiers, keycode: pendingShortcut.keycode });
+  shortcuts.push({ id: '', label: pendingShortcut.label, hotkey: pendingShortcut.hotkey });
   pendingShortcut = null;
   $('scRecord').textContent = '录制按键';
   $('scAdd').disabled = true;
@@ -430,7 +421,7 @@ $('scAdd').onclick = async () => {
 async function saveShortcuts() {
   $('saveState').textContent = '保存中…';
   try {
-    await post('/api/shortcuts', shortcuts.map(s => ({ id: s.id, label: s.label, modifiers: s.modifiers, keycode: s.keycode })));
+    await post('/api/shortcuts', shortcuts.map(s => ({ id: s.id, label: s.label, hotkey: s.hotkey })));
     $('saveState').textContent = '已保存到本机';
     await refresh();
     setTimeout(() => { $('saveState').textContent = ''; }, 2500);
@@ -440,10 +431,9 @@ async function saveShortcuts() {
 function renderShortcuts() {
   const box = $('scList'); box.innerHTML = '';
   shortcuts.forEach((shortcut, index) => {
-    const mods = (shortcut.modifiers || []).map(name => MOD_NAMES[name] || '').join('');
     const row = document.createElement('div'); row.className = 'target-row';
     row.innerHTML = `<b class="sc-editable" data-act="rerecord" title="点击重新录制按键，名称自动识别" style="flex:0 0 auto;min-width:64px">${esc(shortcut.label)}</b>
-      <span class="hint mono" data-act="rerecord" title="点击重新录制组合键">${esc(mods)}<span class="keycap">${esc(scKeyName(shortcut.keycode))}</span></span>
+      <span class="hint mono" data-act="rerecord" title="点击重新录制组合键">${esc(hotkeyDisplay(shortcut.hotkey))}</span>
       <button class="btn ghost" data-act="up" ${index === 0 ? 'disabled' : ''}>↑</button>
       <button class="btn ghost" data-act="down" ${index === shortcuts.length - 1 ? 'disabled' : ''}>↓</button>
       <button class="btn ghost icon-btn danger" data-act="remove" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
@@ -468,18 +458,6 @@ function rerecordShortcut(index) {
   rerecordIndex = index;
   $('scRecord').textContent = `为「${shortcuts[index].label}」按新按键…`;
   $('scRecord').classList.add('recording');
-}
-
-function scKeyName(keycode) {
-  const byCode = Object.fromEntries(Object.entries(CODE_TO_KEYCODE).map(([name, code]) => [code, name]));
-  if (byCode[keycode] !== undefined) {
-    const name = byCode[keycode];
-    return { up: '↑', down: '↓', left: '←', right: '→', return: '⏎', delete: '⌫', escape: 'esc', space: '空格', tab: '⇥' }[name] || name.toUpperCase();
-  }
-  const letter = Object.keys(LETTER_KEYCODES).find(name => LETTER_KEYCODES[name] === keycode);
-  if (letter) return letter.toUpperCase();
-  const digitCodes = { 29: '0', 18: '1', 19: '2', 20: '3', 21: '4', 23: '5', 22: '6', 26: '7', 28: '8', 25: '9' };
-  return digitCodes[keycode] || `键码${keycode}`;
 }
 
 $('qr').onload = () => { $('qr').dataset.loaded = '1'; };

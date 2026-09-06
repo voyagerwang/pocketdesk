@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 Foundation 的 FileManager/Codable 与 AppKit 的 NSWorkspace；消费 Models 的 TargetConfig/ShortcutConfig。
- * [OUTPUT]: 对外提供 TargetStore（targets.json/shortcuts.json 读写、目标解析、appURL 定位、自定义图标路径与孤儿图标清理）。
+ * [INPUT]: 依赖 Foundation 的 FileManager/Codable 与 AppKit 的 NSWorkspace；消费 Models 的 TargetConfig/ShortcutConfig/ShortcutKeys。
+ * [OUTPUT]: 对外提供 TargetStore（targets.json/shortcuts.json 读写、目标解析、appURL 定位、自定义图标路径与孤儿图标清理、旧 shortcuts.json 到 hotkey 语义串的迁移）。
  * [POS]: Sources 的配置持久化层；Server 把它暴露为 /api/targets 等端点，InputExecutor 用 resolve/appURL 定位应用。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -63,17 +63,30 @@ final class TargetStore {
     // MARK: 快捷键配置（与目标应用同一支持目录，独立文件）
     static let shortcutFile = supportDirectory.appendingPathComponent("shortcuts.json")
     static let defaultShortcuts: [ShortcutConfig] = [
-        .init(id: "undo", label: "撤销", modifiers: ["command"], keycode: 7),   // Cmd+Z
-        .init(id: "copy", label: "复制", modifiers: ["command"], keycode: 8),   // Cmd+C
-        .init(id: "paste", label: "粘贴", modifiers: ["command"], keycode: 9),  // Cmd+V
+        .init(id: "undo", label: "撤销", hotkey: "Cmd+Z"),
+        .init(id: "copy", label: "复制", hotkey: "Cmd+C"),
+        .init(id: "paste", label: "粘贴", hotkey: "Cmd+V"),
     ]
 
     private(set) var shortcuts: [ShortcutConfig] = TargetStore.defaultShortcuts
 
     func loadShortcuts() {
-        if let data = try? Data(contentsOf: TargetStore.shortcutFile),
-           let decoded = try? JSONDecoder().decode([ShortcutConfig].self, from: data) {
-            shortcuts = decoded
+        guard let data = try? Data(contentsOf: TargetStore.shortcutFile) else { return }
+        if let decoded = try? JSONDecoder().decode([ShortcutConfig].self, from: data) {
+            shortcuts = ShortcutConfig.dedupeIds(decoded)
+            return
+        }
+        // 旧格式（modifiers 数组 + keycode 数字）：翻译回语义串、修掉历史重复 id，回写完成迁移。
+        if let legacy = try? JSONDecoder().decode([LegacyShortcut].self, from: data),
+           !legacy.isEmpty {
+            let migrated = legacy.compactMap { entry in
+                ShortcutKeys.legacyHotkey(modifiers: entry.modifiers, keycode: entry.keycode)
+                    .map { ShortcutConfig(id: entry.id, label: entry.label, hotkey: $0) }
+            }
+            if !migrated.isEmpty {
+                shortcuts = ShortcutConfig.dedupeIds(migrated)
+                saveShortcuts(shortcuts)
+            }
         }
     }
 
@@ -104,4 +117,12 @@ final class TargetStore {
         try? FileManager.default.createDirectory(at: TargetStore.supportDirectory, withIntermediateDirectories: true)
         try? name.write(to: TargetStore.themeFile, atomically: true, encoding: .utf8)
     }
+}
+
+// 旧 shortcuts.json 的中间表示：modifiers 数组 + keycode 数字，仅供一次性迁移读取。
+private struct LegacyShortcut: Decodable {
+    let id: String
+    let label: String
+    let modifiers: [String]
+    let keycode: Int
 }
