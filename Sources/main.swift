@@ -189,8 +189,9 @@ final class Server {
                 case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
                 }
             }
-        } else if method == "GET" && ["/", "/index.html", "/app.js", "/style.css"].contains(path) {
-            serveFile(path == "/" ? "index.html" : String(path.dropFirst()), connection: connection)
+        } else if method == "GET" && ["/", "/index.html", "/app.js", "/style.css"].contains(path.components(separatedBy: "?").first ?? path) {
+            let resourcePath = path.components(separatedBy: "?").first ?? path
+            serveFile(resourcePath == "/" ? "index.html" : String(resourcePath.dropFirst()), connection: connection)
         } else {
             respond(connection, status: 404, json: ["error": "未找到资源。"])
         }
