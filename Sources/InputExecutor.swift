@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard 与 CoreGraphics 的 CGEvent；消费 Models 的 SendCommand/ShortcutConfig/InputError/ShortcutError/ShortcutKeys、TargetStore 的目标解析。
- * [OUTPUT]: 对外提供 InputExecutor（图片预上传暂存、应用激活、图文发送的 activate → 粘贴 → Unicode → Return 注入序列、快捷键组合注入）。
+ * [OUTPUT]: 对外提供 InputExecutor（图片预上传暂存、应用激活、图文发送的 activate → Unicode → 粘贴图片 → Return 注入序列、快捷键组合注入）。
  * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -62,7 +62,7 @@ final class InputExecutor {
         }
     }
 
-    // 统一执行路径：imageData 非空时先写剪贴板，注入时"粘贴图片 → 文本 → Return"。
+    // 统一执行路径：先输入文字，再粘贴可选图片，最后提交。
     private func dispatchSend(_ command: SendCommand, imageData: Data?, completion: @escaping (Result<Void, InputError>) -> Void) {
         guard AXIsProcessTrusted() else {
             completion(.failure(.message("尚未授予“辅助功能”权限。请在控制台完成授权。"))); return
@@ -85,19 +85,20 @@ final class InputExecutor {
         }
     }
 
-    // 注入序列：有图先写剪贴板再 Cmd+V，等应用把图挂进输入框（ChatGPT 生成缩略图可近 1s），
-    // 之后有文注入文本；无论有无文字最后都按 Return——纯图片也要直接发出去。
+    // 先在仍持有焦点的编辑器中输入文字，避免图片挂载期间的焦点变化吞掉文字。
+    // 等文字落入编辑器后再粘贴图片；等待缩略图挂载后统一按 Return。
     // 图片发送后留在剪贴板上（与手动复制粘贴语义一致，不额外清空）。
     private func performPaste(imageData: Data?, text: String) {
+        if !text.isEmpty {
+            postUnicode(text)
+            usleep(200_000) // 让编辑器处理文字，再开始附件粘贴或提交
+        }
         if let imageData, let image = NSImage(data: imageData) {
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.writeObjects([image])
             postKey(9, flags: .maskCommand) // Cmd+V
             usleep(1_000_000) // 等目标应用完成粘贴读取与缩略图挂载
-        }
-        if !text.isEmpty {
-            postUnicode(text)
         }
         postKey(36) // Return：图文一起发，或纯图直发
     }
@@ -129,6 +130,9 @@ final class InputExecutor {
             guard let base = buffer.baseAddress,
                   let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { return }
+            // Unicode 输入不继承当前系统修饰键，防止被解释为快捷键。
+            down.flags = []
+            up.flags = []
             down.keyboardSetUnicodeString(stringLength: length, unicodeString: base)
             up.keyboardSetUnicodeString(stringLength: length, unicodeString: base)
             down.post(tap: .cghidEventTap)

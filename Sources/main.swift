@@ -34,6 +34,8 @@ let server = Server(port: selectedPort, webRoot: root.appendingPathComponent("We
 let promptOptions = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
 _ = AXIsProcessTrustedWithOptions(promptOptions)
 try server.start()
+// 启动即生成配对 token（懒加载在此刻触发落盘），QR 与写请求校验都依赖它。
+_ = Auth.token
 let pointerExecutor = PointerExecutor()
 let wsPort: UInt16 = 46388
 let wsServer = WSServer(port: wsPort, pointer: pointerExecutor)

@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   [INPUT]: 依赖 /api/status、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility。
-  [OUTPUT]: 电脑端控制台：授权引导、手机扫码连接、目标应用搜索/排序/删除/自定义图标管理、快捷键管理（键盘录制组合键，支持改名/重录/排序/删除）。
+  [OUTPUT]: 电脑端控制台：授权引导、手机扫码连接、目标应用搜索/排序/删除/自定义图标管理、快捷键管理（键盘录制后自动命名，支持重录/排序/删除）。
   [POS]: 电脑端唯一页面入口；目标顺序与快捷键都保存在 Mac 本机（App Support），手机端只渲染。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -111,12 +111,10 @@ button{font:inherit;cursor:pointer}
     <h2><span class="step">4</span>快捷键</h2>
     <p class="sub">手机输入框下方会显示这些按钮，点一下就把对应按键发给 Mac 当前前台应用；可以只按一个键，也可以带修饰键。最多 12 个。</p>
     <div class="row" style="margin-bottom:12px">
-      <input id="scLabel" type="text" placeholder="按钮名称，如：撤销" maxlength="6" autocomplete="off"
-             style="flex:0 0 160px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font:inherit">
       <button id="scRecord" class="btn" style="flex:1">录制按键</button>
       <button id="scAdd" class="btn primary" disabled>添加</button>
     </div>
-    <p class="hint" style="margin:0 0 12px">点「录制按键」后直接按键盘（如 ⌘Z 或单独一个 Z）；主键支持字母/数字和方向键、F1-F12、回车等。</p>
+    <p class="hint" style="margin:0 0 12px">点「录制按键」后直接按键盘（如 ⌘Z 或单独一个 Z）；自动显示「复制」「撤销」等常用名称，其他按键显示 F1、⌘K 等简写，无需填写名称。Esc 取消录制。</p>
     <div id="scList"></div>
   </section>
 </main>
@@ -252,9 +250,20 @@ const CODE_MAP = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRig
   Enter: 'return', Backspace: 'delete', Escape: 'escape', Space: 'space', Tab: 'tab',
   F1: 'f1', F2: 'f2', F3: 'f3', F4: 'f4', F5: 'f5', F6: 'f6',
   F7: 'f7', F8: 'f8', F9: 'f9', F10: 'f10', F11: 'f11', F12: 'f12' };
+// macOS ANSI 虚拟键码并非字母顺序；录制与反向展示共用此表。
+const LETTER_KEYCODES = { a: 0, s: 1, d: 2, f: 3, h: 4, g: 5, z: 6, x: 7, c: 8,
+  v: 9, b: 11, q: 12, w: 13, e: 14, r: 15, y: 16, t: 17, o: 31, u: 32,
+  i: 34, p: 35, l: 37, j: 38, k: 40, n: 45, m: 46 };
+const COMMON_SHORTCUT_LABELS = { '⌘C': '复制', '⌘V': '粘贴', '⌘X': '剪切', '⌘Z': '撤销',
+  '⌘⇧Z': '重做', '⌘A': '全选', '⌘S': '保存', '⌘F': '查找', '⌘N': '新建',
+  '⌘O': '打开', '⌘P': '打印', '⌘W': '关闭', '⌘Q': '退出', '⌘T': '新建标签页' };
+function automaticShortcutLabel(modifiers, keyName) {
+  const display = comboDisplay(modifiers, keyName);
+  return COMMON_SHORTCUT_LABELS[display] || display;
+}
 let shortcuts = [];
 let recording = false;
-let pendingShortcut = null; // { modifiers: [], keycode: number, display: string }
+let pendingShortcut = null; // { modifiers: [], keycode: number, label: string }
 
 const CODE_TO_KEYCODE = { up: 126, down: 125, left: 123, right: 124, return: 36, delete: 51,
   escape: 53, space: 49, tab: 48, f1: 122, f2: 120, f3: 99, f4: 118, f5: 96, f6: 97,
@@ -269,7 +278,8 @@ function comboDisplay(modifiers, keyName) {
 }
 
 $('scRecord').onclick = () => {
-  recording = true; pendingShortcut = null;
+  recording = true; pendingShortcut = null; rerecordIndex = -1;
+  $('scAdd').disabled = true;
   $('scRecord').textContent = '按下按键…';
   $('scRecord').classList.add('recording');
 };
@@ -299,7 +309,7 @@ document.addEventListener('keydown', event => {
   if (CODE_TO_KEYCODE[keyName] !== undefined) {
     keycode = CODE_TO_KEYCODE[keyName];
   } else if (letter) {
-    keycode = event.code.charCodeAt(3) - 65 + 0; // KeyA=0…KeyZ=12 与 macOS kVK_ANSI_A=0 一致
+    keycode = LETTER_KEYCODES[letter];
   } else if (digit) {
     const digitCodes = { 0: 29, 1: 18, 2: 19, 3: 20, 4: 21, 5: 23, 6: 22, 7: 26, 8: 28, 9: 25 };
     keycode = digitCodes[digit];
@@ -309,25 +319,25 @@ document.addEventListener('keydown', event => {
   if (rerecordIndex >= 0) {
     shortcuts[rerecordIndex].modifiers = modifiers;
     shortcuts[rerecordIndex].keycode = keycode;
+    shortcuts[rerecordIndex].label = automaticShortcutLabel(modifiers, keyName);
     rerecordIndex = -1;
     recording = false;
     $('scRecord').textContent = '录制按键';
     $('scRecord').classList.remove('recording');
     saveShortcuts();
   } else {
-    pendingShortcut = { modifiers, keycode, display: comboDisplay(modifiers, keyName) };
+    pendingShortcut = { modifiers, keycode, label: automaticShortcutLabel(modifiers, keyName) };
     recording = false;
-    $('scRecord').textContent = `已录制：${pendingShortcut.display}`;
+    $('scRecord').textContent = `已录制：${pendingShortcut.label}`;
     $('scRecord').classList.remove('recording');
     $('scAdd').disabled = false;
   }
 }, true);
 
 $('scAdd').onclick = async () => {
-  const label = $('scLabel').value.trim();
-  if (!label || !pendingShortcut) { alert('请先填写按钮名称并录制按键。'); return; }
+  if (!pendingShortcut) return;
+  const label = pendingShortcut.label;
   shortcuts.push({ id: '', label, modifiers: pendingShortcut.modifiers, keycode: pendingShortcut.keycode });
-  $('scLabel').value = '';
   pendingShortcut = null;
   $('scRecord').textContent = '录制按键';
   $('scAdd').disabled = true;
@@ -349,7 +359,7 @@ function renderShortcuts() {
   shortcuts.forEach((shortcut, index) => {
     const mods = (shortcut.modifiers || []).map(name => MOD_NAMES[name] || '').join('');
     const row = document.createElement('div'); row.className = 'target-row';
-    row.innerHTML = `<b class="sc-editable" data-act="rename" title="点击修改按钮名称" style="flex:0 0 auto;min-width:64px">${esc(shortcut.label)}</b>
+    row.innerHTML = `<b class="sc-editable" data-act="rerecord" title="点击重新录制按键，名称自动识别" style="flex:0 0 auto;min-width:64px">${esc(shortcut.label)}</b>
       <span class="hint mono" data-act="rerecord" title="点击重新录制组合键">${esc(mods)}<span class="keycap">${esc(scKeyName(shortcut.keycode))}</span></span>
       <button class="btn ghost" data-act="up" ${index === 0 ? 'disabled' : ''}>↑</button>
       <button class="btn ghost" data-act="down" ${index === shortcuts.length - 1 ? 'disabled' : ''}>↓</button>
@@ -360,49 +370,18 @@ function renderShortcuts() {
       if (act === 'remove') { if (!armConfirm(event.target.closest('button[data-act]'))) return; shortcuts.splice(index, 1); await saveShortcuts(); }
       if (act === 'up' && index > 0) { [shortcuts[index - 1], shortcuts[index]] = [shortcuts[index], shortcuts[index - 1]]; await saveShortcuts(); }
       if (act === 'down' && index < shortcuts.length - 1) { [shortcuts[index + 1], shortcuts[index]] = [shortcuts[index], shortcuts[index + 1]]; await saveShortcuts(); }
-      if (act === 'rename') renameShortcut(index);
       if (act === 'rerecord') rerecordShortcut(index);
     });
     box.append(row);
   });
 }
 
-// 改名：行内替换为输入框，确认或失焦保存，Esc 取消。
-function renameShortcut(index) {
-  if (document.querySelector('.sc-rename-input')) return;
-  const box = $('scList');
-  const row = box.children[index];
-  const labelEl = row.querySelector('.sc-editable');
-  const input = document.createElement('input');
-  input.className = 'sc-rename-input';
-  input.type = 'text';
-  input.maxLength = 6;
-  input.value = shortcuts[index].label;
-  input.style.cssText = 'flex:0 0 auto;min-width:64px;width:96px;padding:4px 8px;border:1px solid var(--accent);border-radius:8px;font:inherit;font-size:13px';
-  labelEl.replaceWith(input);
-  input.focus();
-  input.select();
-  const commit = async () => {
-    const value = input.value.trim();
-    if (value && value !== shortcuts[index].label) {
-      shortcuts[index].label = value;
-      await saveShortcuts();
-    } else {
-      renderShortcuts();
-    }
-  };
-  input.addEventListener('keydown', event => {
-    event.stopPropagation();
-    if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
-    if (event.key === 'Escape') { input.value = shortcuts[index].label; input.blur(); }
-  });
-  input.addEventListener('blur', commit);
-}
-
 // 重录组合键：进入录制态，下一个按键写入这一行，Esc 取消。
 let rerecordIndex = -1;
 function rerecordShortcut(index) {
   recording = true;
+  pendingShortcut = null;
+  $('scAdd').disabled = true;
   rerecordIndex = index;
   $('scRecord').textContent = `为「${shortcuts[index].label}」按新按键…`;
   $('scRecord').classList.add('recording');
@@ -414,7 +393,8 @@ function scKeyName(keycode) {
     const name = byCode[keycode];
     return { up: '↑', down: '↓', left: '←', right: '→', return: '⏎', delete: '⌫', escape: 'esc', space: '空格', tab: '⇥' }[name] || name.toUpperCase();
   }
-  if (keycode <= 12) return String.fromCharCode(65 + keycode); // kVK_ANSI_A=0
+  const letter = Object.keys(LETTER_KEYCODES).find(name => LETTER_KEYCODES[name] === keycode);
+  if (letter) return letter.toUpperCase();
   const digitCodes = { 29: '0', 18: '1', 19: '2', 20: '3', 21: '4', 23: '5', 22: '6', 26: '7', 28: '8', 25: '9' };
   return digitCodes[keycode] || `键码${keycode}`;
 }

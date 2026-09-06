@@ -1,6 +1,7 @@
 /**
  * [INPUT]: 依赖浏览器 fetch/WebSocket/Pointer Events 与 index.html 的 Dock、文本框、触控板节点。
- * [OUTPUT]: 提供本地状态加载、应用唤醒、send 命令提交、在线心跳（可见 5s、隐藏停轮）与前台应用跟随（选中态自动对齐 Mac 前台）；
+ * [OUTPUT]: 提供配对 token 管理（URL ?token= → localStorage → 写请求 Authorization 头与 WS 首帧 auth）、
+ *           本地状态加载、应用唤醒、send 命令提交、在线心跳（可见 5s、隐藏停轮）与前台应用跟随（选中态自动对齐 Mac 前台）；
  *           触控板卡片经 ws:46388 发送 move/click/down/up/scroll/zoom 手势命令（每帧合并一次，降低包率），支持指针手势与键盘方向键；
  *           快捷键按钮条：渲染 /api/status 下发的 shortcuts，点击 POST /api/shortcut-trigger 注入组合键到 Mac 前台应用；
  *           Dock 选中项采用 roving tabindex，方向键在组内移动选中。
@@ -13,6 +14,27 @@ const textEl = document.querySelector('#text');
 const sendEl = document.querySelector('#send');
 const messageEl = document.querySelector('#message');
 const connectionEl = document.querySelector('#connection');
+
+/* ---------- 配对 token：扫码 URL 携带，之后本地持久化 ---------- */
+
+const PAIR_TOKEN_KEY = 'voicedeck.pair-token';
+
+// 扫码进入：URL ?token= → localStorage，并从地址栏抹除，避免泄漏进分享/历史。
+(function captureToken() {
+  const token = new URLSearchParams(location.search).get('token');
+  if (token && /^[A-Za-z0-9_-]+$/.test(token)) {
+    localStorage.setItem(PAIR_TOKEN_KEY, token);
+    history.replaceState(null, '', location.pathname);
+  }
+})();
+
+function pairToken() { return localStorage.getItem(PAIR_TOKEN_KEY) || ''; }
+
+function authHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  if (pairToken()) headers.Authorization = `Bearer ${pairToken()}`;
+  return headers;
+}
 
 const mainEl = document.querySelector('main');
 const padCard = document.querySelector('#pad-card');
@@ -85,10 +107,11 @@ async function activateTarget(targetId) {
   try {
     const response = await fetch('/api/activate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ targetId }),
     });
     const result = await response.json();
+    if (response.status === 401) throw new Error('未配对：请在电脑端控制台重新扫码。');
     if (!response.ok) throw new Error(result.error || '无法唤醒应用。');
     message(`${target ? target.name : targetId} 已置于电脑前台，可开始输入。`);
     // 不自动聚焦输入框：键盘弹起会滚动页面，触控板与 Dock 的屏幕位置随之错位，
@@ -169,7 +192,13 @@ function wsConnect() {
     scheduleReconnect();
     return;
   }
-  ws.onopen = () => { wsReady = true; };
+  // 浏览器 WS 不能带自定义头，用首帧 auth 握手：服务端校验后才放开手势转发。
+  ws.onopen = () => {
+    if (pairToken()) {
+      ws.send(JSON.stringify({ t: 'auth', token: pairToken() }));
+    }
+    wsReady = true;
+  };
   ws.onclose = () => { wsReady = false; scheduleReconnect(); };
   ws.onerror = () => { try { ws.close(); } catch { /* 已关闭 */ } };
 }
@@ -371,7 +400,7 @@ imageFile.addEventListener('change', () => {
     message('图片上传中…');
     fetch('/api/image', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ data: dataUrl.split(',')[1] }),
     }).then(async response => {
       if (!response.ok) {
@@ -443,7 +472,7 @@ function renderShortcuts() {
       try {
         const response = await fetch('/api/shortcut-trigger', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify({ id: shortcut.id, label: shortcut.label, modifiers: shortcut.modifiers, keycode: shortcut.keycode }),
         });
         if (!response.ok) {
@@ -757,10 +786,11 @@ async function send() {
   try {
     const response = await fetch('/api/send', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ targetId: selected, text, usePendingImage: Boolean(pendingImage), image: null }),
     });
     const result = await response.json();
+    if (response.status === 401) throw new Error('未配对：请在电脑端控制台重新扫码。');
     if (!response.ok) throw new Error(result.error || '发送失败。');
     // 发送成功就进历史：即使注入效果不符预期，内容也不会丢，可从历史一键回填重发。
     pushHistory(text || '[图片]', selected === FRONTMOST_ID ? '当前前台' : (targets.find(item => item.id === selected) || { name: selected }).name);
