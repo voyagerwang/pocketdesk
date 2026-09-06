@@ -68,7 +68,7 @@ Windows helper 未来只需实现同一个命令和目标解析层（例如 `Set
 
 ```bash
 cd voice-deck-mvp
-swiftc Sources/main.swift -o VoiceDeck -framework AppKit -framework Network -framework CoreImage
+swiftc Sources/*.swift -o VoiceDeck -framework AppKit -framework Network -framework CoreImage
 ./VoiceDeck
 ```
 
