@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 FileManager/Codable 与 AppKit 的 NSWorkspace；消费 Models 的 TargetConfig/ShortcutConfig/ShortcutKeys。
- * [OUTPUT]: 对外提供 TargetStore（targets.json/shortcuts.json 读写、目标解析、appURL 定位、自定义图标路径与孤儿图标清理、旧 shortcuts.json 到 hotkey 语义串的迁移）。
+ * [OUTPUT]: 对外提供 TargetStore（targets.json/shortcuts.json 读写、目标解析、appURL 定位、自定义图标路径与孤儿图标清理、旧 shortcuts.json 到 hotkey 语义串的迁移与启动时别名归一化回写）。
  * [POS]: Sources 的配置持久化层；Server 把它暴露为 /api/targets 等端点，InputExecutor 用 resolve/appURL 定位应用。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -74,6 +74,16 @@ final class TargetStore {
         guard let data = try? Data(contentsOf: TargetStore.shortcutFile) else { return }
         if let decoded = try? JSONDecoder().decode([ShortcutConfig].self, from: data) {
             shortcuts = ShortcutConfig.dedupeIds(decoded)
+            // 别名残留（Enter/Backspace/Esc）与手写变体归一到规范名；有变化才回写。
+            let canonical = shortcuts.map { shortcut in
+                var next = shortcut
+                next.hotkey = ShortcutKeys.canonicalize(shortcut.hotkey)
+                return next
+            }
+            if canonical != shortcuts {
+                shortcuts = canonical
+                saveShortcuts(shortcuts)
+            }
             return
         }
         // 旧格式（modifiers 数组 + keycode 数字）：翻译回语义串、修掉历史重复 id，回写完成迁移。

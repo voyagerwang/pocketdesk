@@ -49,6 +49,7 @@ let selected = null;        // null = 尚未选择；boot 后由心跳对齐到 
 const FRONTMOST_ID = '__frontmost__';   // 伪目标：前台是非 Dock 应用时，发送直接注入当前前台
 let lastActivateAt = 0;     // 刚在手机上激活过应用时，短暂抑制前台跟随，避免竞态回跳
 let lastSeenFront = null;   // 边沿触发：只在电脑前台应用发生变化时跟随一次
+let frontmostLabel = null;  // 伪目标态的前台应用名：识别到什么，"发送到 X"就写什么
 let manualUntil = 0;        // 手动滑动 Dock 期间暂停跟随，避免抢用户的操作
 
 /* ---------- 通用 ---------- */
@@ -93,9 +94,10 @@ function markSelected() {
   const hasTarget = Boolean(front) || selected === FRONTMOST_ID;
   sendEl.disabled = !hasTarget;
   sendEl.classList.toggle('no-target', !hasTarget);
-  padTarget.textContent = front ? front.name : (selected === FRONTMOST_ID ? '当前前台' : '未选择');
-  sendEl.textContent = front ? `发送到 ${front.name}`
-    : selected === FRONTMOST_ID ? '发送到当前前台' : '请先选择应用';
+  // 识别到什么就写什么：Dock 目标用配置名；伪目标用心跳识别出的前台应用名（frontmostLabel）。
+  const label = front ? front.name : (selected === FRONTMOST_ID ? (frontmostLabel || '当前前台') : null);
+  padTarget.textContent = label || '未选择';
+  sendEl.textContent = label ? `发送到 ${label}` : '请先选择应用';
 }
 
 /* ---------- 选中与唤醒 ---------- */
@@ -448,9 +450,10 @@ let shortcuts = [];
 let customShortcuts = []; // 过滤默认示例（undo/copy/paste），手机上只展示用户自己录的
 
 // 语义串展示：最后一个 token 是主键，其余是修饰键符号。
+// enter/backspace/esc 等别名归一到同一符号，与控制台 hotkeyDisplay 的归一表保持一致。
 function hotkeyLabel(hotkey) {
-  const named = { up: '↑', down: '↓', left: '←', right: '→', return: '⏎', delete: '⌫',
-    escape: 'esc', space: '空格', tab: '⇥' };
+  const named = { up: '↑', down: '↓', left: '←', right: '→', return: '⏎', enter: '⏎',
+    delete: '⌫', backspace: '⌫', escape: 'esc', space: '空格', tab: '⇥' };
   const mods = { cmd: '⌘', shift: '⇧', opt: '⌥', ctrl: '⌃' };
   const parts = (hotkey || '').split('+').map(part => part.trim());
   return parts.map((part, index) => {
@@ -748,13 +751,14 @@ async function heartbeatTick() {
     lastSeenFront = key;
     if (frontId && targets.some(item => item.id === frontId)) {
       selected = frontId;
+      frontmostLabel = null;   // Dock 目标态：名字由 markSelected 从 targets 取
       markSelected();   // 统一出口：图标选中态与"发送到 X"文案同步更新
       const name = (targets.find(item => item.id === frontId) || { name: frontId }).name;
       message(`${name} 已在电脑前台，可直接输入。`);
     } else if (frontName) {
       selected = FRONTMOST_ID;
+      frontmostLabel = frontName;   // 识别到什么就叫什么：按钮直接显示该应用名
       markSelected();
-      padTarget.textContent = frontName;
       message(`已切到 ${frontName}（未添加），发送将直接输入到它。`);
     }
   } catch {
@@ -801,15 +805,17 @@ async function boot() {
     connectionEl.textContent = status.accessibility ? '已就绪' : '需授权';
     connectionEl.classList.toggle('ready', status.accessibility);
     if (!status.accessibility) message('请先在电脑端控制台完成授权，页面仍可输入。', true);
-    // 刷新后立即对齐一次选中态：Mac 前台命中 Dock 目标就选它，否则进入"当前前台"伪目标，
+    // 刷新后立即对齐一次选中态：Mac 前台命中 Dock 目标就选它，否则进入伪目标并记住前台名，
     // 保证底部"发送到 X"与 Dock 高亮始终反映真实状态，而不是上次会话的残留默认值。
     const frontId = status.frontmostId;
     if (frontId && targets.some(item => item.id === frontId)) {
       selected = frontId;
       lastSeenFront = frontId;
+      frontmostLabel = null;
     } else if (status.frontmostName) {
       selected = FRONTMOST_ID;
       lastSeenFront = status.frontmostName;
+      frontmostLabel = status.frontmostName;
     }
     markSelected();
     startHeartbeat();
@@ -833,7 +839,7 @@ async function send() {
   }
   exitPadMode();
   sendEl.disabled = true;
-  message(selected === FRONTMOST_ID ? '直接输入到当前前台应用…' : '正在打开应用并输入…');
+  message(selected === FRONTMOST_ID ? `直接输入到 ${frontmostLabel || '当前前台应用'}…` : '正在打开应用并输入…');
   try {
     const response = await fetch('/api/send', {
       method: 'POST',
@@ -844,7 +850,7 @@ async function send() {
     if (response.status === 401) throw new Error('未配对：请在电脑端控制台重新扫码。');
     if (!response.ok) throw new Error(result.error || '发送失败。');
     // 发送成功就进历史：即使注入效果不符预期，内容也不会丢，可从历史一键回填重发。
-    pushHistory(text || '[图片]', selected === FRONTMOST_ID ? '当前前台' : (targets.find(item => item.id === selected) || { name: selected }).name);
+    pushHistory(text || '[图片]', selected === FRONTMOST_ID ? (frontmostLabel || '当前前台') : (targets.find(item => item.id === selected) || { name: selected }).name);
     textEl.value = '';
     pendingImage = null;
     imageThumb.src = '';
