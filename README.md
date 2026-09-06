@@ -44,6 +44,8 @@ swiftc Sources/main.swift -o VoiceDeck -framework AppKit -framework Network
 
 本机网页：<http://localhost:46387>
 
+更新 Voice Deck 后，请在手机浏览器刷新一次页面；页面使用带版本号的脚本地址，刷新后不会继续执行旧的点击逻辑。
+
 手机使用字母主机名访问：`http://<这台Mac的LocalHostName>.local:46387`。例如本机的 LocalHostName 是 `YZdeMacBook-Air` 时，手机地址是 `http://YZdeMacBook-Air.local:46387`。Voice Deck 同时通过 Bonjour 以 **Voice Deck** 名称发布，不占用或伪装成 Workbench 的服务。
 
 标准浏览器的 HTTP 地址必须携带端口，除非服务使用受 macOS 保护的 80 端口（需要管理员权限，且容易与其他产品冲突）。因此这个 MVP 保留独占的 `46387` 端口，而不使用 Workbench 的端口；用户无需记忆数字 IP。
