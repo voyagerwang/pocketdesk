@@ -92,7 +92,13 @@ swiftc Sources/*.swift -o VoiceDeck -framework AppKit -framework Network -framew
 
 Voice Deck→PocketDesk 的更名不影响该地址；只有修改电脑主机名或端口才会变化。PocketDesk 同时通过 Bonjour 以 **PocketDesk** 名称发布，不占用或伪装成 Workbench 的服务。
 
-手机与 Mac 必须在同一 Wi-Fi，且不能处于访客网络/客户端隔离网络；若 `.local` 无法解析，用控制台给出的局域网 IP 备选地址。更新 PocketDesk 后，请在手机浏览器刷新一次页面；页面使用带版本号的脚本地址，刷新后不会继续执行旧逻辑。
+局域网方式要求手机与 Mac 在同一 Wi-Fi，且不能处于访客网络/客户端隔离网络；若 `.local` 无法解析，用控制台给出的局域网 IP 备选地址。更新 PocketDesk 后，请在手机浏览器刷新一次页面；页面使用带版本号的脚本地址，刷新后不会继续执行旧逻辑。
+
+### 跨网连接（Tailscale）
+
+手机与 Mac 不在同一局域网时，在两台设备上安装 Tailscale 并登录同一账户。PocketDesk 会自动识别 Mac 的 Tailscale 私网地址，并在控制台第 2 步显示“跨网地址 · Tailscale”二维码；手机打开 Tailscale 后扫码即可。手机可以使用蜂窝网络，UU 远程等软件继续负责远端画面，PocketDesk 独立传输文字和触控板命令。
+
+跨网地址形如 `http://100.x.y.z:46387`，只在同一 Tailscale 私网内可达。HTTP 写请求和 `:46388` WebSocket 仍使用二维码携带的 PocketDesk 配对 token 鉴权；不要把这两个端口直接暴露到公网。
 
 ## 必需权限
 

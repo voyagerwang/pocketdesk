@@ -687,6 +687,7 @@ pad.addEventListener('focus', enterPadMode);
 
 const HEARTBEAT_MS = 5000;
 let heartbeat = 0;
+let heartbeatFailures = 0;  // 连续失败计数：≥2 判定断连，成功即清零
 
 // 心跳 + 前台跟随（边沿触发）：前台命中 Dock 目标时选中态跟过去一次；
 // 前台是非目标应用（如 Finder）则进入伪目标态，发送直接注入当前前台。
@@ -695,6 +696,13 @@ async function heartbeatTick() {
   try {
     fetch('/api/pair', { method: 'POST', keepalive: true });
     const current = await fetch('/api/status').then(response => response.json());
+    // 连接恢复：无论此前断过几次，先把顶部状态拉回真实值。
+    if (heartbeatFailures > 0) {
+      heartbeatFailures = 0;
+      message('已重新连接到电脑。');
+    }
+    connectionEl.textContent = current.accessibility ? '已就绪' : '需授权';
+    connectionEl.classList.toggle('ready', current.accessibility);
     // 快捷键列表跟随服务端：控制台改完配置，手机 5 秒内自动刷新按钮。
     if (JSON.stringify(current.shortcuts || []) !== JSON.stringify(shortcuts)) {
       syncShortcuts(current.shortcuts || []);
@@ -702,28 +710,37 @@ async function heartbeatTick() {
     const frontId = current.frontmostId;      // 命中 Dock 目标时的 id，否则 null
     const frontName = current.frontmostName;  // 前台应用名（始终有值）
     const key = frontId ?? frontName ?? null;
-    // 抑制期内不消费变化：lastSeenFront 保持原值，抑制结束后下一轮仍会应用这次切换。
-    if (!key || key === lastSeenFront) return;
+    if (!key) return;
+    // 抑制期内不消费也不记录：lastSeenFront 保持原值，抑制结束后下一拍仍会应用这次切换。
     if (Date.now() <= manualUntil || Date.now() - lastActivateAt < 2500) return;
+    // 边沿触发：只在电脑前台应用发生变化时跟随一次。
+    if (key === lastSeenFront) return;
     lastSeenFront = key;
     if (frontId && targets.some(item => item.id === frontId)) {
       selected = frontId;
-      markSelected();
-      sendEl.textContent = '发送';
+      markSelected();   // 统一出口：图标选中态与"发送到 X"文案同步更新
       const name = (targets.find(item => item.id === frontId) || { name: frontId }).name;
       message(`${name} 已在电脑前台，可直接输入。`);
     } else if (frontName) {
       selected = FRONTMOST_ID;
+      markSelected();
       padTarget.textContent = frontName;
-      sendEl.textContent = `发送到 ${frontName}`;
       message(`已切到 ${frontName}（未添加），发送将直接输入到它。`);
     }
-  } catch { /* 网络抖动忽略 */ }
+  } catch {
+    // 连续两拍失败才判定断连，避免单次网络抖动误报；顶部状态立即改口，不再挂假"已就绪"。
+    heartbeatFailures++;
+    if (heartbeatFailures >= 2) {
+      connectionEl.textContent = '未连接';
+      connectionEl.classList.remove('ready');
+      message('与电脑的连接已断开：请确认同一 Wi-Fi，或重新扫码。', true);
+    }
+  }
 }
 
-function startHeartbeat() {
+function startHeartbeat(interval = HEARTBEAT_MS) {
   clearInterval(heartbeat);
-  heartbeat = setInterval(heartbeatTick, HEARTBEAT_MS);
+  heartbeat = setInterval(heartbeatTick, interval);
 }
 
 function stopHeartbeat() {
@@ -731,10 +748,13 @@ function stopHeartbeat() {
   heartbeat = 0;
 }
 
-// 切到后台不再轮询；回到前台先补一次状态刷新再恢复计时。
+// 浏览器进后台不完全停摆：UU 远程分屏等场景里页面仍"可见但无焦点"，
+// 完全停轮询会导致 Mac 前台切换不再同步到手机。后台降频到 15s，回前台立即补拍。
+const BACKGROUND_HEARTBEAT_MS = 15000;
+
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    stopHeartbeat();
+    startHeartbeat(BACKGROUND_HEARTBEAT_MS);
     return;
   }
   heartbeatTick();
@@ -815,5 +835,34 @@ textEl.addEventListener('keydown', event => {
     send();
   }
 });
+
+/* ---------- 主题切换：Muji ↔ classic，状态持久化 ---------- */
+
+const THEME_KEY = 'voicedeck.theme';
+const themeToggle = document.querySelector('#theme-toggle');
+
+function currentTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'classic' ? 'classic' : 'muji';
+}
+
+function syncThemeToggle() {
+  // 按钮字标显示"另一边"：当前是 Muji 就显示 C（可切到 classic），反之 M。
+  themeToggle.textContent = currentTheme() === 'muji' ? 'C' : 'M';
+  themeToggle.setAttribute('aria-pressed', String(currentTheme() === 'classic'));
+}
+
+if (themeToggle) {
+  syncThemeToggle();
+  themeToggle.addEventListener('click', () => {
+    const next = currentTheme() === 'muji' ? 'classic' : 'muji';
+    if (next === 'classic') {
+      document.documentElement.setAttribute('data-theme', 'classic');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    localStorage.setItem(THEME_KEY, next);
+    syncThemeToggle();
+  });
+}
 
 boot();

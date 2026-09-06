@@ -1,5 +1,5 @@
-# PocketDesk MVP - 手机语音输入到桌面应用的本地桥接器
-Swift + Network + Quartz Event Services，搭配零依赖手机 Web 页面；macOS 先行，命令协议为 Windows helper 保留稳定边界。
+# PocketDesk MVP - 手机语音输入到桌面应用的本地与私网桥接器
+Swift + Network + Quartz Event Services，搭配零依赖手机 Web 页面；局域网直连或经 Tailscale 私网跨网连接，macOS 先行，命令协议为 Windows helper 保留稳定边界。
 
 <directory>
 Sources/ - macOS HTTP 服务、控制台接口、目标应用配置持久化、应用激活、Unicode 输入注入与触控板 WebSocket 指针注入 (10 个 Swift 源文件，按职责分模块，单文件 ≤300 行)

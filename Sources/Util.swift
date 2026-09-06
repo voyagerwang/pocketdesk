@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 Data/URL 与 AppKit 的 NSWorkspace/NSImage、CoreImage 的二维码滤镜。
- * [OUTPUT]: 对外提供 Util（主局域网地址探测、稳定 .local 主机名、QR PNG 生成、应用图标 PNG 提取）。
+ * [OUTPUT]: 对外提供 Util（主局域网地址与 Tailscale 私网地址探测、稳定 .local 主机名、QR PNG 生成、应用图标 PNG 提取）。
  * [POS]: Sources 的无状态工具层；Server 的 /api/status、/api/qr、图标端点调用它渲染地址与图像。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -10,29 +10,51 @@ import CoreImage.CIFilterBuiltins
 import Foundation
 
 enum Util {
-    static func primaryLANAddress() -> String? {
+    private static func ipv4Interfaces() -> [(name: String, ip: String)] {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddr) == 0 else { return nil }
+        guard getifaddrs(&ifaddr) == 0 else { return [] }
         defer { freeifaddrs(ifaddr) }
-        var candidates: [(name: String, ip: String)] = []
+        var addresses: [(name: String, ip: String)] = []
         var pointer = ifaddr
         while let current = pointer {
             let interface = current.pointee
-            if let sa = interface.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) {
+            if let sa = interface.ifa_addr,
+               sa.pointee.sa_family == UInt8(AF_INET),
+               interface.ifa_flags & UInt32(IFF_UP) != 0 {
                 var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                 let result = getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
                 if result == 0 {
-                    let ip = String(cString: host)
-                    let name = String(cString: interface.ifa_name)
-                    if !ip.hasPrefix("127.") { candidates.append((name, ip)) }
+                    addresses.append((String(cString: interface.ifa_name), String(cString: host)))
                 }
             }
             pointer = interface.ifa_next
         }
+        return addresses
+    }
+
+    static func primaryLANAddress() -> String? {
+        let candidates = ipv4Interfaces().filter { !$0.ip.hasPrefix("127.") && !isTailscaleAddress($0.ip) }
         let rank = { (name: String) -> Int in
             name.hasPrefix("en") ? Int(name.dropFirst(2)) ?? 50 : 60
         }
         return candidates.sorted { rank($0.name) < rank($1.name) }.first?.ip
+    }
+
+    // Tailscale 为设备分配 100.64.0.0/10 地址；macOS 通过 utun 虚拟网卡承载该地址。
+    // 同时检查地址段与网卡类型，避免把运营商 CGNAT 地址误当成可供手机直连的私网入口。
+    static func tailscaleAddress() -> String? {
+        ipv4Interfaces().first {
+            ($0.name.hasPrefix("utun") || $0.name.hasPrefix("tailscale")) && isTailscaleAddress($0.ip)
+        }?.ip
+    }
+
+    static func tailscaleURL(_ port: UInt16) -> String? {
+        tailscaleAddress().map { "http://\($0):\(port)" }
+    }
+
+    private static func isTailscaleAddress(_ ip: String) -> Bool {
+        let octets = ip.split(separator: ".").compactMap { UInt8($0) }
+        return octets.count == 4 && octets[0] == 100 && (64...127).contains(octets[1])
     }
 
     // 稳定主机名：mDNS 的 <计算机名>.local 不随 DHCP 变化，手机保存一次即可长期使用。
