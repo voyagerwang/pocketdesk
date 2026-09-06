@@ -58,10 +58,10 @@ button{font:inherit;cursor:pointer}
 .keycap{display:inline-block;min-width:22px;margin-left:4px;padding:2px 7px;border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;background:#fff;color:var(--ink);font-size:11px;text-align:center}
 /* 垃圾桶图标按钮：平时只显示图标，悬停泛红；确认态展开"确认移除"文字并填充红底。 */
 .icon-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;height:30px;padding:0;overflow:hidden;transition:width .18s ease,background .18s ease,color .18s ease}
-.icon-btn svg{width:17px;height:17px;flex:0 0 17px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
-.icon-btn .confirm-text{display:none;font-size:12px;font-weight:600;white-space:nowrap}
+.icon-btn svg{width:17px;height:17px;flex:0 0 17px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}.icon-btn .confirm-text{display:none;font-size:12px;font-weight:600;white-space:nowrap}
 .icon-btn.danger:hover{color:var(--danger)}
-.icon-btn.armed{width:92px;background:var(--danger);border-color:var(--danger);color:#fff}
+/* armed 态要压过 :hover（更高优先级），否则悬停时红底被染回白底、"确认移除"红字不可见。 */
+.icon-btn.armed,.icon-btn.armed:hover{background:var(--danger);border-color:var(--danger);color:#fff}
 .icon-btn.armed .confirm-text{display:inline;margin-left:5px}
 </style>
 </head>

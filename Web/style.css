@@ -697,10 +697,31 @@ main:not(.pad-mode) .pad-gear {
   font-weight: 700;
 }
 
+.hist-actions {
+  display: flex;
+  gap: var(--s-3);
+}
+
 .hist-clear {
   border: 0;
   background: transparent;
   color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+/* 清空二次确认态：红底白字，一眼知道处在危险操作中。 */
+.hist-clear.armed {
+  padding: 2px var(--s-2);
+  border-radius: var(--r-pill);
+  background: var(--danger);
+  color: #fff;
+}
+
+.hist-collapse {
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
   font-size: var(--text-xs);
   font-weight: 700;
 }
@@ -738,7 +759,7 @@ main:not(.pad-mode) .pad-gear {
   cursor: default;
 }
 
-/* ---------- 快捷键按钮条：输入框下方，点击向 Mac 前台应用注入组合键 ---------- */
+/* ---------- 快捷键按钮条：图片预览下方，点击向 Mac 前台应用注入组合键 ---------- */
 
 .shortcut-bar {
   display: flex;
@@ -770,7 +791,7 @@ main:not(.pad-mode) .pad-gear {
   color: var(--accent);
 }
 
-/* ---------- 快捷键字标：收起态的入口提示 ---------- */
+/* ---------- 触控板字标：收起态的入口提示 ---------- */
 
 /* 收起时居左显示"触控板"三字，让用户知道这块可以摸；展开后自动隐藏。 */
 .pad-title {
