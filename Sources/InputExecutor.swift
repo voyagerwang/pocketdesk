@@ -155,15 +155,14 @@ final class InputExecutor {
             guard AXIsProcessTrusted() else {
                 completion(.failure(.message("尚未授予“辅助功能”权限。请在控制台完成授权。"))); return
             }
-            // 录制时已把主键翻译成 macOS 虚拟键码存储；此处直接用，超出范围视为无效。
-            guard let key = CGKeyCode(exactly: shortcut.keycode), shortcut.keycode >= 0, shortcut.keycode <= 0x7F else {
-                completion(.failure(.message("快捷键主键无效。"))); return
+            // 语义串经 ShortcutKeys.resolve 统一解析为 CGEvent 键码 + flags；失败给明确报错。
+            guard let resolved = ShortcutKeys.resolve(shortcut.hotkey) else {
+                completion(.failure(.message("快捷键无法识别：\(shortcut.hotkey)"))); return
             }
-            let flags = ShortcutKeys.flags(for: shortcut.modifiers)
-            if let down = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: true),
-               let up = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false) {
-                down.flags = flags
-                up.flags = flags
+            if let down = CGEvent(keyboardEventSource: nil, virtualKey: resolved.keycode, keyDown: true),
+               let up = CGEvent(keyboardEventSource: nil, virtualKey: resolved.keycode, keyDown: false) {
+                down.flags = resolved.flags
+                up.flags = resolved.flags
                 down.post(tap: .cghidEventTap)
                 up.post(tap: .cghidEventTap)
                 completion(.success(()))

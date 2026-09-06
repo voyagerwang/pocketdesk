@@ -50,10 +50,10 @@
   --s-8: 32px;
 
   /* 文房墨系：全套控件与量尺刻度同一血缘。
-     静息 = 淡墨刻度；交互 = 落墨；发送 = 印泥赭。 */
+     静息 = 清晰可点（70%，不置灰）；交互 = 落墨；发送 = 印泥赭。 */
   --ink-dot: 1.2px;            /* 墨点半径，全站刻度统一 */
-  --ink-dwell: 22%;            /* 静息控件墨色浓度 */
-  --ink-active: 90%;           /* 落墨浓度 */
+  --ink-dwell: 70%;            /* 静息控件墨色浓度：可点感优先于风格 */
+  --ink-active: 100%;          /* 落墨浓度 */
   --seal: var(--accent);       /* 印泥：发送按钮的印 */
   --seal-soft: var(--accent-soft);
 
@@ -274,15 +274,28 @@ h1 {
   white-space: nowrap;
 }
 
-/* 选中态：赭红实边 + 名称加深，不用投影与发光。 */
+/* 选中态 = 印点：图标微微上浮，名称前一枚赭红印点（同刻度墨点），
+   不再用描边圈住图标——印章盖在名字上，更像"选中了这个"。 */
 .target.selected .target-icon {
-  border-color: var(--accent);
   transform: translateY(-2px);
 }
 
 .target.selected small {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   color: var(--fg);
   font-weight: 600;
+}
+
+.target.selected small::before {
+  content: "";
+  flex: 0 0 4px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 
 .target:active .target-icon {
@@ -329,15 +342,14 @@ textarea {
   resize: none;
 }
 
-/* 聚焦 = 落墨：不是整圈描边，是下缘一道墨线，像笔尖落到纸上。 */
+/* 聚焦 = 清晰的边界：实线描边告诉用户"键盘从这里开始"，不玩花样。 */
 textarea {
-  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  transition: border-color var(--dur) var(--ease);
 }
 
 textarea:focus {
   outline: none;
-  border-color: var(--border);
-  box-shadow: 0 1.5px 0 0 var(--accent);
+  border-color: var(--accent);
 }
 
 #send {
@@ -643,17 +655,18 @@ main:not(.pad-mode) .pad-hint {
   display: grid;
 }
 
-/* 设置入口：无边框墨点角标——线条 + 墨点本身就是图标，不套盒子。
-   静息淡墨，激活（面板展开）落墨成赭红。 */
+/* 设置入口：触控板左上角，墨点角标——线条 + 墨点即图标，不套盒子。
+   静息淡墨，激活（面板展开）落墨成赭红。左上角与右缘刻度尺对角呼应，
+   也避开标题与滚动刻度的空间。 */
 .pad-gear {
   position: absolute;
-  top: var(--s-2);
-  right: calc(var(--s-2) + 50px);
+  top: var(--s-1);
+  left: var(--s-1);
   z-index: 2;
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   padding: 0;
   border: 0;
   border-radius: var(--r-field);

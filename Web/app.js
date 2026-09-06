@@ -3,7 +3,7 @@
  * [OUTPUT]: 提供配对 token 管理（URL ?token= → localStorage → 写请求 Authorization 头与 WS 首帧 auth）、
  *           本地状态加载、应用唤醒、send 命令提交、在线心跳（可见 5s、隐藏停轮）与前台应用跟随（选中态自动对齐 Mac 前台）；
  *           触控板卡片经 ws:46388 发送 move/click/down/up/scroll/zoom 手势命令（每帧合并一次，降低包率），支持指针手势与键盘方向键；
- *           快捷键按钮条：渲染 /api/status 下发的 shortcuts，点击 POST /api/shortcut-trigger 注入组合键到 Mac 前台应用；
+ *           快捷键按钮条：渲染 /api/status 下发的 shortcuts（语义串 hotkey），点击 POST /api/shortcut-trigger 注入组合键到 Mac 前台应用；
  *           Dock 选中项采用 roving tabindex，方向键在组内移动选中。
  * [POS]: Web 的交互适配层；与未来 WebSocket transport 共享 SendCommand JSON 形状。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -447,16 +447,20 @@ const shortcutBar = document.querySelector('#shortcut-bar');
 let shortcuts = [];
 let customShortcuts = []; // 过滤默认示例（undo/copy/paste），手机上只展示用户自己录的
 
-const MODIFIER_PREFIX = { command: '⌘', shift: '⇧', option: '⌥', control: '⌃' };
-const KEY_NAMES = { 36: '⏎', 49: '空格', 51: '⌫', 48: '⇥', 53: 'esc',
-  123: '←', 124: '→', 125: '↓', 126: '↑',
-  96: 'F5', 97: 'F6', 98: 'F7', 99: 'F3', 100: 'F8', 101: 'F9',
-  109: 'F10', 111: 'F12', 118: 'F4', 120: 'F2', 122: 'F1', 103: 'F11' };
+// 语义串展示：最后一个 token 是主键，其余是修饰键符号。
+function hotkeyLabel(hotkey) {
+  const named = { up: '↑', down: '↓', left: '←', right: '→', return: '⏎', delete: '⌫',
+    escape: 'esc', space: '空格', tab: '⇥' };
+  const mods = { cmd: '⌘', shift: '⇧', opt: '⌥', ctrl: '⌃' };
+  const parts = (hotkey || '').split('+').map(part => part.trim());
+  return parts.map((part, index) => {
+    const token = part.toLowerCase();
+    return index < parts.length - 1 ? (mods[token] || part) : (named[token] || part.toUpperCase());
+  }).join('');
+}
 
 function shortcutLabel(shortcut) {
-  const mods = (shortcut.modifiers || []).map(name => MODIFIER_PREFIX[name.toLowerCase()] || '').join('');
-  const key = KEY_NAMES[shortcut.keycode] || '';
-  return `${mods}${key} ${shortcut.label}`.trim();
+  return `${hotkeyLabel(shortcut.hotkey)} ${shortcut.label}`.trim();
 }
 
 function renderShortcuts() {
@@ -473,7 +477,7 @@ function renderShortcuts() {
         const response = await fetch('/api/shortcut-trigger', {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({ id: shortcut.id, label: shortcut.label, modifiers: shortcut.modifiers, keycode: shortcut.keycode }),
+          body: JSON.stringify({ id: shortcut.id, label: shortcut.label, hotkey: shortcut.hotkey }),
         });
         if (!response.ok) {
           const result = await response.json().catch(() => ({}));

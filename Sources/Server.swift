@@ -146,8 +146,7 @@ final class Server {
                      "bundleID": config.bundleID as Any?, "path": config.path as Any?]
                 },
                 "shortcuts": store.shortcuts.map { shortcut in
-                    ["id": shortcut.id, "label": shortcut.label,
-                     "modifiers": shortcut.modifiers, "keycode": shortcut.keycode]
+                    ["id": shortcut.id, "label": shortcut.label, "hotkey": shortcut.hotkey]
                 },
             ]
             respond(connection, status: 200, json: payload)
@@ -250,16 +249,15 @@ final class Server {
                 }
             }
         case ("POST", "/api/shortcuts"):
-            // 与 /api/targets 同样的清洗策略：数量上限 + id 去重补齐。
+            // 数量上限 + id 去重补 UUID + 每条语义串必须可解析，任一不合法整批拒绝。
             guard let list = try? JSONDecoder().decode([ShortcutConfig].self, from: bodyData) else {
                 respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
             }
             var seen = Set<String>()
-            let cleaned = list.prefix(12).map { entry -> ShortcutConfig in
+            let cleaned: [ShortcutConfig] = list.prefix(12).compactMap { entry in
+                guard ShortcutKeys.resolve(entry.hotkey) != nil else { return nil }
                 var shortcut = entry
-                let base = shortcut.id.isEmpty ? "shortcut" : shortcut.id
-                if seen.contains(base) || shortcut.id.isEmpty { shortcut.id = base + "-\(seen.count + 1)" }
-                // 四个修饰键符号 + F12 / esc 的完整简称最多 7 个字符。
+                if shortcut.id.isEmpty || seen.contains(shortcut.id) { shortcut.id = UUID().uuidString }
                 shortcut.label = String(shortcut.label.prefix(7))
                 seen.insert(shortcut.id)
                 return shortcut
