@@ -25,7 +25,9 @@
 body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",sans-serif;font-size:14px;-webkit-font-smoothing:antialiased}
 main{max-width:860px;margin:auto;padding:40px 24px 60px;display:flex;flex-direction:column;gap:24px}
 header{display:flex;align-items:center;gap:12px}h1{margin:0;font-size:20px;font-weight:600;letter-spacing:0.02em}
-.pill{margin-left:auto;padding:6px 12px;border:1px solid var(--line);border-radius:4px;font-size:12px;color:var(--muted)}
+/* 头部工具簇：开关与状态徽章成组靠右，标题独占左侧——控件有锚点，不做中间孤儿。 */
+.header-tools{margin-left:auto;display:flex;align-items:center;gap:12px}
+.pill{padding:6px 12px;border:1px solid var(--line);border-radius:4px;font-size:12px;color:var(--muted)}
 .pill.ready{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
 .card{padding:22px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .card h2{margin:0 0 4px;font-size:15px;font-weight:600}.card .sub{margin:0 0 16px;color:var(--muted);font-size:12px;line-height:1.6}
@@ -67,7 +69,7 @@ button{font:inherit;cursor:pointer}
 .btn.recording{color:#fff;background:var(--accent);border-color:var(--accent)}
 /* 主题切换按钮：页脚右下角。 */
 /* 主题分段开关：头部显眼位置，当前项反色高亮；点击写入 Mac 本机，手机页自动跟随。 */
-.theme-switch{margin-left:auto;display:flex;border:1px solid var(--line-strong);border-radius:4px;overflow:hidden}
+.theme-switch{display:flex;border:1px solid var(--line-strong);border-radius:4px;overflow:hidden;background:#fff}
 .theme-switch button{padding:7px 16px;border:0;background:transparent;color:var(--muted);font-size:12px;font-weight:600;letter-spacing:0.02em}
 .theme-switch button+button{border-left:1px solid var(--line)}
 .theme-switch button.on{background:var(--accent);color:#fff}
@@ -95,7 +97,7 @@ button{font:inherit;cursor:pointer}
 </head>
 <body>
 <main>
-  <header><h1>PocketDesk 控制台</h1><span id="theme-switch" class="theme-switch" role="group" aria-label="界面主题"><button type="button" data-theme-choice="classic">经典蓝</button><button type="button" data-theme-choice="muji">米白</button></span><span id="conn" class="pill">连接中</span></header>
+  <header><h1>PocketDesk 控制台</h1><span class="header-tools"><span id="theme-switch" class="theme-switch" role="group" aria-label="界面主题"><button type="button" data-theme-choice="classic">经典蓝</button><button type="button" data-theme-choice="muji">米白</button></span><span id="conn" class="pill">连接中</span></span></header>
 
   <section class="card">
     <h2><span class="step">1</span>系统授权</h2>
