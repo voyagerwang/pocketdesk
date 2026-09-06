@@ -4,6 +4,8 @@ Swift + Network + Quartz Event Services，搭配零依赖手机 Web 页面；mac
 <directory>
 Sources/ - macOS HTTP 服务、目标应用激活与 Unicode 输入注入 (1 个 Swift 源文件)
 Web/ - 手机浏览器控制界面 (3 个静态文件)
+Resources/ - 独立 macOS App 的 bundle 元数据 (1 个 plist)
+scripts/ - 独立应用安装脚本 (1 个 shell 脚本)
 </directory>
 
 <config>

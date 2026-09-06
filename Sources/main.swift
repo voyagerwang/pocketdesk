@@ -159,7 +159,11 @@ final class Server {
     }
 }
 
-let root = URL(fileURLWithPath: CommandLine.arguments.first ?? FileManager.default.currentDirectoryPath).deletingLastPathComponent()
+let executableDirectory = URL(fileURLWithPath: CommandLine.arguments.first ?? FileManager.default.currentDirectoryPath).deletingLastPathComponent()
+let bundledWebRoot = executableDirectory.deletingLastPathComponent().appendingPathComponent("Resources/Web")
+let root = FileManager.default.fileExists(atPath: bundledWebRoot.appendingPathComponent("index.html").path)
+    ? bundledWebRoot.deletingLastPathComponent()
+    : executableDirectory
 let defaultPort: UInt16 = 46387
 let selectedPort = UInt16(ProcessInfo.processInfo.environment["VOICE_DECK_PORT"] ?? "") ?? defaultPort
 let server = Server(port: selectedPort, webRoot: root.appendingPathComponent("Web"))

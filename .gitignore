@@ -1,3 +1,4 @@
 .build/
 VoiceDeck
+build/
 .DS_Store
