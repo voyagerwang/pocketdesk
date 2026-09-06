@@ -1,6 +1,6 @@
 <!--
   [INPUT]: 依赖 style.css 与 app.js 的移动端布局和本地 API 交互。
-  [OUTPUT]: 提供目标应用选择、系统键盘/听写输入框和发送操作。
+  [OUTPUT]: 提供横向应用 Dock、长按排序、系统键盘/听写输入框和发送操作。
   [POS]: Web 的唯一页面入口；只收集文本，绝不处理或上传语音。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -10,9 +10,9 @@
   <body>
     <main>
       <header><div class="mark">VD</div><div><p class="eyebrow">LOCAL VOICE TO DESKTOP</p><h1>Voice Deck</h1></div><span id="connection" class="pill">连接中</span></header>
-      <section aria-labelledby="target-title"><p class="label" id="target-title">输入到</p><div id="targets" class="targets" role="radiogroup"></div></section>
+      <section aria-labelledby="target-title"><div class="target-heading"><p class="label" id="target-title">输入到</p><span>左右滑动 · 长按排序</span></div><div id="targets" class="targets" role="radiogroup"></div></section>
       <section class="compose"><label class="label" for="text">说什么？</label><textarea id="text" rows="7" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="点这里，用手机键盘或听写输入…"></textarea><p class="hint">选择应用 → 说话/输入 → 发送。文字不会离开你的局域网。</p><button id="send" type="button">发送到电脑 <span>↵</span></button></section>
       <p id="message" role="status" aria-live="polite"></p><footer>Voice Deck MVP · 本地网络使用</footer>
-    </main><script src="/app.js?v=0.2.0"></script>
+    </main><script src="/app.js?v=0.3.0"></script>
   </body>
 </html>

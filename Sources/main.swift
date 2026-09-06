@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation、Network、AppKit 与 Quartz 的本机 HTTP、应用激活和 CGEvent 能力。
- * [OUTPUT]: 对外提供 VoiceDeck 本地 HTTP 服务：静态网页、状态查询、应用置顶和文本发送端点。
+ * [OUTPUT]: 对外提供 VoiceDeck 本地 HTTP 服务：静态网页、原生应用图标、状态查询、应用置顶和文本发送端点。
  * [POS]: Sources 的 macOS 执行边界；Web 层只发送稳定的 SendCommand，不接触系统 API。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -134,6 +134,7 @@ final class Server {
     private let executor = InputExecutor()
     private let queue = DispatchQueue(label: "dev.voicedeck.server")
     private var listener: NWListener?
+    private var iconCache: [String: Data] = [:]
 
     init(port: UInt16, webRoot: URL) { self.port = port; self.webRoot = webRoot }
 
@@ -169,6 +170,10 @@ final class Server {
                 ["id": $0.id, "name": $0.name, "available": $0.installedURL() != nil]
             }
             respond(connection, status: 200, json: ["accessibility": AXIsProcessTrusted(), "targets": targetPayload])
+        } else if method == "GET" && path.hasPrefix("/api/icon?") {
+            let components = URLComponents(string: "http://voice-deck.local\(path)")
+            let targetId = components?.queryItems?.first(where: { $0.name == "id" })?.value ?? ""
+            serveIcon(targetId, connection: connection)
         } else if method == "POST" && path == "/api/activate" {
             guard let command = try? JSONDecoder().decode(ActivateCommand.self, from: Data(body.utf8)) else {
                 respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
@@ -202,6 +207,31 @@ final class Server {
         guard let data = try? Data(contentsOf: url) else { respond(connection, status: 404, json: ["error": "页面资源不存在。"]); return }
         let type = name.hasSuffix(".css") ? "text/css; charset=utf-8" : name.hasSuffix(".js") ? "application/javascript; charset=utf-8" : "text/html; charset=utf-8"
         respond(connection, status: 200, data: data, contentType: type)
+    }
+
+    private func serveIcon(_ targetId: String, connection: NWConnection) {
+        if let cached = iconCache[targetId] {
+            respond(connection, status: 200, data: cached, contentType: "image/png"); return
+        }
+        guard let target = targets.first(where: { $0.id == targetId }),
+              let url = target.installedURL(),
+              let source = NSWorkspace.shared.icon(forFile: url.path).cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let context = CGContext(data: nil, width: 128, height: 128, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            respond(connection, status: 404, json: ["error": "图标不可用。"]); return
+        }
+        context.interpolationQuality = .high
+        context.draw(source, in: CGRect(x: 0, y: 0, width: 128, height: 128))
+        guard let resized = context.makeImage() else {
+            respond(connection, status: 404, json: ["error": "图标不可用。"]); return
+        }
+        let bitmap = NSBitmapImageRep(cgImage: resized)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else {
+            respond(connection, status: 404, json: ["error": "图标不可用。"]); return
+        }
+        iconCache[targetId] = png
+        respond(connection, status: 200, data: png, contentType: "image/png")
     }
 
     private func respond(_ connection: NWConnection, status: Int, json: Any) {
