@@ -67,10 +67,13 @@ function markSelected() {
     element.tabIndex = isSelected ? 0 : -1;   // Tab 下次进来落在选中项上
   });
   const front = targets.find(item => item.id === selected);
-  // 发送按钮必须把目标带上：用户要知道这段字会打进哪个窗口；没选就明说。
+  // 没有目标时按钮置灰并明说：点了也不会有去向。
+  const hasTarget = Boolean(front) || selected === FRONTMOST_ID;
+  sendEl.disabled = !hasTarget;
+  sendEl.classList.toggle('no-target', !hasTarget);
   padTarget.textContent = front ? front.name : (selected === FRONTMOST_ID ? '当前前台' : '未选择');
   sendEl.textContent = front ? `发送到 ${front.name}`
-    : selected === FRONTMOST_ID ? '发送到当前前台' : '先选择应用';
+    : selected === FRONTMOST_ID ? '发送到当前前台' : '请先选择应用';
 }
 
 /* ---------- 选中与唤醒 ---------- */
@@ -718,6 +721,17 @@ async function boot() {
     connectionEl.textContent = status.accessibility ? '已就绪' : '需授权';
     connectionEl.classList.toggle('ready', status.accessibility);
     if (!status.accessibility) message('请先在电脑端控制台完成授权，页面仍可输入。', true);
+    // 刷新后立即对齐一次选中态：Mac 前台命中 Dock 目标就选它，否则进入"当前前台"伪目标，
+    // 保证底部"发送到 X"与 Dock 高亮始终反映真实状态，而不是上次会话的残留默认值。
+    const frontId = status.frontmostId;
+    if (frontId && targets.some(item => item.id === frontId)) {
+      selected = frontId;
+      lastSeenFront = frontId;
+    } else if (status.frontmostName) {
+      selected = FRONTMOST_ID;
+      lastSeenFront = status.frontmostName;
+    }
+    markSelected();
     startHeartbeat();
   } catch {
     connectionEl.textContent = '未连接';
@@ -726,9 +740,9 @@ async function boot() {
 }
 
 async function send() {
-  if (sendEl.disabled) return; // 发送进行中忽略重复触发（回车与点击并发时）
+  if (sendEl.disabled) return; // 发送进行中或未选目标（回车快捷键路径）
   if (!selected) {
-    message('先在上方 Dock 选择一个目标应用。', true);
+    message('请先在上方 Dock 选择一个目标应用。', true);
     return;
   }
   const text = textEl.value.trim();

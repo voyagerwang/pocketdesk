@@ -1,0 +1,292 @@
+/**
+ * [INPUT]: 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace 与 Foundation 的 JSON 编解码；消费 Models 的请求体类型、TargetStore 配置、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
+ * [OUTPUT]: 对外提供 Server（HTTP :46387 全部端点：状态/二维码/配对心跳/应用搜索/图标/目标与快捷键管理/激活/发送/图片预上传/快捷键触发、静态页面服务）。
+ * [POS]: Sources 的传输层；只翻译协议不做系统调用，与 WSServer（触控板通道）平行为一对传输兄弟。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+import AppKit
+import Foundation
+import Network
+
+final class Server {
+    private let port: UInt16
+    private let webRoot: URL
+    private let executor: InputExecutor
+    private let store: TargetStore
+    private let queue = DispatchQueue(label: "dev.voicedeck.server")
+    private var listener: NWListener?
+    private var iconCache: [String: Data] = [:]
+    private var phoneLastSeen: TimeInterval = 0
+    // 图片走 base64 JSON 体，2MB 远远不够；放宽到 12MB（客户端已把图压到 2048px JPEG）。
+    private let maxBodyBytes = 12 * 1024 * 1024
+
+    init(port: UInt16, webRoot: URL, store: TargetStore) {
+        self.port = port
+        self.webRoot = webRoot
+        self.store = store
+        self.executor = InputExecutor(store: store)
+    }
+
+    func start() throws {
+        let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port)!)
+        // 在局域网服务浏览器中以独立身份出现，不借用 Workbench 等其他本机服务。
+        listener.service = NWListener.Service(name: "PocketDesk", type: "_http._tcp")
+        listener.newConnectionHandler = { [weak self] in self?.accept($0) }
+        listener.stateUpdateHandler = { state in
+            if case let .failed(error) = state { fputs("服务器失败：\(error)\n", stderr) }
+        }
+        self.listener = listener
+        listener.start(queue: queue)
+    }
+
+    private func accept(_ connection: NWConnection) {
+        connection.start(queue: queue)
+        receiveRequest(connection, buffer: [])
+    }
+
+    // 完整读取请求头与 Content-Length 声明的请求体（图标上传的 base64 体可达数百 KB）。
+    private func receiveRequest(_ connection: NWConnection, buffer: [UInt8]) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 262_144) { [weak self] data, _, isComplete, error in
+            guard let self, error == nil else { connection.cancel(); return }
+            var buffer = buffer
+            if let data { buffer.append(contentsOf: data) }
+            guard let headerEnd = buffer.firstRange(of: Array("\r\n\r\n".utf8)) else {
+                if isComplete || buffer.count > 65_536 { connection.cancel() } else { self.receiveRequest(connection, buffer: buffer) }
+                return
+            }
+            let headerText = String(decoding: buffer[0..<headerEnd.lowerBound], as: UTF8.self)
+            let contentLength = Self.contentLength(of: headerText)
+            if contentLength > self.maxBodyBytes { self.respond(connection, status: 413, json: ["error": "请求体过大。"]); return }
+            let total = headerEnd.upperBound + contentLength
+            if buffer.count < total {
+                if isComplete { connection.cancel() } else { self.receiveRequest(connection, buffer: buffer) }
+                return
+            }
+            let body = Array(buffer[headerEnd.upperBound..<total])
+            self.route(headerText: headerText, body: body, connection: connection)
+        }
+    }
+
+    private static func contentLength(of headerText: String) -> Int {
+        headerText.components(separatedBy: "\r\n")
+            .first { $0.lowercased().hasPrefix("content-length:") }
+            .flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) } ?? 0
+    }
+
+    private static func queryValue(_ name: String, in path: String) -> String? {
+        URLComponents(string: "http://voice-deck.local\(path)")?
+            .queryItems?.first(where: { $0.name == name })?.value
+    }
+
+    private func route(headerText: String, body: [UInt8], connection: NWConnection) {
+        let requestLine = headerText.components(separatedBy: "\r\n").first ?? ""
+        let parts = requestLine.split(separator: " ")
+        let method = parts.first.map(String.init) ?? ""
+        let rawPath = parts.dropFirst().first.map(String.init) ?? "/"
+        let path = rawPath.components(separatedBy: "?").first ?? rawPath
+        let bodyData = Data(body)
+
+        switch (method, path) {
+        case ("GET", "/api/status"):
+            let stableURL = Util.stableURL(port)
+            let lanIP = Util.primaryLANAddress()
+            // 前台应用若命中某个已配置目标，手机端选中态会跟随它；未命中则把 frontmostName
+            // 交给手机端做"注入当前前台"的伪目标（不切换应用）。
+            let frontmost = NSWorkspace.shared.frontmostApplication
+            let frontmostId = frontmost.flatMap { app in
+                store.targets.first { config in
+                    (config.bundleID != nil && app.bundleIdentifier == config.bundleID)
+                        || (config.path != nil && app.bundleURL?.path == config.path)
+                }?.id
+            }
+            let payload: [String: Any] = [
+                "accessibility": AXIsProcessTrusted(),
+                "platform": "macOS",
+                "phoneLastSeen": Int(phoneLastSeen),
+                "lanURL": (stableURL ?? lanIP.map { "http://\($0):\(port)" }) as Any?,
+                "ipURL": lanIP.map { "http://\($0):\(port)" } as Any?,
+                "hostName": Util.stableHost() ?? "",
+                "frontmostId": frontmostId as Any?,
+                "frontmostName": frontmost?.localizedName as Any?,
+                "targets": store.targets.map { config in
+                    ["id": config.id, "name": config.name, "available": store.appURL(config) != nil,
+                     "bundleID": config.bundleID as Any?, "path": config.path as Any?]
+                },
+                "shortcuts": store.shortcuts.map { shortcut in
+                    ["id": shortcut.id, "label": shortcut.label,
+                     "modifiers": shortcut.modifiers, "keycode": shortcut.keycode]
+                },
+            ]
+            respond(connection, status: 200, json: payload)
+        case ("GET", "/console"), ("GET", "/console.html"):
+            serveFile("console.html", connection: connection)
+        case ("GET", "/api/qr"):
+            // type=ip 生成局域网 IP 地址版二维码；默认生成 .local 主机名版（iOS 可保存为永久地址，
+            // 但安卓 Chrome 不解析 mDNS，需用 IP 版）。
+            let lanIP = Util.primaryLANAddress()
+            let target: String?
+            if Self.queryValue("type", in: rawPath) == "ip" {
+                target = lanIP.map { "http://\($0):\(port)" }
+            } else {
+                target = Util.stableURL(port) ?? lanIP.map { "http://\($0):\(port)" }
+            }
+            guard let url = target, let png = Util.qrPNG(url) else {
+                respond(connection, status: 503, json: ["error": "未找到局域网地址，无法生成二维码。"]); return
+            }
+            respond(connection, status: 200, data: png, contentType: "image/png")
+        case ("POST", "/api/pair"):
+            phoneLastSeen = Date().timeIntervalSince1970
+            respond(connection, status: 200, json: ["ok": true])
+        case ("POST", "/api/open-accessibility"):
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+            respond(connection, status: 200, json: ["ok": true])
+        case ("GET", "/api/apps"):
+            let query = Self.queryValue("q", in: rawPath) ?? ""
+            respond(connection, status: 200, json: ["apps": AppDiscovery.search(query)])
+        case ("GET", "/api/app-icon"):
+            guard let filePath = Self.queryValue("path", in: rawPath),
+                  filePath.hasPrefix("/"), filePath.hasSuffix(".app"),
+                  FileManager.default.fileExists(atPath: filePath) else {
+                respond(connection, status: 404, json: ["error": "图标不可用。"]); return
+            }
+            let key = "path:" + filePath
+            if let cached = iconCache[key] { respond(connection, status: 200, data: cached, contentType: "image/png"); return }
+            guard let png = Util.appIconPNG(forFile: filePath) else {
+                respond(connection, status: 404, json: ["error": "图标不可用。"]); return
+            }
+            iconCache[key] = png
+            respond(connection, status: 200, data: png, contentType: "image/png")
+        case ("POST", "/api/targets"):
+            guard let list = try? JSONDecoder().decode([TargetConfig].self, from: bodyData) else {
+                respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
+            }
+            var seen = Set<String>()
+            let cleaned = list.prefix(24).map { entry -> TargetConfig in
+                var config = entry
+                if config.id.isEmpty || seen.contains(config.id) { config.id = AppDiscovery.makeID(forName: config.name, existing: store.targets) }
+                seen.insert(config.id)
+                return config
+            }
+            store.save(cleaned)
+            iconCache = [:]
+            respond(connection, status: 200, json: ["ok": true])
+        case ("POST", "/api/target-icon"):
+            guard let upload = try? JSONDecoder().decode(IconUpload.self, from: bodyData),
+                  let png = Data(base64Encoded: upload.data), png.count <= 512_000,
+                  store.resolve(upload.id) != nil else {
+                respond(connection, status: 400, json: ["error": "图标数据无效。"]); return
+            }
+            try? FileManager.default.createDirectory(at: TargetStore.iconDirectory, withIntermediateDirectories: true)
+            try? png.write(to: store.customIconURL(upload.id), options: .atomic)
+            iconCache = [:]
+            respond(connection, status: 200, json: ["ok": true])
+        case ("GET", "/api/icon"):
+            let targetId = Self.queryValue("id", in: rawPath) ?? ""
+            serveIcon(targetId, connection: connection)
+        case ("POST", "/api/activate"):
+            guard let command = try? JSONDecoder().decode(ActivateCommand.self, from: bodyData) else {
+                respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
+            }
+            executor.activate(command.targetId) { result in
+                switch result {
+                case .success: self.respond(connection, status: 200, json: ["ok": true])
+                case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
+                }
+            }
+        case ("POST", "/api/send"):
+            guard let command = try? JSONDecoder().decode(SendCommand.self, from: bodyData) else {
+                respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
+            }
+            executor.send(command) { result in
+                switch result {
+                case .success: self.respond(connection, status: 200, json: ["ok": true])
+                case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
+                }
+            }
+        case ("POST", "/api/shortcuts"):
+            // 与 /api/targets 同样的清洗策略：数量上限 + id 去重补齐。
+            guard let list = try? JSONDecoder().decode([ShortcutConfig].self, from: bodyData) else {
+                respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
+            }
+            var seen = Set<String>()
+            let cleaned = list.prefix(12).map { entry -> ShortcutConfig in
+                var shortcut = entry
+                let base = shortcut.id.isEmpty ? "shortcut" : shortcut.id
+                if seen.contains(base) || shortcut.id.isEmpty { shortcut.id = base + "-\(seen.count + 1)" }
+                shortcut.label = String(shortcut.label.prefix(6))
+                seen.insert(shortcut.id)
+                return shortcut
+            }
+            store.saveShortcuts(cleaned)
+            respond(connection, status: 200, json: ["ok": true])
+        case ("POST", "/api/image"):
+            // 手机选图后立即预上传：先传图、后发文字，发送请求体保持轻量。
+            guard let upload = try? JSONDecoder().decode(PendingImage.self, from: bodyData),
+                  let png = Data(base64Encoded: upload.data) else {
+                respond(connection, status: 400, json: ["error": "图片数据无效。"]); return
+            }
+            executor.stageImage(png) { result in
+                switch result {
+                case .success: self.respond(connection, status: 200, json: ["ok": true])
+                case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
+                }
+            }
+        case ("POST", "/api/shortcut-trigger"):
+            guard let shortcut = try? JSONDecoder().decode(ShortcutConfig.self, from: bodyData) else {
+                respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
+            }
+            // 以手机存储的配置为准回查一次；查不到就用上报内容原样执行（服务端重启后手机列表是旧数据的场景）。
+            let resolved = store.shortcuts.first { $0.id == shortcut.id } ?? shortcut
+            executor.triggerShortcut(resolved) { result in
+                switch result {
+                case .success: self.respond(connection, status: 200, json: ["ok": true])
+                case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
+                }
+            }
+        case ("GET", "/"), ("GET", "/index.html"):
+            serveFile("index.html", connection: connection)
+        case ("GET", "/app.js"), ("GET", "/style.css"):
+            serveFile(String(path.dropFirst()), connection: connection)
+        default:
+            respond(connection, status: 404, json: ["error": "未找到资源。"])
+        }
+    }
+
+    private func serveFile(_ name: String, connection: NWConnection) {
+        let url = webRoot.appendingPathComponent(name)
+        guard let data = try? Data(contentsOf: url) else { respond(connection, status: 404, json: ["error": "页面资源不存在。"]); return }
+        let type = name.hasSuffix(".css") ? "text/css; charset=utf-8" : name.hasSuffix(".js") ? "application/javascript; charset=utf-8" : "text/html; charset=utf-8"
+        respond(connection, status: 200, data: data, contentType: type)
+    }
+
+    private func serveIcon(_ targetId: String, connection: NWConnection) {
+        if let cached = iconCache["id:" + targetId] {
+            respond(connection, status: 200, data: cached, contentType: "image/png"); return
+        }
+        let customURL = store.customIconURL(targetId)
+        let sourcePath: String?
+        if FileManager.default.fileExists(atPath: customURL.path), let data = try? Data(contentsOf: customURL) {
+            iconCache["id:" + targetId] = data
+            respond(connection, status: 200, data: data, contentType: "image/png"); return
+        }
+        if let config = store.resolve(targetId), let url = store.appURL(config) { sourcePath = url.path } else { sourcePath = nil }
+        guard let path = sourcePath, let png = Util.appIconPNG(forFile: path) else {
+            respond(connection, status: 404, json: ["error": "图标不可用。"]); return
+        }
+        iconCache["id:" + targetId] = png
+        respond(connection, status: 200, data: png, contentType: "image/png")
+    }
+
+    private func respond(_ connection: NWConnection, status: Int, json: Any) {
+        let data = (try? JSONSerialization.data(withJSONObject: json)) ?? Data("{}".utf8)
+        respond(connection, status: status, data: data, contentType: "application/json; charset=utf-8")
+    }
+
+    private func respond(_ connection: NWConnection, status: Int, data: Data, contentType: String) {
+        let reason = status == 200 ? "OK" : status == 400 ? "Bad Request" : status == 404 ? "Not Found" : status == 413 ? "Payload Too Large" : status == 503 ? "Service Unavailable" : "Unprocessable Entity"
+        let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(contentType)\r\nContent-Length: \(data.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+        connection.send(content: Data(header.utf8) + data, completion: .contentProcessed { _ in connection.cancel() })
+    }
+}

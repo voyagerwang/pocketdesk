@@ -333,6 +333,17 @@ textarea:focus {
   cursor: wait;
 }
 
+/* 未选择目标：整体置灰去交互感，与"发送中"的半透明区分。 */
+#send.no-target {
+  background: var(--fg-faint);
+  cursor: not-allowed;
+}
+
+#send.no-target:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+}
+
 #message {
   min-height: 20px;
   margin: 0;
