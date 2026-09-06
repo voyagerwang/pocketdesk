@@ -85,10 +85,11 @@ final class TargetStore {
         }
     }
 
-    // MARK: 主题（Muji ↔ classic；电脑端控制台是唯一控制点，手机页经 /api/status 跟随）
+    // MARK: 主题（classic ↔ muji；电脑端控制台是唯一控制点，手机页经 /api/status 跟随）
     static let themeFile = supportDirectory.appendingPathComponent("theme")
 
-    private(set) var theme: String = "muji"
+    // 默认经典蓝：Muji 作为可选的克制主题保留。
+    private(set) var theme: String = "classic"
 
     func loadTheme() {
         if let saved = try? String(contentsOf: TargetStore.themeFile, encoding: .utf8) {

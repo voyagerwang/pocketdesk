@@ -446,24 +446,63 @@ main.pad-mode .compose textarea {
   outline-offset: 2px;
 }
 
-/* 右缘滚动区提示：单指在此上下滑 = 滚动；只在展开态显示，收起条保持干净。 */
+/* 右缘滚动区：Muji「刻度尺」意象——不画白框，画一条纸面量尺。
+   墨点刻度平时极淡（28% 墨、上下渐隐），滚动时整列染成赭红；
+   刻度尺顶底各有一道短横线收边（量尺的"起点/终点"），由 ::before 表达。 */
 #pad::after {
+  content: "";
+  position: absolute;
+  top: var(--s-4);
+  bottom: var(--s-4);
+  right: var(--s-2);
+  width: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease), background-image 240ms var(--ease);
+  background-image: radial-gradient(circle, var(--fg) 1.2px, transparent 1.6px);
+  background-size: 12px 14px;
+  background-repeat: repeat-y;
+  background-position: center;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 30%, rgb(0 0 0 / 35%) 70%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 30%, rgb(0 0 0 / 35%) 70%, transparent 100%);
+}
+
+/* 量尺收边：顶底两道 8px 短横线，像尺子的首末刻度，静止时常驻。 */
+#pad::before {
   content: "";
   position: absolute;
   top: var(--s-2);
   bottom: var(--s-2);
   right: var(--s-2);
-  width: 44px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-field);
-  background: var(--surface-1);
+  width: 12px;
   pointer-events: none;
   opacity: 0;
   transition: opacity var(--dur) var(--ease);
+  background:
+    linear-gradient(var(--fg) 0 0) top / 8px 1.5px no-repeat,
+    linear-gradient(var(--fg) 0 0) bottom / 8px 1.5px no-repeat;
 }
 
 main.pad-mode #pad::after {
-  opacity: 1;
+  opacity: 0.28;
+}
+
+main.pad-mode #pad::before {
+  opacity: 0.45;
+}
+
+/* 滚动进行中：刻度染墨（赭红）、收边线也染墨——手势有了"着墨"的反馈。 */
+#pad.pad-scrolling::after,
+main.pad-mode #pad.pad-scrolling::after {
+  opacity: 0.9;
+  background-image: radial-gradient(circle, var(--accent) 1.2px, transparent 1.6px);
+}
+
+#pad.pad-scrolling::before {
+  opacity: 0.9;
+  background:
+    linear-gradient(var(--accent) 0 0) top / 8px 1.5px no-repeat,
+    linear-gradient(var(--accent) 0 0) bottom / 8px 1.5px no-repeat;
 }
 
 .pad-badge {
@@ -930,32 +969,5 @@ main.pad-mode .pad-title,
 :root[data-theme="classic"] .pad-tuning input[type="range"]::-webkit-slider-thumb {
   border: 0;
   box-shadow: var(--glow-thumb);
-}
-
-/* 主题切换按钮：固定在页脚右下，不抢主内容焦点。 */
-.theme-toggle {
-  position: fixed;
-  right: calc(var(--s-4) + env(safe-area-inset-right));
-  bottom: calc(var(--s-4) + env(safe-area-inset-bottom));
-  z-index: 10;
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  background: var(--surface-1);
-  color: var(--fg-muted);
-  font-size: 13px;
-  font-weight: 600;
-  box-shadow: var(--shadow-tile);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
-}
-
-.theme-toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 

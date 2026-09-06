@@ -592,7 +592,10 @@ pad.addEventListener('pointermove', event => {
     if (dt > 0) point.vy = point.vy * 0.65 + (dy / dt) * 0.35;
     point.lastT = nowT;
     if (gesture === 'pending') { gesture = 'scroll'; clearTimeout(holdTimer); }
-    if (gesture === 'scroll') queuePad({ t: 'scroll', dx: 0, dy: dy * scrollFactor() });
+    if (gesture === 'scroll') {
+      pad.classList.add('pad-scrolling'); // 右缘刻度墨点点亮
+      queuePad({ t: 'scroll', dx: 0, dy: dy * scrollFactor() });
+    }
     return;
   }
 
@@ -631,6 +634,7 @@ pad.addEventListener('pointermove', event => {
       // 指间距变化为主：捏合缩放（Cmd+滚轮）。
       queuePad({ t: 'zoom', delta: scale * 2 });
     } else {
+      pad.classList.add('pad-scrolling'); // 双指滚动同样点亮刻度墨点
       queuePad({ t: 'scroll', dx: tx * scrollFactor(), dy: ty * scrollFactor() });
     }
     twoInfo = { mx, my, dist, t: performance.now() };
@@ -644,7 +648,7 @@ function padLift(event) {
 
   if (pointers.size === 0) {
     clearTimeout(holdTimer);
-    pad.classList.remove('pad-active', 'pad-drag');
+    pad.classList.remove('pad-active', 'pad-drag', 'pad-scrolling'); // 墨点随松手熄灭
     if (dragArmed) {
       queuePad({ t: 'up' });
       dragArmed = false;
