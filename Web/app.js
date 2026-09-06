@@ -17,7 +17,8 @@ function renderTargets(targets) {
   targets.forEach(target => {
     const button = document.createElement('button'); button.type = 'button'; button.className = `target${target.id === selected ? ' selected' : ''}`;
     button.setAttribute('role', 'radio'); button.setAttribute('aria-checked', String(target.id === selected));
-    button.innerHTML = `${target.name}<small>${target.id === 'feishu' ? 'Feishu / Lark' : '打开后输入'}</small>`;
+    const detail = target.available ? (target.id === 'feishu' ? 'Feishu / Lark' : '打开后输入') : '当前未检测到';
+    button.innerHTML = `${target.name}<small>${detail}</small>`;
     button.onclick = () => { selected = target.id; renderTargets(targets); };
     targetsEl.append(button);
   });

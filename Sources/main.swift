@@ -19,14 +19,38 @@ enum InputError: Error { case message(String) }
 struct Target: Encodable {
     let id: String
     let name: String
+    let bundleIdentifiers: [String]
+    let applicationNames: [String]
     let paths: [String]
+
+    func installedURL() -> URL? {
+        let normalizedNames = Set(applicationNames.map { $0.lowercased() })
+        if let namedRunningURL = NSWorkspace.shared.runningApplications.first(where: {
+            guard let name = $0.localizedName?.lowercased() else { return false }
+            return normalizedNames.contains(name)
+        })?.bundleURL {
+            return namedRunningURL
+        }
+        for bundleIdentifier in bundleIdentifiers {
+            if let runningURL = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first?.bundleURL {
+                return runningURL
+            }
+            if let registeredURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) {
+                return registeredURL
+            }
+        }
+        return paths.map { URL(fileURLWithPath: $0) }
+            .first(where: { FileManager.default.fileExists(atPath: $0.path) })
+    }
 }
 
 let targets = [
-    Target(id: "codex", name: "Codex", paths: ["/Applications/Codex.app"]),
-    Target(id: "chatgpt", name: "ChatGPT", paths: ["/Applications/ChatGPT.app"]),
-    Target(id: "feishu", name: "飞书", paths: ["/Applications/Feishu.app", "/Applications/Lark.app"]),
-    Target(id: "chrome", name: "Chrome", paths: ["/Applications/Google Chrome.app"])
+    Target(id: "codex", name: "Codex", bundleIdentifiers: ["com.openai.codex"], applicationNames: ["Codex", "ChatGPT"], paths: ["/Applications/Codex.app", "/Applications/ChatGPT.app"]),
+    Target(id: "chatgpt", name: "ChatGPT", bundleIdentifiers: ["com.openai.chat", "com.openai.codex"], applicationNames: ["ChatGPT", "Codex"], paths: ["/Applications/ChatGPT.app"]),
+    Target(id: "feishu", name: "飞书", bundleIdentifiers: ["com.electron.lark", "com.bytedance.Feishu", "com.larksuite.suite"], applicationNames: ["飞书", "Feishu", "Lark"], paths: ["/Applications/Feishu.app", "/Applications/Lark.app"]),
+    Target(id: "chrome", name: "Chrome", bundleIdentifiers: ["com.google.Chrome"], applicationNames: ["Google Chrome", "Chrome"], paths: ["/Applications/Google Chrome.app"]),
+    Target(id: "zcode", name: "ZCode", bundleIdentifiers: ["dev.zcode.app"], applicationNames: ["ZCode"], paths: ["/Applications/ZCode.app"]),
+    Target(id: "workbody", name: "Workbody", bundleIdentifiers: [], applicationNames: ["Workbody", "WorkBody"], paths: ["/Applications/Workbody.app", "/Applications/WorkBody.app"])
 ]
 
 final class InputExecutor {
@@ -46,9 +70,8 @@ final class InputExecutor {
             guard let target = targets.first(where: { $0.id == command.targetId }) else {
                 completion(.failure(.message("未找到目标应用。请确认它已安装在 /Applications。"))); return
             }
-            let candidateURLs = target.paths.map { URL(fileURLWithPath: $0) }
-            guard let url = candidateURLs.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
-                completion(.failure(.message("未找到目标应用。请确认它已安装在 /Applications。"))); return
+            guard let url = target.installedURL() else {
+                completion(.failure(.message("未找到 \(target.name)。请确认应用已安装或正在运行。"))); return
             }
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.activates = true
@@ -121,7 +144,9 @@ final class Server {
         let path = parts.dropFirst().first.map(String.init) ?? "/"
         let body = raw.components(separatedBy: "\r\n\r\n").dropFirst().joined(separator: "\r\n\r\n")
         if method == "GET" && path == "/api/status" {
-            let targetPayload: [[String: Any]] = targets.map { ["id": $0.id, "name": $0.name] }
+            let targetPayload: [[String: Any]] = targets.map {
+                ["id": $0.id, "name": $0.name, "available": $0.installedURL() != nil]
+            }
             respond(connection, status: 200, json: ["accessibility": AXIsProcessTrusted(), "targets": targetPayload])
         } else if method == "POST" && path == "/api/send" {
             guard let command = try? JSONDecoder().decode(SendCommand.self, from: Data(body.utf8)) else {
