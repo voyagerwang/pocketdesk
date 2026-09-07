@@ -39,6 +39,14 @@ struct ShortcutConfig: Codable, Equatable {
     var id: String
     var label: String
     var hotkey: String
+    // 语义动作 id（如 "system.lock"）。非空时优先于 hotkey：hotkey 只是当前平台的展示/回退值，
+    // 实际按键由 ShortcutAction 按平台展开。旧存档无此字段时解码为 nil，行为不变。
+    var action: String?
+
+    // 实际要发的按键串：动作项按当前平台展开，普通项用录制值。
+    var effectiveHotkey: String {
+        action.flatMap(ShortcutAction.find)?.hotkey(.current) ?? hotkey
+    }
 
     // 历史版本 id 按序号生成，存在撞车（两条 shortcut-4 导致触发永远命中第一条）。
     static func dedupeIds(_ list: [ShortcutConfig]) -> [ShortcutConfig] {
@@ -71,6 +79,8 @@ enum ShortcutKeys {
         "shift": .maskShift,
         "option": .maskAlternate, "opt": .maskAlternate, "alt": .maskAlternate,
         "control": .maskControl, "ctrl": .maskControl,
+        // Windows 的 GUI 键：Mac 键盘发往 Windows 时 Cmd 位置即对应 Win，故归一到同一 flag。
+        "win": .maskCommand, "super": .maskCommand,
     ]
     static let keyMap: [String: CGKeyCode] = [
         "up": 126, "down": 125, "left": 123, "right": 124,

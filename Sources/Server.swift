@@ -162,14 +162,24 @@ final class Server {
                         "bundleID": config.bundleID as Any?, "path": config.path as Any?,
                     ]
                     if let shortcuts = config.shortcuts, !shortcuts.isEmpty {
-                        entry["shortcuts"] = shortcuts.map { ["id": $0.id, "label": $0.label, "hotkey": $0.hotkey] }
+                        entry["shortcuts"] = shortcuts.map { sc -> [String: Any] in
+                            var item: [String: Any] = ["id": sc.id, "label": sc.label, "hotkey": sc.hotkey]
+                            if let action = sc.action { item["action"] = action }
+                            return item
+                        }
                     }
                     if let panel = config.openPanel { entry["openPanel"] = panel }
                     if let showGlobal = config.showGlobal { entry["showGlobal"] = showGlobal }
                     return entry
                 },
-                "shortcuts": store.shortcuts.map { shortcut in
-                    ["id": shortcut.id, "label": shortcut.label, "hotkey": shortcut.hotkey]
+                "shortcuts": store.shortcuts.map { shortcut -> [String: Any] in
+                    var item: [String: Any] = ["id": shortcut.id, "label": shortcut.label, "hotkey": shortcut.hotkey]
+                    if let action = shortcut.action { item["action"] = action }
+                    return item
+                },
+                // 预设动作目录：录不到的系统/应用操作，控制台据此渲染"点选即添加"的按钮。
+                "actions": ShortcutAction.allCases.map { action in
+                    ["id": action.rawValue, "label": action.label, "hotkey": action.hotkey(.current)]
                 },
             ]
             respond(connection, status: 200, json: payload)
@@ -239,8 +249,7 @@ final class Server {
                 if let shortcuts = config.shortcuts {
                     var seenSC = Set<String>()
                     config.shortcuts = shortcuts.prefix(12).compactMap { sc -> ShortcutConfig? in
-                        guard ShortcutKeys.resolve(sc.hotkey) != nil else { return nil }
-                        var next = sc
+                        guard var next = sc.normalized() else { return nil }
                         if next.id.isEmpty || seenSC.contains(next.id) { next.id = UUID().uuidString }
                         next.label = String(next.label.prefix(7))
                         seenSC.insert(next.id)
@@ -293,8 +302,7 @@ final class Server {
             }
             var seen = Set<String>()
             let cleaned: [ShortcutConfig] = list.prefix(12).compactMap { entry in
-                guard ShortcutKeys.resolve(entry.hotkey) != nil else { return nil }
-                var shortcut = entry
+                guard var shortcut = entry.normalized() else { return nil }
                 if shortcut.id.isEmpty || seen.contains(shortcut.id) { shortcut.id = UUID().uuidString }
                 shortcut.label = String(shortcut.label.prefix(7))
                 seen.insert(shortcut.id)
@@ -361,7 +369,10 @@ final class Server {
     }
 
     private func respond(_ connection: NWConnection, status: Int, json: Any) {
-        let data = (try? JSONSerialization.data(withJSONObject: json)) ?? Data("{}".utf8)
+        // .sortedKeys：字典键序在 Swift 里是不确定的（每次序列化都可能不同）。客户端用
+        // JSON.stringify 比较目标/快捷键是否变化，键序抖动会被误判为"变了"→ 每拍重建 DOM →
+        // 图标因 no-store 重新下载，表现为图标周期性闪回首字。确定性输出是服务端的契约责任。
+        let data = (try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])) ?? Data("{}".utf8)
         respond(connection, status: status, data: data, contentType: "application/json; charset=utf-8")
     }
 
