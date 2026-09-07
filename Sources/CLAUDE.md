@@ -10,7 +10,7 @@ Util.swift: 无状态渲染工具层——主局域网 IP、macOS utun 上的 Ta
 Auth.swift: 鉴权层——配对 token 的首次生成（SecRandomCopyBytes 32 字节 base64url）、持久化到 Application Support/VoiceDeck/token、写请求 Bearer 校验与 WS 首帧校验（恒定时间比较）；Server 与 WSServer 共用。
 InputExecutor.swift: 键盘输入执行层，串行队列跑 activate → Unicode → 粘贴图片 → Return（文字先落入编辑器，避免附件挂载打断输入焦点） 注入序列，含图片预上传暂存与快捷键组合注入（hotkey 经 ShortcutKeys.resolve 解析后经 postKey 注入：真实 CGEventSource + characters 补齐 + down/up 间隔，Zed 终端按 characters 取键、无源合成事件的 Return 会被其丢弃）；与 PointerExecutor 平行。
 PointerExecutor.swift: 指针执行层，虚拟光标 + 双屏包围盒钳制，move/drag/click/scroll/zoom 手势到 CGEvent 的映射；仅被 WSServer 消费。
-Server.swift: HTTP 传输层 :46387，全部端点路由与静态页面服务，向控制台暴露局域网及 Tailscale 私网地址并生成带配对 token 的二维码；只翻译协议不做系统调用，写操作委托 InputExecutor；与 WSServer 平行。
+Server.swift: HTTP 传输层 :46387，全部端点路由与静态页面服务，向控制台暴露局域网及 Tailscale 私网地址并生成带配对 token 的二维码；只翻译协议不做系统调用，写操作委托 InputExecutor；/api/status 下发 targets 含 per-app shortcuts/openPanel、/api/targets 保存时对专属快捷键做 resolve 校验 + id 去重、openPanel 白名单清洗；与 WSServer 平行。
 WSServer.swift: 触控板传输层 :46388，WebSocket 监听、首帧 token 鉴权、会话重置与消息转发到 PointerExecutor。
 main.swift: 唯一入口与组装根，web 根定位、端口选择（VOICE_DECK_PORT）、辅助功能授权提示、双服务启动、AppDelegate 的 Dock 应用身份；不再含业务逻辑。
 

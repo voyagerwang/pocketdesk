@@ -157,8 +157,16 @@ final class Server {
                 "frontmostId": frontmostId as Any?,
                 "frontmostName": frontmost?.localizedName as Any?,
                 "targets": store.targets.map { config in
-                    ["id": config.id, "name": config.name, "available": store.appURL(config) != nil,
-                     "bundleID": config.bundleID as Any?, "path": config.path as Any?]
+                    var entry: [String: Any] = [
+                        "id": config.id, "name": config.name, "available": store.appURL(config) != nil,
+                        "bundleID": config.bundleID as Any?, "path": config.path as Any?,
+                    ]
+                    if let shortcuts = config.shortcuts, !shortcuts.isEmpty {
+                        entry["shortcuts"] = shortcuts.map { ["id": $0.id, "label": $0.label, "hotkey": $0.hotkey] }
+                    }
+                    if let panel = config.openPanel { entry["openPanel"] = panel }
+                    if let showGlobal = config.showGlobal { entry["showGlobal"] = showGlobal }
+                    return entry
                 },
                 "shortcuts": store.shortcuts.map { shortcut in
                     ["id": shortcut.id, "label": shortcut.label, "hotkey": shortcut.hotkey]
@@ -225,6 +233,21 @@ final class Server {
                 var config = entry
                 if config.id.isEmpty || seen.contains(config.id) { config.id = AppDiscovery.makeID(forName: config.name, existing: store.targets) }
                 seen.insert(config.id)
+                // openPanel 白名单：input/pad，其余清空回退默认。
+                if let panel = config.openPanel, panel != "input", panel != "pad" { config.openPanel = nil }
+                // 专属快捷键：每条必须可解析、id 去重（空/撞车补 UUID）、单应用 ≤12 条、label 截断。
+                if let shortcuts = config.shortcuts {
+                    var seenSC = Set<String>()
+                    config.shortcuts = shortcuts.prefix(12).compactMap { sc -> ShortcutConfig? in
+                        guard ShortcutKeys.resolve(sc.hotkey) != nil else { return nil }
+                        var next = sc
+                        if next.id.isEmpty || seenSC.contains(next.id) { next.id = UUID().uuidString }
+                        next.label = String(next.label.prefix(7))
+                        seenSC.insert(next.id)
+                        return next
+                    }
+                    if config.shortcuts?.isEmpty ?? false { config.shortcuts = nil }
+                }
                 return config
             }
             store.save(cleaned)

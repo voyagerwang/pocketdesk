@@ -1,7 +1,8 @@
 /**
  * [INPUT]: 依赖 Foundation 的 Codable 与 CoreGraphics 的 CGEventFlags/CGKeyCode。
  * [OUTPUT]: 对外提供传输与配置层的全部值类型：SendCommand/PendingImage/ActivateCommand/IconUpload
- *           请求体、ShortcutConfig/TargetConfig 配置实体、ShortcutKeys 语义串解析器（resolve 解析、canonicalize 别名归一、legacyHotkey 旧格式迁移）、
+ *           请求体、ShortcutConfig/TargetConfig 配置实体（TargetConfig 含按应用专属快捷键、默认打开面板、叠加全局组开关）、
+ *           ShortcutKeys 语义串解析器（resolve 解析、canonicalize 别名归一、legacyHotkey 旧格式迁移）、
  *           ShortcutError/InputError 错误类型。
  * [POS]: Sources 的协议层；Server 反序列化请求体、TargetStore 持久化配置、InputExecutor 消费命令，全部以此为词汇表。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -166,4 +167,12 @@ struct TargetConfig: Codable, Equatable {
     var name: String
     var bundleID: String?
     var path: String?
+    // 应用专属快捷键：非空时整组覆盖全局（手机端只展示这组，全局不显示）。
+    // nil/空 = 用全局组；保留默认三条让用户在应用里复用常见操作而无需重录。
+    var shortcuts: [ShortcutConfig]?
+    // 激活此应用时手机默认打开的面板："input" 输入框（默认）/ "pad" 触控板；nil = input。
+    var openPanel: String?
+    // 应用专属组启用时是否叠加全局组（手机端前排专属、后排全局）。
+    // nil/true = 叠加（默认，常用键改一处全应用受益）；false = 只显应用组。
+    var showGlobal: Bool?
 }
