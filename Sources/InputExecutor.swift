@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard 与 CoreGraphics 的 CGEvent；消费 Models 的 SendCommand/ShortcutConfig/InputError/ShortcutError/ShortcutKeys、TargetStore 的目标解析。
- * [OUTPUT]: 对外提供 InputExecutor（图片预上传暂存、应用激活、图文发送的 activate → Unicode → 粘贴图片 → Return 注入序列、快捷键组合注入）。
+ * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard 与 CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的 SendCommand/ShortcutConfig/InputError/ShortcutError/ShortcutKeys、TargetStore 的目标解析。
+ * [OUTPUT]: 对外提供 InputExecutor（图片预上传暂存、应用激活、图文发送的 activate → Unicode → 粘贴图片 → Return 注入序列、快捷键组合注入）；合成键盘事件统一经 postKey（真实 CGEventSource + characters 补齐 + down/up 间隔），解决 Zed 终端这类按 characters 取键的应用对合成 Return 的丢弃。
  * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -10,6 +10,9 @@ import Foundation
 
 final class InputExecutor {
     static let frontmostPseudoId = "__frontmost__"
+    // UU 远程特殊通道：UU 的键盘同步不吃合成 Unicode 事件（表现为只透传占位符），
+    // 但剪贴板是应用层双向同步的——发往 UU 的内容改走「写剪贴板 + Cmd+V + Return」。
+    static let uuRemoteId = "uu"
     private let queue = DispatchQueue(label: "dev.voicedeck.input")
     private let store: TargetStore
     // 手机预上传的待发图片；send(usePendingImage) 时取出消费。
@@ -67,6 +70,14 @@ final class InputExecutor {
         guard AXIsProcessTrusted() else {
             completion(.failure(.message("尚未授予“辅助功能”权限。请在控制台完成授权。"))); return
         }
+        // UU 远程特殊通道：写剪贴板 + Cmd+V（UU 剪贴板同步跨机）+ Return；不走 Unicode 注入。
+        if command.targetId == Self.uuRemoteId || isUUFrontmost() {
+            queue.asyncAfter(deadline: .now() + .milliseconds(450)) {
+                self.performUURemotePaste(text: command.text, imageData: imageData)
+                completion(.success(()))
+            }
+            return
+        }
         // 伪目标：不切换应用，直接注入当前前台（前台是非 Dock 应用时的发送路径）。
         if command.targetId == Self.frontmostPseudoId {
             queue.asyncAfter(deadline: .now() + .milliseconds(80)) {
@@ -83,6 +94,28 @@ final class InputExecutor {
                 completion(.success(()))
             }
         }
+    }
+
+    // 前台应用是不是 UU 远程（发往伪目标时的兜底判定）。
+    private func isUUFrontmost() -> Bool {
+        guard let front = NSWorkspace.shared.frontmostApplication else { return false }
+        return front.bundleIdentifier == "com.netease.uuremote"
+    }
+
+    // UU 通道注入序列：文字+图片都进剪贴板（图片优先，纯文字给纯文本），
+    // Cmd+V 由 UU 的剪贴板同步带跨机器，粘进远程电脑的输入框后 Return 提交。
+    private func performUURemotePaste(text: String, imageData: Data?) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        if let imageData, let image = NSImage(data: imageData) {
+            pasteboard.writeObjects([image])
+        } else {
+            pasteboard.setString(text, forType: .string)
+        }
+        usleep(120_000) // 剪贴板写入落定，给 UU 同步留个起跑信号
+        postKey(9, flags: .maskCommand) // Cmd+V
+        usleep(600_000) // 等远端粘贴落框
+        postKey(36) // Return
     }
 
     // 先在仍持有焦点的编辑器中输入文字，避免图片挂载期间的焦点变化吞掉文字。

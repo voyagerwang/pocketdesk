@@ -11,18 +11,18 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="theme-color" content="#f5f3ee">
+    <meta name="theme-color" content="#eef1f7">
     <title>PocketDesk</title>
-    <!-- 主题由电脑端控制台统一决定，手机页经 /api/status 跟随（boot 与心跳应用）；此处预读 localStorage 仅作上次已知值的闪烁缓解。 -->
+    <!-- 主题由电脑端控制台统一决定，手机页经 /api/status 跟随（boot 与心跳应用）；此处预读 localStorage 仅作上次已知值的闪烁缓解。约定与控制台一致：data-theme="muji" = 米白，无属性 = 经典蓝。 -->
     <script>
       (function () {
         try {
           var t = localStorage.getItem('voicedeck.last-theme');
-          if (t !== 'muji') document.documentElement.setAttribute('data-theme', 'classic');
-        } catch (e) { document.documentElement.setAttribute('data-theme', 'classic'); }
+          if (t === 'muji') document.documentElement.setAttribute('data-theme', 'muji');
+        } catch (e) { /* 无属性 = 经典蓝 */ }
       })();
     </script>
-    <link rel="stylesheet" href="/style.css?v=2.1.4">
+    <link rel="stylesheet" href="/style.css?v=2.2.1">
   </head>
   <body>
     <main>
@@ -87,6 +87,6 @@
       </section>
     </main>
 
-    <script src="/app.js?v=2.1.4"></script>
+    <script src="/app.js?v=2.2.1"></script>
   </body>
 </html>
