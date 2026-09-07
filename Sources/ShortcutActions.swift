@@ -23,6 +23,7 @@ enum ShortcutAction: String, CaseIterable {
     case lockScreen = "system.lock"
     case quitApp = "app.quit"
     case closeWindow = "window.close"
+    case hideApp = "app.hide"
     case switchApp = "app.switch"
 
     var label: String {
@@ -30,6 +31,7 @@ enum ShortcutAction: String, CaseIterable {
         case .lockScreen: return "锁屏"
         case .quitApp: return "退出应用"
         case .closeWindow: return "关闭窗口"
+        case .hideApp: return "隐藏应用"
         case .switchApp: return "切换应用"
         }
     }
@@ -45,6 +47,8 @@ enum ShortcutAction: String, CaseIterable {
         case (.quitApp, .windows): return "Alt+F4"
         case (.closeWindow, .macOS): return "Cmd+W"
         case (.closeWindow, .windows): return "Ctrl+W"
+        case (.hideApp, .macOS): return "Cmd+H"
+        case (.hideApp, .windows): return "Win+Down"   // Windows 无"隐藏"概念，最接近的是最小化当前窗口
         case (.switchApp, .macOS): return "Cmd+Tab"
         case (.switchApp, .windows): return "Alt+Tab"
         }
@@ -53,15 +57,19 @@ enum ShortcutAction: String, CaseIterable {
     static func find(_ id: String) -> ShortcutAction? { ShortcutAction(rawValue: id) }
 }
 
-// 投递通道。实测两条路都不通，才有这张表的必要：
+// 投递通道。实测三条路各有边界，才有这张表的必要：
 // 1) CGEvent 注入到不了系统快捷键守护进程（有辅助功能授权时发 Cmd+Space 仍弹不出 Spotlight）；
 // 2) 交给 System Events 代发要额外勾「自动化」授权（实测报"未获得授权将Apple事件发送给System Events"），
-//    让用户为锁屏再授权一次不值得。
-// 故系统级动作改为「直接调用系统能力」，应用内菜单键仍走 CGEvent（前台应用自己响应，可靠）。
+//    让用户为锁屏再授权一次不值得；
+// 3) 应用内菜单键并非所有应用都实现：实测微信在前台时注入 Cmd+W 毫无反应（官方快捷键表列了 Cmd+W，
+//    但主窗口不响应合成按键），故"关闭窗口"改为直接用辅助功能按窗口的关闭按钮。
+// 故系统级动作改为「直接调用系统能力」，窗口级动作走 AX，只有纯应用内菜单键才依赖 CGEvent。
 enum ActionDelivery {
-    case keyEvent          // CGEvent 注入前台应用：退出应用、关闭窗口
+    case keyEvent          // CGEvent 注入前台应用：退出应用
     case systemCommand     // 直接跑系统命令：锁屏（关屏 + 系统"需要密码"即等效锁）
     case switchPreviousApp // AppKit 按窗口 z-order 切到上一个应用，不碰系统快捷键
+    case axCloseWindow     // 辅助功能按前台窗口的关闭按钮；取不到按钮时回退 keyEvent（Cmd+W）
+    case hideFrontApp      // AppKit 隐藏前台应用：不经按键也不经 AX，任何应用都吃
 }
 
 extension ShortcutAction {
@@ -69,7 +77,9 @@ extension ShortcutAction {
         switch self {
         case .lockScreen: return .systemCommand
         case .switchApp: return .switchPreviousApp
-        case .quitApp, .closeWindow: return .keyEvent
+        case .closeWindow: return .axCloseWindow
+        case .hideApp: return .hideFrontApp
+        case .quitApp: return .keyEvent
         }
     }
 
