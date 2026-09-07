@@ -887,13 +887,14 @@ textEl.addEventListener('keydown', event => {
 /* ---------- 主题跟随：唯一控制点在电脑端控制台，手机页经 /api/status 只读跟随 ---------- */
 
 function applyTheme(name) {
-  if (name === 'classic') {
-    document.documentElement.setAttribute('data-theme', 'classic');
+  // 约定与控制台一致：data-theme="muji" = 米白克制风；无属性 = 经典蓝（服务端默认）。
+  if (name === 'muji') {
+    document.documentElement.setAttribute('data-theme', 'muji');
   } else {
     document.documentElement.removeAttribute('data-theme');
   }
   // 记住最近一次已知主题：下次刷新时 head 内联脚本先应用，避免闪回默认。
-  try { localStorage.setItem('voicedeck.last-theme', name === 'classic' ? 'classic' : 'muji'); } catch (e) { /* 无痕模式 */ }
+  try { localStorage.setItem('voicedeck.last-theme', name === 'muji' ? 'muji' : 'classic'); } catch (e) { /* 无痕模式 */ }
 }
 
 boot();

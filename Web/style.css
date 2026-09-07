@@ -1,7 +1,7 @@
 /*
  * [INPUT]: 依赖 index.html 的语义结构。
  * [OUTPUT]: PocketDesk 手机页样式。默认 Muji 主题（米白纸面 + 深炭字 + 赭红单一强调，去发光去渐变去毛玻璃，方正小圆角）；
- *           :root[data-theme="classic"] 覆盖令牌恢复原蓝色玻璃主题，两主题共用令牌名与选择器，切换零结构改动。
+ *           :root[data-theme="muji"] 覆盖令牌恢复原蓝色玻璃主题，两主题共用令牌名与选择器，切换零结构改动。
  * [POS]: Web 的唯一样式来源；颜色、间距、圆角、字号、动效只允许从这里取值。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -9,7 +9,7 @@
 :root {
   color-scheme: light;
 
-  /* 颜色：米白画布 + 纸面白表面 + 发丝线边框，赭红为唯一强调色。禁止游离色值。 */
+  /* 颜色：默认 classic 经典蓝令牌（:root）；muji 米白由 [data-theme="muji"] 覆盖块提供。禁止游离色值。 */
   --bg: #f5f3ee;
   --surface-1: #ffffff;
   --surface-2: #fbfaf7;
@@ -981,10 +981,10 @@ main.pad-mode .pad-title,
   opacity: 0;
 }
 
-/* ---------- 主题切换：classic 蓝色玻璃主题覆盖（默认 Muji） ---------- */
+/* ---------- 主题切换：muji 米白克制主题覆盖（默认 classic 经典蓝，与服务端默认一致） ---------- */
 
-/* classic 主题令牌覆盖：恢复原蓝色发光玻璃风格，仅覆盖 :root，其余规则通过令牌自动生效。 */
-:root[data-theme="classic"] {
+/* muji 主题令牌覆盖：切换到米白纸面克制风，仅覆盖 :root，其余规则通过令牌自动生效。 */
+:root[data-theme="muji"] {
   --bg: #eef1f7;
   --surface-1: rgb(255 255 255 / 80%);
   --surface-2: rgb(255 255 255 / 55%);
@@ -1014,44 +1014,44 @@ main.pad-mode .pad-title,
   --glass-blur: blur(22px) saturate(1.5);
 }
 
-/* classic 主题下的画布光晕（Muji 是纯米白底）。 */
-:root[data-theme="classic"] body {
+/* muji 主题下的画布：纯米白底（classic 默认带光晕）。 */
+:root[data-theme="muji"] body {
   background:
     radial-gradient(560px 320px at 85% -5%, rgb(59 130 246 / 18%), transparent 62%),
     radial-gradient(480px 320px at -10% 102%, rgb(99 102 241 / 12%), transparent 60%),
     var(--bg);
 }
 
-/* classic 主题恢复玻璃卡片与发光触控板；Muji 默认无这些。 */
-:root[data-theme="classic"] .compose,
-:root[data-theme="classic"] .pad-card {
+/* muji 主题关闭玻璃与发光（classic 默认开启）。 */
+:root[data-theme="muji"] .compose,
+:root[data-theme="muji"] .pad-card {
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow-tile);
 }
 
-:root[data-theme="classic"] #pad {
+:root[data-theme="muji"] #pad {
   background: var(--halo-pad), var(--surface-2);
   box-shadow: inset 0 1px 0 var(--inset-top);
 }
 
-:root[data-theme="classic"] #send {
+:root[data-theme="muji"] #send {
   box-shadow: inset 0 1px 0 var(--hairline-top);
 }
 
-:root[data-theme="classic"] .target.selected .target-icon {
+:root[data-theme="muji"] .target.selected .target-icon {
   filter: drop-shadow(var(--lift-tile));
 }
 
-:root[data-theme="classic"] .target-icon {
+:root[data-theme="muji"] .target-icon {
   border-width: 1.5px;
 }
 
-:root[data-theme="classic"] .pad-hint::before {
+:root[data-theme="muji"] .pad-hint::before {
   box-shadow: var(--glow-hint);
 }
 
-:root[data-theme="classic"] .pad-tuning input[type="range"]::-webkit-slider-thumb {
+:root[data-theme="muji"] .pad-tuning input[type="range"]::-webkit-slider-thumb {
   border: 0;
   box-shadow: var(--glow-thumb);
 }
