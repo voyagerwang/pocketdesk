@@ -9,35 +9,35 @@
 :root {
   color-scheme: light;
 
-  /* 颜色：默认 classic 经典蓝令牌（:root）；muji 米白由 [data-theme="muji"] 覆盖块提供。禁止游离色值。 */
-  --bg: #f5f3ee;
-  --surface-1: #ffffff;
-  --surface-2: #fbfaf7;
-  --surface-3: #efede7;
-  --field: #ffffff;
-  --border: rgb(26 26 26 / 10%);
-  --border-strong: rgb(26 26 26 / 22%);
-  --fg: #1a1a1a;
-  --fg-muted: #666666;
-  --fg-faint: #999999;
-  --accent: #b74127;
+  /* 颜色：默认 classic 经典蓝（与服务端默认一致）；muji 由 [data-theme="muji"] 覆盖。禁止游离色值。 */
+  --bg: #eef1f7;
+  --surface-1: rgb(255 255 255 / 80%);
+  --surface-2: rgb(255 255 255 / 55%);
+  --surface-3: #eef2fb;
+  --field: rgb(255 255 255 / 75%);
+  --border: rgb(15 30 68 / 10%);
+  --border-strong: rgb(15 30 68 / 24%);
+  --fg: #171c2c;
+  --fg-muted: #4a5266;
+  --fg-faint: #7d8494;
+  --accent: #1f6bff;
   --accent-ink: #ffffff;
-  --accent-soft: rgb(183 65 39 / 8%);
-  --accent-line: rgb(183 65 39 / 40%);
-  --danger: #b74127;
-  --shadow-tile: none;
+  --accent-soft: rgb(31 107 255 / 10%);
+  --accent-line: rgb(31 107 255 / 38%);
+  --danger: #cf2b36;
+  --shadow-tile: 0 1px 2px rgb(16 24 40 / 6%);
 
-  /* Muji 不用高光与发光；保留令牌名以兼容旧规则，值为透明或无。 */
-  --hairline-top: transparent;
-  --inset-top: transparent;
-  --halo-pad: none;
-  --lift-tile: none;
-  --glow-hint: none;
-  --glow-thumb: none;
+  /* 玻璃高光与蓝色发光：classic 独有；muji 覆盖为透明或无。 */
+  --hairline-top: rgb(255 255 255 / 65%);
+  --inset-top: rgb(255 255 255 / 55%);
+  --halo-pad: radial-gradient(320px 200px at 50% 40%, rgb(59 130 246 / 10%), transparent 70%);
+  --lift-tile: 0 3px 8px rgb(37 99 235 / 35%);
+  --glow-hint: 0 0 14px rgb(59 130 246 / 60%);
+  --glow-thumb: 0 0 10px rgb(37 99 235 / 40%);
 
   /* 滑杆几何：命中区 44px，细轨道与滑块由伪元素表达。 */
-  --range-track-h: 2px;
-  --range-thumb: 18px;
+  --range-track-h: 4px;
+  --range-thumb: 20px;
   --range-thumb-shift: -8px;
 
   /* 间距：4px 基准刻度。 */
@@ -57,10 +57,10 @@
   --seal: var(--accent);       /* 印泥：发送按钮的印 */
   --seal-soft: var(--accent-soft);
 
-  /* 圆角：Muji 偏方正，只用小圆角。 */
-  --r-field: 4px;
-  --r-icon: 10px;
-  --r-panel: 6px;
+  /* 圆角：classic 玻璃风大圆角；muji 覆盖为方正小圆角。 */
+  --r-field: 12px;
+  --r-icon: 16px;
+  --r-panel: 20px;
   --r-pill: 999px;
 
   /* 字号 */
@@ -70,16 +70,16 @@
   --text-lg: 16px;
   --text-xl: 20px;
 
-  /* 动效：Muji 克制，快速且不张扬。 */
-  --dur: 160ms;
+  /* 动效 */
+  --dur: 200ms;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   /* 尺寸 */
   --tile-w: 68px;
   --icon-size: 60px;
 
-  /* 无毛玻璃。 */
-  --glass-blur: none;
+  /* 玻璃模糊：卡片与触控板共用。 */
+  --glass-blur: blur(22px) saturate(1.5);
 }
 
 * {
@@ -985,41 +985,43 @@ main.pad-mode .pad-title,
 
 /* muji 主题令牌覆盖：切换到米白纸面克制风，仅覆盖 :root，其余规则通过令牌自动生效。 */
 :root[data-theme="muji"] {
-  --bg: #eef1f7;
-  --surface-1: rgb(255 255 255 / 80%);
-  --surface-2: rgb(255 255 255 / 55%);
-  --surface-3: #eef2fb;
-  --field: rgb(255 255 255 / 75%);
-  --border: rgb(15 30 68 / 10%);
-  --border-strong: rgb(15 30 68 / 24%);
-  --fg: #171c2c;
-  --fg-muted: #4a5266;
-  --fg-faint: #7d8494;
-  --accent: #1f6bff;
-  --accent-soft: rgb(31 107 255 / 10%);
-  --accent-line: rgb(31 107 255 / 38%);
-  --danger: #cf2b36;
-  --shadow-tile: 0 1px 2px rgb(16 24 40 / 6%);
+  /* muji 米白克制风：只覆盖需要变的令牌——颜色去玻璃去发光、方正小圆角、快动效。
+     间距/字号/滑杆几何/墨系等结构令牌全部继承 :root。 */
+  --bg: #f5f3ee;
+  --surface-1: #ffffff;
+  --surface-2: #fbfaf7;
+  --surface-3: #efede7;
+  --field: #ffffff;
+  --border: rgb(26 26 26 / 10%);
+  --border-strong: rgb(26 26 26 / 22%);
+  --fg: #1a1a1a;
+  --fg-muted: #666666;
+  --fg-faint: #999999;
+  --accent: #b74127;
+  --accent-soft: rgb(183 65 39 / 8%);
+  --accent-line: rgb(183 65 39 / 40%);
+  --danger: #b74127;
+  --shadow-tile: none;
 
-  --hairline-top: rgb(255 255 255 / 65%);
-  --inset-top: rgb(255 255 255 / 55%);
-  --halo-pad: radial-gradient(320px 200px at 50% 40%, rgb(59 130 246 / 10%), transparent 70%);
-  --lift-tile: 0 3px 8px rgb(37 99 235 / 35%);
-  --glow-hint: 0 0 14px rgb(59 130 246 / 60%);
-  --glow-thumb: 0 0 10px rgb(37 99 235 / 40%);
+  --hairline-top: transparent;
+  --inset-top: transparent;
+  --halo-pad: none;
+  --lift-tile: none;
+  --glow-hint: none;
+  --glow-thumb: none;
 
-  --r-field: 12px;
-  --r-icon: 16px;
-  --r-panel: 20px;
-  --glass-blur: blur(22px) saturate(1.5);
+  --r-field: 4px;
+  --r-icon: 10px;
+  --r-panel: 6px;
+
+  --dur: 160ms;
+
+  --glass-blur: none;
 }
 
-/* muji 主题下的画布：纯米白底（classic 默认带光晕）。 */
+/* muji 主题下的画布：纯米白纸面，不带任何光晕（classic 默认自带蓝紫光晕）。 */
 :root[data-theme="muji"] body {
-  background:
-    radial-gradient(560px 320px at 85% -5%, rgb(59 130 246 / 18%), transparent 62%),
-    radial-gradient(480px 320px at -10% 102%, rgb(99 102 241 / 12%), transparent 60%),
-    var(--bg);
+  background: var(--bg);
 }
 
 /* muji 主题关闭玻璃与发光（classic 默认开启）。 */

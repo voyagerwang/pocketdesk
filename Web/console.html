@@ -15,12 +15,12 @@
   (function () {
     try {
       var t = localStorage.getItem('voicedeck.last-theme');
-      if (t === 'classic') document.documentElement.setAttribute('data-theme', 'classic');
+      if (t === 'muji') document.documentElement.setAttribute('data-theme', 'muji');
     } catch (e) { /* 无痕模式等 */ }
   })();
 </script>
 <style>
-:root{color-scheme:light;--ink:#1a1a1a;--muted:#666;--faint:#999;--bg:#f5f3ee;--panel:#fbfaf7;--line:rgb(26 26 26 / 10%);--line-strong:rgb(26 26 26 / 22%);--accent:#b74127;--accent-soft:rgb(183 65 39 / 8%);--accent-line:rgb(183 65 39 / 40%);--danger:#b74127}
+:root{color-scheme:light;--ink:#171c2c;--muted:#4a5266;--faint:#7d8494;--bg:#eef1f7;--panel:#f1f2f5;--line:rgb(15 30 68 / 10%);--line-strong:rgb(15 30 68 / 24%);--accent:#1f6bff;--accent-soft:rgb(31 107 255 / 10%);--accent-line:rgb(31 107 255 / 38%);--danger:#d93843}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",sans-serif;font-size:14px;-webkit-font-smoothing:antialiased}
 main{max-width:860px;margin:auto;padding:40px 24px 60px;display:flex;flex-direction:column;gap:24px}
@@ -74,18 +74,23 @@ button{font:inherit;cursor:pointer}
 .theme-switch button+button{border-left:1px solid var(--line)}
 .theme-switch button.on{background:var(--accent);color:#fff}
 .theme-switch button:not(.on):hover{color:var(--ink)}
-/* classic 主题令牌覆盖：恢复原蓝色玻璃风格。 */
-:root[data-theme="classic"]{--bg:#eef1f7;--panel:#f1f2f5;--line:rgb(15 30 68 / 10%);--line-strong:rgb(15 30 68 / 24%);--accent:#1f6bff;--danger:#d93843;--accent-soft:rgb(31 107 255 / 10%);--accent-line:rgb(31 107 255 / 38%);--ink:#171c2c;--muted:#4a5266}
-:root[data-theme="classic"] body{background:radial-gradient(560px 320px at 85% -5%, rgb(59 130 246 / 16%), transparent 62%),radial-gradient(480px 320px at -10% 102%, rgb(99 102 241 / 10%), transparent 60%),#eef1f7}
-:root[data-theme="classic"] .card{border-radius:18px;background:rgb(255 255 255 / 80%);-webkit-backdrop-filter:blur(20px) saturate(1.5);backdrop-filter:blur(20px) saturate(1.5);box-shadow:0 1px 2px rgb(16 24 40 / 6%)}
-:root[data-theme="classic"] .btn{border-radius:10px}
-:root[data-theme="classic"] .btn.primary{background:linear-gradient(135deg,#3b82f6,#2450f0);border-color:transparent;color:#fff;font-weight:800;box-shadow:0 8px 28px -10px rgb(37 99 235 / 55%)}
-:root[data-theme="classic"] .pill{border-radius:99px}
-:root[data-theme="classic"] .step{border-radius:8px;font-weight:800}
-:root[data-theme="classic"] #search,:root[data-theme="classic"] #results,:root[data-theme="classic"] .target-row{border-radius:12px}
-:root[data-theme="classic"] #qr,:root[data-theme="classic"] #qr-ip{border-radius:12px}
-:root[data-theme="classic"] .keycap{border-radius:6px}
+/* muji 主题令牌覆盖：米白纸面克制风（默认 classic 经典蓝，与手机页/服务端一致）。 */
+:root[data-theme="muji"]{--ink:#1a1a1a;--muted:#666;--faint:#999;--bg:#f5f3ee;--panel:#fbfaf7;--line:rgb(26 26 26 / 10%);--line-strong:rgb(26 26 26 / 22%);--accent:#b74127;--accent-soft:rgb(183 65 39 / 8%);--accent-line:rgb(183 65 39 / 40%);--danger:#b74127}
+:root[data-theme="muji"] body{background:#f5f3ee}
+:root[data-theme="muji"] .card{border-radius:6px;background:#ffffff;box-shadow:none}
+:root[data-theme="muji"] .btn{border-radius:4px}
+:root[data-theme="muji"] .btn.primary{background:var(--accent);border-color:transparent;color:#fff;font-weight:600;box-shadow:none}
+:root[data-theme="muji"] .pill{border-radius:4px}
+:root[data-theme="muji"] .step{border-radius:4px;font-weight:700}
+:root[data-theme="muji"] #search,:root[data-theme="muji"] #results,:root[data-theme="muji"] .target-row{border-radius:4px}
+:root[data-theme="muji"] #qr,:root[data-theme="muji"] #qr-ip{border-radius:4px}
+:root[data-theme="muji"] .keycap{border-radius:4px}
 .keycap{display:inline-block;min-width:22px;margin-left:4px;padding:2px 7px;border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:4px;background:#fff;color:var(--ink);font-size:11px;text-align:center}
+/* 目标设置展开区：默认面板开关 + 专属快捷键组，视觉上从属于目标行。 */
+.target-wrap{display:flex;flex-direction:column}
+.target-settings{margin:6px 0 2px 46px;padding:14px;border:1px dashed var(--line-strong);border-radius:4px;background:var(--panel)}
+.sc-mini{display:flex;flex-direction:column;gap:6px}
+.sc-mini .target-row{padding:6px 10px}
 /* 垃圾桶图标按钮：平时只显示图标，悬停泛红；确认态展开"确认移除"文字并填充红底。 */
 .icon-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;height:30px;padding:0;overflow:hidden;transition:width .18s ease,background .18s ease,color .18s ease}
 .icon-btn svg{width:17px;height:17px;flex:0 0 17px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}.icon-btn .confirm-text{display:none;font-size:12px;font-weight:600;white-space:nowrap}
@@ -147,7 +152,6 @@ button{font:inherit;cursor:pointer}
     <p class="sub">手机输入框下方会显示这些按钮，点一下就把对应按键发给 Mac 当前前台应用；可以只按一个键，也可以带修饰键。最多 12 个。</p>
     <div class="row" style="margin-bottom:12px">
       <button id="scRecord" class="btn" style="flex:1">录制按键</button>
-      <button id="scAdd" class="btn primary" disabled>添加</button>
     </div>
     <p class="hint" style="margin:0 0 12px">点「录制按键」后直接按键盘（如 ⌘Z 或单独一个 Z）；自动显示「复制」「撤销」等常用名称，其他按键显示 F1、⌘K 等简写，无需填写名称。Esc 取消录制。</p>
     <div id="scList"></div>
@@ -158,7 +162,7 @@ button{font:inherit;cursor:pointer}
 // 主题唯一控制点：头部分段开关写入 Mac 本机（POST /api/theme），手机页经 /api/status 轮询自动跟随。
 const themeSwitch=document.getElementById('theme-switch');
 function applyTheme(name){
-  if(name==='classic')document.documentElement.setAttribute('data-theme','classic');
+  if(name==='muji')document.documentElement.setAttribute('data-theme','muji');
   else document.documentElement.removeAttribute('data-theme');
   themeSwitch.querySelectorAll('button').forEach(button=>{
     const on=button.dataset.themeChoice===name;
@@ -244,12 +248,16 @@ async function refresh() {
 function renderTargets() {
   const box = $('current'); box.innerHTML = '';
   state.targets.forEach((target, index) => {
+    const wrap = document.createElement('div'); wrap.className = 'target-wrap';
+    const hasCustom = Array.isArray(target.shortcuts) && target.shortcuts.length > 0;
     const row = document.createElement('div'); row.className = 'target-row';
     row.innerHTML = `<img src="/api/icon?id=${encodeURIComponent(target.id)}&t=${Date.now()}" alt="">
       <b>${esc(target.name)}</b>${target.available === false ? '<span class="missing">未安装</span>' : ''}
+      ${hasCustom ? '<span class="pill" style="padding:2px 8px;font-size:11px">专属键</span>' : ''}
       <button class="btn ghost" data-act="up" ${index === 0 ? 'disabled' : ''}>↑</button>
       <button class="btn ghost" data-act="down" ${index === state.targets.length - 1 ? 'disabled' : ''}>↓</button>
       <button class="btn ghost" data-act="icon">换图标</button>
+      <button class="btn ghost" data-act="settings">${target.openPanel === 'pad' ? '设置·触控板' : '设置'}</button>
       <button class="btn ghost icon-btn danger" data-act="remove" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
     row.addEventListener('click', async event => {
       const button = event.target.closest('button[data-act]');
@@ -258,6 +266,125 @@ function renderTargets() {
       if (act === 'up' && index > 0) { [state.targets[index - 1], state.targets[index]] = [state.targets[index], state.targets[index - 1]]; await save(); }
       if (act === 'down' && index < state.targets.length - 1) { [state.targets[index + 1], state.targets[index]] = [state.targets[index], state.targets[index + 1]]; await save(); }
       if (act === 'icon') { iconTargetId = target.id; $('iconFile').click(); }
+      if (act === 'settings') renderTargetSettings(target.id);
+    });
+    wrap.append(row);
+    // 设置面板（当前展开的那个目标）：默认打开面板 + 专属快捷键组。
+    if (settingsOpenId === target.id) wrap.append(buildTargetSettings(target));
+    box.append(wrap);
+  });
+}
+
+let settingsOpenId = null; // 当前展开设置面板的目标 id；null = 全收起
+
+function renderTargetSettings(id) {
+  settingsOpenId = settingsOpenId === id ? null : id;
+  renderTargets();
+}
+
+// 展开区：默认面板分段开关 + 叠加开关 + 专属快捷键录制（沿用全局录制器的 recordCtx 作用域模型）。
+// macOS 标准组合的内置快捷键库：下拉框快速添加，省去逐个录制。
+const BUILTIN_PRESETS = [
+  { label: '刷新',     hotkey: 'Cmd+R' },
+  { label: '粘贴',     hotkey: 'Cmd+V' },
+  { label: '复制',     hotkey: 'Cmd+C' },
+  { label: '剪切',     hotkey: 'Cmd+X' },
+  { label: '撤销',     hotkey: 'Cmd+Z' },
+  { label: '重做',     hotkey: 'Cmd+Shift+Z' },
+  { label: '全选',     hotkey: 'Cmd+A' },
+  { label: '保存',     hotkey: 'Cmd+S' },
+  { label: '回车',     hotkey: 'Return' },
+  { label: '删除',     hotkey: 'Delete' },
+  { label: '关闭窗口', hotkey: 'Cmd+W' },
+  { label: '退出应用', hotkey: 'Cmd+Q' },
+  { label: '新建',     hotkey: 'Cmd+N' },
+  { label: '查找',     hotkey: 'Cmd+F' },
+  { label: '锁屏',     hotkey: 'Ctrl+Cmd+Q' },
+];
+
+function buildTargetSettings(target) {
+  const panel = document.createElement('div'); panel.className = 'target-settings';
+  const shortcuts = Array.isArray(target.shortcuts) ? target.shortcuts : [];
+  const panelChoice = target.openPanel === 'pad' ? 'pad' : 'input';
+  // showGlobal：nil/true = 叠加（默认开），false = 只显应用组。
+  const showGlobal = target.showGlobal !== false;
+  const presetOptions = BUILTIN_PRESETS
+    .filter(p => !shortcuts.some(s => s.hotkey === p.hotkey))
+    .map(p => `<option value="${p.hotkey}">${p.label} ${hotkeyDisplay(p.hotkey)}</option>`).join('');
+  panel.innerHTML = `
+    <div class="row" style="margin-bottom:10px">
+      <span class="hint" style="flex:0 0 auto">手机激活此应用时默认打开</span>
+      <div class="theme-switch" data-panel-switch>
+        <button type="button" data-panel="input" class="${panelChoice === 'input' ? 'on' : ''}">输入框</button>
+        <button type="button" data-panel="pad" class="${panelChoice === 'pad' ? 'on' : ''}">触控板</button>
+      </div>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <span class="hint" style="flex:1">专属快捷键：前排显示。${shortcuts.length ? '' : '留空 = 只用全局组。'}</span>
+      <label class="row" style="gap:6px;flex:0 0 auto">
+        <input type="checkbox" data-act="show-global" ${showGlobal ? 'checked' : ''}>
+        <span class="hint">叠加全局组</span>
+      </label>
+      <button class="btn" data-act="record-sc" style="flex:0 0 auto">录制</button>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <select class="btn" data-act="add-preset" style="flex:1">
+        <option value="">添加常用快捷键…</option>
+        ${presetOptions || '<option value="">（常用键已全部添加）</option>'}
+      </select>
+    </div>
+    <div class="sc-mini" data-sc-list></div>`;
+  panel.querySelector('[data-panel-switch]').addEventListener('click', async event => {
+    const button = event.target.closest('button[data-panel]');
+    if (!button || button.classList.contains('on')) return;
+    const t = state.targets.find(item => item.id === target.id);
+    if (!t) return;
+    t.openPanel = button.dataset.panel === 'input' ? null : 'pad';
+    await save();
+  });
+  panel.querySelector('[data-act="show-global"]').addEventListener('change', async event => {
+    const t = state.targets.find(item => item.id === target.id);
+    if (!t) return;
+    t.showGlobal = event.target.checked ? null : false; // 默认叠加用 nil 表达，省字段
+    await save();
+  });
+  panel.querySelector('[data-act="add-preset"]').addEventListener('change', async event => {
+    const hotkey = event.target.value;
+    if (!hotkey) return;
+    const preset = BUILTIN_PRESETS.find(p => p.hotkey === hotkey);
+    if (!preset) return;
+    const t = state.targets.find(item => item.id === target.id);
+    if (!t) return;
+    t.shortcuts = [...(t.shortcuts || []), { id: '', label: preset.label, hotkey: preset.hotkey }];
+    event.target.value = '';
+    await save();
+  });
+  panel.querySelector('[data-act="record-sc"]').addEventListener('click', (event) => {
+    startRecording({ scope: 'target', targetId: target.id }, `为「${target.name}」按快捷键…`, event.currentTarget);
+  });
+  const list = panel.querySelector('[data-sc-list]');
+  renderScopedShortcuts(list, shortcuts, 'target', target.id);
+  return panel;
+}
+
+// 作用域快捷键子列表（应用专属组）：一行一键 + 删除。
+function renderScopedShortcuts(box, list, scope, targetId) {
+  box.innerHTML = '';
+  if (!list.length) { box.hidden = false; return; }
+  list.forEach((shortcut, index) => {
+    const display = hotkeyDisplay(shortcut.hotkey);
+    const label = shortcut.label === display ? '' : shortcut.label;
+    const row = document.createElement('div'); row.className = 'target-row';
+    row.innerHTML = `<b style="flex:0 0 auto;min-width:48px">${esc(label || display)}</b>
+      ${label ? `<span class="keycap">${esc(display)}</span>` : ''}
+      <button class="btn ghost icon-btn danger" data-act="remove-sc" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
+    row.querySelector('[data-act="remove-sc"]').addEventListener('click', async event => {
+      if (!armConfirm(event.target.closest('button'))) return;
+      const t = state.targets.find(item => item.id === targetId);
+      if (!t) return;
+      t.shortcuts = (t.shortcuts || []).filter((_, i) => i !== index);
+      if (!t.shortcuts.length) t.shortcuts = null; // 清空即回退全局
+      await save();
     });
     box.append(row);
   });
@@ -278,7 +405,14 @@ function armConfirm(button) {
 async function save() {
   $('saveState').textContent = '保存中…';
   try {
-    await post('/api/targets', state.targets.map(t => ({id: t.id, name: t.name, bundleID: t.bundleID ?? null, path: t.path ?? null})));
+    // 整表序列化：必须带上 shortcuts/openPanel/showGlobal，否则服务端收到的是无偏好旧形态、覆盖存储丢配置。
+    await post('/api/targets', state.targets.map(t => {
+      const out = { id: t.id, name: t.name, bundleID: t.bundleID ?? null, path: t.path ?? null };
+      if (Array.isArray(t.shortcuts) && t.shortcuts.length) out.shortcuts = t.shortcuts;
+      if (t.openPanel) out.openPanel = t.openPanel;
+      if (t.showGlobal === false) out.showGlobal = false;
+      return out;
+    }));
     $('saveState').textContent = '已保存到本机';
     await refresh(); renderTargets();
     setTimeout(() => { $('saveState').textContent = ''; }, 2500);
@@ -329,7 +463,9 @@ const COMMON_SHORTCUT_LABELS = { '⌘C': '复制', '⌘V': '粘贴', '⌘X': '�
   '⌘O': '打开', '⌘P': '打印', '⌘W': '关闭', '⌘Q': '退出', '⌘T': '新建标签页' };
 let shortcuts = [];
 let recording = false;
-let pendingShortcut = null; // { hotkey: string, label: string }
+// 作用域录制模型：recordCtx 说清这次录给谁。scope=global → 全局快捷键；scope=target → 应用专属组。
+let recordCtx = null; // { scope: 'global'|'target', targetId?: string, index?: number }
+let recordButton = null; // 触发录制的按钮，就地显示"按下按键…"反馈
 
 // 事件 → 语义串主键 token（与 Swift ShortcutKeys.keyMap 的键名对齐）。
 // event.code 是物理键位的唯一可信来源；event.key 在输入法/修饰键下会被改写（⌘Z 曾被污染成 9），
@@ -366,12 +502,28 @@ function automaticShortcutLabel(hotkey) {
   return COMMON_SHORTCUT_LABELS[display] || display;
 }
 
-$('scRecord').onclick = () => {
-  recording = true; pendingShortcut = null; rerecordIndex = -1;
-  $('scAdd').disabled = true;
-  $('scRecord').textContent = '按下按键…';
-  $('scRecord').classList.add('recording');
-};
+// 录制器唯一入口：ctx 指明录给谁（全局 / 应用专属组 / 重录某行），提示文案随作用域给。
+// 视觉反馈就地显示在触发录制的按钮上（页面下方的 scRecord 或展开区内的录制按钮），
+// 否则用户在目标设置区点录制却看到页面下方按钮变字，会以为没反应。
+function startRecording(ctx, hint, button) {
+  recordCtx = ctx;
+  recording = true;
+  recordButton = button || $('scRecord');
+  recordButton.dataset.recording = '1';
+  recordButton.textContent = hint || '按下按键…';
+  recordButton.classList.add('recording');
+}
+function stopRecording() {
+  recording = false;
+  recordCtx = null;
+  if (recordButton) {
+    recordButton.dataset.recording = '0';
+    recordButton.classList.remove('recording');
+    // 全局按钮恢复"录制按键"，应用专属按钮恢复"录制"
+    recordButton.textContent = recordButton === $('scRecord') ? '录制按键' : '录制';
+  }
+  recordButton = null;
+}
 
 document.addEventListener('keydown', event => {
   if (!recording) return;
@@ -381,9 +533,7 @@ document.addEventListener('keydown', event => {
   if (event.isComposing || event.keyCode === 229) return;
   // Esc 且未带修饰键 = 取消录制。
   if (event.key === 'Escape' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-    recording = false; pendingShortcut = null; rerecordIndex = -1;
-    $('scRecord').textContent = '录制按键';
-    $('scRecord').classList.remove('recording');
+    stopRecording();
     return;
   }
   const main = hotkeyToken(event);
@@ -394,32 +544,27 @@ document.addEventListener('keydown', event => {
   if (event.altKey) mods.push('Opt');
   if (event.ctrlKey) mods.push('Ctrl');
   const hotkey = [...mods, main].join('+');
-  // 重录模式：直接写入目标行；否则挂到"添加"行等待确认。
-  if (rerecordIndex >= 0) {
-    shortcuts[rerecordIndex].hotkey = hotkey;
-    shortcuts[rerecordIndex].label = automaticShortcutLabel(hotkey);
-    rerecordIndex = -1;
-    recording = false;
-    $('scRecord').textContent = '录制按键';
-    $('scRecord').classList.remove('recording');
+  const label = automaticShortcutLabel(hotkey);
+  const ctx = recordCtx;
+  stopRecording();
+  if (!ctx) return;
+  // 三种作用域：重录全局某行 / 应用专属组追加 / 全局追加。录完即存。
+  if (ctx.scope === 'rerecord-global') {
+    shortcuts[ctx.index].hotkey = hotkey;
+    shortcuts[ctx.index].label = label;
     saveShortcuts();
+  } else if (ctx.scope === 'target') {
+    const t = state.targets.find(item => item.id === ctx.targetId);
+    if (!t) return;
+    t.shortcuts = [...(t.shortcuts || []), { id: '', label, hotkey }];
+    save(); // 走 /api/targets，服务端补 UUID 并校验
   } else {
-    pendingShortcut = { hotkey, label: automaticShortcutLabel(hotkey) };
-    recording = false;
-    $('scRecord').textContent = `已录制：${pendingShortcut.label}`;
-    $('scRecord').classList.remove('recording');
-    $('scAdd').disabled = false;
+    shortcuts.push({ id: '', label, hotkey });
+    saveShortcuts();
   }
 }, true);
 
-$('scAdd').onclick = async () => {
-  if (!pendingShortcut) return;
-  shortcuts.push({ id: '', label: pendingShortcut.label, hotkey: pendingShortcut.hotkey });
-  pendingShortcut = null;
-  $('scRecord').textContent = '录制按键';
-  $('scAdd').disabled = true;
-  await saveShortcuts();
-};
+$('scRecord').onclick = (event) => startRecording({ scope: 'global' }, '按下按键…', event.currentTarget);
 
 async function saveShortcuts() {
   $('saveState').textContent = '保存中…';
@@ -438,7 +583,7 @@ function renderShortcuts() {
     // label 与键位展示重复时只显示一个（如 label=↑、hotkey=Up 都显示 ↑），避免同列两个相同符号。
     const label = shortcut.label === display ? '' : shortcut.label;
     const row = document.createElement('div'); row.className = 'target-row';
-    row.innerHTML = `<b class="sc-editable" data-act="rerecord" title="点击重新录制按键，名称自动识别" style="flex:0 0 auto;min-width:48px">${esc(label || display)}</b>
+    row.innerHTML = `<b class="sc-editable" data-act="rerecord" title="点击重新录制按键" style="flex:0 0 auto;min-width:48px">${esc(label || display)}</b>
       ${label ? `<span class="keycap" data-act="rerecord" title="点击重新录制组合键">${esc(display)}</span>` : ''}
       <button class="btn ghost" data-act="up" ${index === 0 ? 'disabled' : ''}>↑</button>
       <button class="btn ghost" data-act="down" ${index === shortcuts.length - 1 ? 'disabled' : ''}>↓</button>
@@ -449,21 +594,11 @@ function renderShortcuts() {
       if (act === 'remove') { if (!armConfirm(event.target.closest('button[data-act]'))) return; shortcuts.splice(index, 1); await saveShortcuts(); }
       if (act === 'up' && index > 0) { [shortcuts[index - 1], shortcuts[index]] = [shortcuts[index], shortcuts[index - 1]]; await saveShortcuts(); }
       if (act === 'down' && index < shortcuts.length - 1) { [shortcuts[index + 1], shortcuts[index]] = [shortcuts[index], shortcuts[index + 1]]; await saveShortcuts(); }
-      if (act === 'rerecord') rerecordShortcut(index);
+      // 重录反馈显示在全局录制按钮上（重录发生在全局列表，与按钮同卡片）。
+      if (act === 'rerecord') startRecording({ scope: 'rerecord-global', index }, `为「${shortcuts[index].label}」按新按键…`);
     });
     box.append(row);
   });
-}
-
-// 重录组合键：进入录制态，下一个按键写入这一行，Esc 取消。
-let rerecordIndex = -1;
-function rerecordShortcut(index) {
-  recording = true;
-  pendingShortcut = null;
-  $('scAdd').disabled = true;
-  rerecordIndex = index;
-  $('scRecord').textContent = `为「${shortcuts[index].label}」按新按键…`;
-  $('scRecord').classList.add('recording');
 }
 
 $('qr').onload = () => { $('qr').dataset.loaded = '1'; };

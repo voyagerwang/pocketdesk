@@ -89,6 +89,8 @@ function markSelected() {
     element.setAttribute('aria-checked', String(isSelected));
     element.tabIndex = isSelected ? 0 : -1;   // Tab 下次进来落在选中项上
   });
+  // 快捷键组随选中态切换：选中目标有专属组就只显示那组，否则回退全局组。
+  syncShortcutsForSelected();
   const front = targets.find(item => item.id === selected);
   // 没有目标时按钮置灰并明说：点了也不会有去向。
   const hasTarget = Boolean(front) || selected === FRONTMOST_ID;
@@ -116,8 +118,9 @@ async function activateTarget(targetId) {
     if (response.status === 401) throw new Error('未配对：请在电脑端控制台重新扫码。');
     if (!response.ok) throw new Error(result.error || '无法唤醒应用。');
     message(`${target ? target.name : targetId} 已置于电脑前台，可开始输入。`);
-    // 不自动聚焦输入框：键盘弹起会滚动页面，触控板与 Dock 的屏幕位置随之错位，
-    // 随后点触控板极易误触到 Dock 图标。想打字时用户自己点输入框。
+    // 按应用偏好切面板：触控板型应用直接展开触控板（收起键盘），输入型保持输入区。
+    // 只在手动激活时切——前台自动跟随不切，避免被动抢走用户正打字的键盘。
+    if (target?.openPanel === 'pad') enterPadMode(); else exitPadMode();
   } catch (error) {
     message(error.message, true);
   }
@@ -507,12 +510,28 @@ function renderShortcuts() {
   });
 }
 
-// 手机上只展示用户自定义的快捷键；服务端默认示例（undo/copy/paste 且无自定义内容时不展示）。
+// 服务端下发的全局组原样保存；展示组按选中态重算（专属组优先）。
+let globalShortcuts = [];
+
 function syncShortcuts(list) {
-  shortcuts = list || [];
+  globalShortcuts = list || [];
+  syncShortcutsForSelected();
+}
+
+// 快捷键按钮条当前该显示哪组：
+// 有专属组 → 前排专属 + 后排全局（showGlobal 为 false 时只显专属）；
+// 无专属组 → 全局组。全局组过滤默认示例（undo/copy/paste），无自定义项时整条隐藏。
+function syncShortcutsForSelected() {
+  const target = targets.find(item => item.id === selected);
+  const scoped = Array.isArray(target?.shortcuts) ? target.shortcuts : [];
+  const showGlobal = target?.showGlobal !== false;
+  const list = scoped.length
+    ? (showGlobal ? [...scoped, ...globalShortcuts] : scoped)
+    : globalShortcuts;
+  shortcuts = list;
   const isDefault = s => ['undo', 'copy', 'paste'].includes(s.id) && s.label === { undo: '撤销', copy: '复制', paste: '粘贴' }[s.id];
-  const hasCustom = shortcuts.some(s => !isDefault(s));
-  customShortcuts = hasCustom ? shortcuts.filter(s => !isDefault(s)) : [];
+  const hasCustom = list.some(s => !isDefault(s));
+  customShortcuts = hasCustom ? list.filter(s => !isDefault(s)) : [];
   renderShortcuts();
 }
 
@@ -745,8 +764,14 @@ async function heartbeatTick() {
     }
     connectionEl.textContent = current.accessibility ? '已就绪' : '需授权';
     connectionEl.classList.toggle('ready', current.accessibility);
+    // 目标列表跟随服务端：控制台改了 openPanel/showGlobal/专属快捷键时，手机下一拍同步。
+    if (JSON.stringify(current.targets || []) !== JSON.stringify(targets)) {
+      targets = current.targets || [];
+      renderTargets();
+      syncShortcutsForSelected();
+    }
     // 快捷键列表跟随服务端：控制台改完配置，手机 5 秒内自动刷新按钮。
-    if (JSON.stringify(current.shortcuts || []) !== JSON.stringify(shortcuts)) {
+    if (JSON.stringify(current.shortcuts || []) !== JSON.stringify(globalShortcuts)) {
       syncShortcuts(current.shortcuts || []);
     }
     // 主题跟随服务端：电脑端切换后，手机下一拍（≤5s）自动换肤。
