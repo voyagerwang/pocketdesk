@@ -460,6 +460,19 @@ main.pad-mode .compose textarea {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+
+  /* 刻度尺几何：墨点与收边横线都从这几个数推导，改一处整条尺子跟着动。 */
+  --scroll-band: 36px;      /* 视觉带宽，必须与 app.js 的 SCROLL_ZONE_PX 相等（不许视觉撒谎） */
+  --scroll-dot: 1.35px;     /* 墨点半径——两列同大，刻度只有位置差别，没有大小差别 */
+  --scroll-step: 15px;      /* 墨点纵向步距 */
+  --scroll-tile: 12px;      /* 渐变 tile 宽；墨点圆心 = background-position + tile/2 */
+  --scroll-col-out: 24px;   /* 外列圆心（距带左缘） */
+  --scroll-col-in: 12px;    /* 内列圆心，与外列对称于带中心 */
+  --scroll-mark: 8px;       /* 顶底收边横线宽，居中于两列之间 */
+  --scroll-pos-out: calc(var(--scroll-col-out) - var(--scroll-tile) / 2);
+  --scroll-pos-in: calc(var(--scroll-col-in) - var(--scroll-tile) / 2);
+  --scroll-ink-out: var(--fg);   /* 外列墨色，滚动时整条染赭红 */
+  --scroll-ink-in: var(--fg);    /* 内列墨色；单排模式置 transparent 即隐去整列 */
 }
 
 #pad.pad-active {
@@ -475,63 +488,70 @@ main.pad-mode .compose textarea {
   outline-offset: 2px;
 }
 
-/* 右缘滚动区：Muji「刻度尺」意象——不画白框，画一条纸面量尺。
-   墨点刻度平时极淡（28% 墨、上下渐隐），滚动时整列染成赭红；
-   刻度尺顶底各有一道短横线收边（量尺的"起点/终点"），由 ::before 表达。 */
+/* 右缘滚动区：Muji「刻度尺」意象——不画白框，画两列等大墨点（刻度只有位置差别，没有大小差别）。
+   两列对称于带中心，收边横线也居中于两列之间——整条尺子同轴。 */
 #pad::after {
   content: "";
   position: absolute;
   top: var(--s-4);
   bottom: var(--s-4);
-  right: var(--s-2);
-  width: 12px;
+  right: 0;
+  width: var(--scroll-band);
   pointer-events: none;
   opacity: 0;
   transition: opacity var(--dur) var(--ease), background-image 240ms var(--ease);
-  background-image: radial-gradient(circle, var(--fg) 1.2px, transparent 1.6px);
-  background-size: 12px 14px;
-  background-repeat: repeat-y;
-  background-position: center;
+  background-image:
+    radial-gradient(circle, var(--scroll-ink-out) var(--scroll-dot), transparent calc(var(--scroll-dot) + 0.4px)),
+    radial-gradient(circle, var(--scroll-ink-in) var(--scroll-dot), transparent calc(var(--scroll-dot) + 0.4px));
+  background-size: var(--scroll-tile) var(--scroll-step), var(--scroll-tile) var(--scroll-step);
+  background-position: var(--scroll-pos-out) 0, var(--scroll-pos-in) 0;
+  background-repeat: repeat-y, repeat-y;
   -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 30%, rgb(0 0 0 / 35%) 70%, transparent 100%);
   mask-image: linear-gradient(to bottom, #000 0%, #000 30%, rgb(0 0 0 / 35%) 70%, transparent 100%);
 }
 
-/* 量尺收边：顶底两道 8px 短横线，像尺子的首末刻度，静止时常驻。 */
+/* 收边横线：量尺两端的首末刻度，居中于两列墨点之间（即 ::after 盒子的中心 = 距 #pad 右缘 18px）。 */
 #pad::before {
   content: "";
   position: absolute;
   top: var(--s-2);
   bottom: var(--s-2);
-  right: var(--s-2);
-  width: 12px;
+  right: calc(var(--scroll-band) / 2 - var(--scroll-mark) / 2);
+  width: var(--scroll-mark);
   pointer-events: none;
   opacity: 0;
   transition: opacity var(--dur) var(--ease);
   background:
-    linear-gradient(var(--fg) 0 0) top / 8px 1.5px no-repeat,
-    linear-gradient(var(--fg) 0 0) bottom / 8px 1.5px no-repeat;
+    linear-gradient(var(--scroll-ink-out) 0 0) top / 100% 1.5px no-repeat,
+    linear-gradient(var(--scroll-ink-out) 0 0) bottom / 100% 1.5px no-repeat;
 }
 
 main.pad-mode #pad::after {
-  opacity: 0.28;
+  opacity: 0.34;
 }
 
 main.pad-mode #pad::before {
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
-/* 滚动进行中：刻度染墨（赭红）、收边线也染墨——手势有了"着墨"的反馈。 */
+/* 滚动进行中：整条尺子染墨（赭红）——手势有了"着墨"的反馈。 */
+#pad.pad-scrolling {
+  --scroll-ink-out: var(--accent);
+  --scroll-ink-in: var(--accent);
+}
+
 #pad.pad-scrolling::after,
-main.pad-mode #pad.pad-scrolling::after {
-  opacity: 0.9;
-  background-image: radial-gradient(circle, var(--accent) 1.2px, transparent 1.6px);
+main.pad-mode #pad.pad-scrolling::after,
+#pad.pad-scrolling::before,
+main.pad-mode #pad.pad-scrolling::before {
+  opacity: 0.92;
 }
 
-#pad.pad-scrolling::before {
-  opacity: 0.9;
-  background:
-    linear-gradient(var(--accent) 0 0) top / 8px 1.5px no-repeat,
-    linear-gradient(var(--accent) 0 0) bottom / 8px 1.5px no-repeat;
+/* 单排锚点（回退方案）：隐去内列，外列移到带中心与收边横线同轴。
+   切回只需把 #pad 的 data-ruler 改成 single——手机端「刻度」开关写的就是这个属性。 */
+#pad[data-ruler="single"] {
+  --scroll-ink-in: transparent;
+  --scroll-pos-out: calc(var(--scroll-band) / 2 - var(--scroll-tile) / 2);
 }
 
 .pad-badge {
@@ -591,6 +611,19 @@ main:not(.pad-mode) .pad-hint {
   gap: var(--s-2);
   min-width: 0;
   white-space: nowrap;
+}
+
+.pad-tuning select {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--surface-1);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
 }
 
 .pad-tuning input[type="range"] {

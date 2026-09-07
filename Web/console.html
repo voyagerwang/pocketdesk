@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   [INPUT]: 依赖 /api/status、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility。
-  [OUTPUT]: 电脑端控制台：授权引导、局域网与 Tailscale 跨网扫码连接、目标应用搜索/排序/删除/自定义图标管理、快捷键管理（录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"；主键只认 event.code 物理键位不回退 IME 可污染的 event.key，拦截 isComposing 与纯修饰键；键位标签用 .keycap 样式、label 与键位重复时只显示一个；支持重录/排序/删除）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
+  [OUTPUT]: 电脑端控制台：授权引导、局域网与 Tailscale 跨网扫码连接、应用管理（搜索/添加/拖拽排序/删除/自定义图标）、快捷键管理（录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"；主键只认 event.code 物理键位不回退 IME 可污染的 event.key，拦截 isComposing 与纯修饰键；键位标签用 .keycap 样式、label 与键位重复时只显示一个；支持重录/拖拽排序/删除；预设动作由 /api/status.actions 下发，点选即添加、不进录制流程，已添加的置灰判重，预设项不可重录）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
   [POS]: 电脑端唯一页面入口；目标顺序与快捷键都保存在 Mac 本机（App Support），手机端只渲染。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -60,8 +60,20 @@ button{font:inherit;cursor:pointer}
 .app-row:last-child{border-bottom:0}
 .app-row img{width:28px;height:28px;border-radius:6px}
 .app-row .meta{flex:1;min-width:0}.app-row .meta b{font-weight:600;font-size:13px}.app-row .meta small{display:block;color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 添加结果：成功后按钮收起，只留一次性提示（2.5s 后淡出）；已添加的应用不再常驻添加按钮。 */
+.app-added{font-size:12px;padding:8px 4px;white-space:nowrap;transition:opacity .4s}
+.app-added.done{color:var(--accent);font-weight:600}
+.app-added.idle{color:var(--muted)}
+.app-added.fade{opacity:0}
 #current{margin-top:18px;display:flex;flex-direction:column;gap:8px}
 .target-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:4px;background:#fff}
+/* 拖拽排序：整行可拖，落点在上半/下半决定插到目标行之前还是之后。 */
+.target-row{cursor:grab}
+.target-row.dragging{opacity:.4}
+.drag-handle{color:var(--muted);cursor:grab;user-select:none;font-size:15px;line-height:1}
+/* 插入线：应用行挂在外层 wrap 上、快捷键行直接挂行本身，两种结构都要能显示。 */
+.target-wrap.drop-before>.target-row,.target-row.drop-before{box-shadow:0 -3px 0 -1px var(--accent)}
+.target-wrap.drop-after>.target-row,.target-row.drop-after{box-shadow:0 3px 0 -1px var(--accent)}
 .target-row img{width:34px;height:34px;border-radius:6px}
 .target-row b{font-weight:600;font-size:13px;flex:1}
 .target-row .missing{color:var(--danger);font-size:11px;margin-right:8px}
@@ -89,8 +101,10 @@ button{font:inherit;cursor:pointer}
 /* 目标设置展开区：默认面板开关 + 专属快捷键组，视觉上从属于目标行。 */
 .target-wrap{display:flex;flex-direction:column}
 .target-settings{margin:6px 0 2px 46px;padding:14px;border:1px dashed var(--line-strong);border-radius:4px;background:var(--panel)}
-.sc-mini{display:flex;flex-direction:column;gap:6px}
-.sc-mini .target-row{padding:6px 10px}
+/* 快捷键列表间距向"应用管理"看齐（gap 8px / 行内 padding 10px 12px）；此前 sc-mini 是 6px、#scList 连 gap 都没有。 */
+.sc-mini,#scList{display:flex;flex-direction:column;gap:8px}
+.sc-mini .target-row{padding:10px 12px}
+.preset-chips{display:flex;flex-wrap:wrap;gap:8px;flex:1}
 /* 垃圾桶图标按钮：平时只显示图标，悬停泛红；确认态展开"确认移除"文字并填充红底。 */
 .icon-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;height:30px;padding:0;overflow:hidden;transition:width .18s ease,background .18s ease,color .18s ease}
 .icon-btn svg{width:17px;height:17px;flex:0 0 17px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}.icon-btn .confirm-text{display:none;font-size:12px;font-weight:600;white-space:nowrap}
@@ -139,7 +153,7 @@ button{font:inherit;cursor:pointer}
   </section>
 
   <section class="card">
-    <h2><span class="step">3</span>目标应用</h2>
+    <h2><span class="step">3</span>应用管理</h2>
     <p class="sub">添加电脑上任意应用，调整手机面板的图标顺序；顺序保存在这台 Mac 上。</p>
     <input id="search" type="search" placeholder="搜索已安装应用…" autocomplete="off">
     <div id="results"></div>
@@ -154,6 +168,11 @@ button{font:inherit;cursor:pointer}
       <button id="scRecord" class="btn" style="flex:1">录制按键</button>
     </div>
     <p class="hint" style="margin:0 0 12px">点「录制按键」后直接按键盘（如 ⌘Z 或单独一个 Z）；自动显示「复制」「撤销」等常用名称，其他按键显示 F1、⌘K 等简写，无需填写名称。Esc 取消录制。</p>
+    <div class="row" id="scPresetRow" hidden style="margin-bottom:12px">
+      <span class="hint" style="flex:0 0 auto">预设动作</span>
+      <div class="preset-chips" id="scPresetChips"></div>
+    </div>
+    <p class="hint" style="margin:0 0 12px">这些在网页里按下去就会被浏览器或系统本身吃掉（真的锁屏、真的退出浏览器），录制器拿不到，所以点选即添加。系统级的不模拟按键，直接调系统能力：锁屏走关屏（需系统已开启「需要密码」），切换应用按最近使用顺序切。</p>
     <div id="scList"></div>
   </section>
 </main>
@@ -218,6 +237,10 @@ async function refresh() {
     else { state.targets = status.targets; }
     const incoming = status.shortcuts || [];
     if (JSON.stringify(incoming) !== JSON.stringify(shortcuts)) { shortcuts = incoming; renderShortcuts(); }
+    if (JSON.stringify(status.actions || []) !== JSON.stringify(presetActions)) {
+      presetActions = status.actions || [];
+      renderPresetActions();
+    }
     if (!$('qr').src || $('qr').dataset.loaded !== '1') {
       $('qr').src = '/api/qr';
       $('qr-ip').src = '/api/qr?type=ip';
@@ -245,28 +268,78 @@ async function refresh() {
   } catch { $('conn').textContent = '服务未响应'; }
 }
 
+let dragFrom = null;   // { key, index }：key 区分不同列表，免得跨列表误判落点
+
+function clearDropHints() {
+  document.querySelectorAll('.drop-before,.drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
+}
+
+// 把 from 处的元素移到"第 to 位之前"（to 取 0..count）。取出后 to 之后的下标要减一。
+// 原地放下（to==from 或 to==from+1）返回 false，调用方据此跳过一次无谓的保存。
+function reorder(list, from, to) {
+  if (from === to || from === to - 1) return false;
+  const [item] = list.splice(from, 1);
+  list.splice(to > from ? to - 1 : to, 0, item);
+  return true;
+}
+
+// 给一行挂拖拽排序：key 标识所属列表；zone 是投放区（应用行传外层 wrap，好让展开的设置面板
+// 也算投放区）；commit(from, to) 负责按新顺序落盘。
+function attachDragSort(row, { key, index, zone, commit }) {
+  const dropZone = zone || row;
+  row.draggable = true;
+  row.addEventListener('dragstart', event => {
+    dragFrom = { key, index };
+    row.classList.add('dragging');
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(index));   // Firefox 无数据不触发 drop
+  });
+  row.addEventListener('dragend', () => {
+    dragFrom = null;
+    row.classList.remove('dragging');
+    clearDropHints();
+  });
+  dropZone.addEventListener('dragover', event => {
+    if (!dragFrom || dragFrom.key !== key) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    clearDropHints();
+    // 上下半只按 row 的高度算：用 zone 的话，展开的设置面板会把中心点带偏。
+    const rect = row.getBoundingClientRect();
+    dropZone.classList.add(event.clientY < rect.top + rect.height / 2 ? 'drop-before' : 'drop-after');
+  });
+  dropZone.addEventListener('drop', async event => {
+    if (!dragFrom || dragFrom.key !== key) return;
+    event.preventDefault();
+    clearDropHints();
+    const rect = row.getBoundingClientRect();
+    const to = event.clientY < rect.top + rect.height / 2 ? index : index + 1;
+    const from = dragFrom.index;
+    dragFrom = null;
+    await commit(from, to);
+  });
+}
+
 function renderTargets() {
   const box = $('current'); box.innerHTML = '';
   state.targets.forEach((target, index) => {
     const wrap = document.createElement('div'); wrap.className = 'target-wrap';
     const hasCustom = Array.isArray(target.shortcuts) && target.shortcuts.length > 0;
     const row = document.createElement('div'); row.className = 'target-row';
-    row.innerHTML = `<img src="/api/icon?id=${encodeURIComponent(target.id)}&t=${Date.now()}" alt="">
-      <b>${esc(target.name)}</b>${target.available === false ? '<span class="missing">未安装</span>' : ''}
+    row.innerHTML = `<span class="drag-handle" aria-hidden="true">⠿</span><img src="/api/icon?id=${encodeURIComponent(target.id)}&t=${Date.now()}" alt="">
+      <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(target.name)}</b>${target.available === false ? '<span class="missing">未安装</span>' : ''}
       ${hasCustom ? '<span class="pill" style="padding:2px 8px;font-size:11px">专属键</span>' : ''}
-      <button class="btn ghost" data-act="up" ${index === 0 ? 'disabled' : ''}>↑</button>
-      <button class="btn ghost" data-act="down" ${index === state.targets.length - 1 ? 'disabled' : ''}>↓</button>
-      <button class="btn ghost" data-act="icon">换图标</button>
       <button class="btn ghost" data-act="settings">${target.openPanel === 'pad' ? '设置·触控板' : '设置'}</button>
       <button class="btn ghost icon-btn danger" data-act="remove" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
     row.addEventListener('click', async event => {
       const button = event.target.closest('button[data-act]');
       const act = button?.dataset.act; if (!act) return;
       if (act === 'remove') { if (!armConfirm(button)) return; state.targets.splice(index, 1); await save(); }
-      if (act === 'up' && index > 0) { [state.targets[index - 1], state.targets[index]] = [state.targets[index], state.targets[index - 1]]; await save(); }
-      if (act === 'down' && index < state.targets.length - 1) { [state.targets[index + 1], state.targets[index]] = [state.targets[index], state.targets[index + 1]]; await save(); }
-      if (act === 'icon') { iconTargetId = target.id; $('iconFile').click(); }
       if (act === 'settings') renderTargetSettings(target.id);
+    });
+    attachDragSort(row, {
+      key: 'targets', index, zone: wrap,   // zone=wrap：展开的设置面板也算投放区
+      commit: async (from, to) => { if (reorder(state.targets, from, to)) await save(); },
     });
     wrap.append(row);
     // 设置面板（当前展开的那个目标）：默认打开面板 + 专属快捷键组。
@@ -312,6 +385,10 @@ function buildTargetSettings(target) {
     .filter(p => !shortcuts.some(s => s.hotkey === p.hotkey))
     .map(p => `<option value="${p.hotkey}">${p.label} ${hotkeyDisplay(p.hotkey)}</option>`).join('');
   panel.innerHTML = `
+    <div class="row" style="margin-bottom:10px">
+      <span class="hint" style="flex:1">图标默认取自应用本身，可上传图片覆盖</span>
+      <button class="btn" data-act="icon" style="flex:0 0 auto">换图标</button>
+    </div>
     <div class="row" style="margin-bottom:10px">
       <span class="hint" style="flex:0 0 auto">手机激活此应用时默认打开</span>
       <div class="theme-switch" data-panel-switch>
@@ -362,6 +439,11 @@ function buildTargetSettings(target) {
   panel.querySelector('[data-act="record-sc"]').addEventListener('click', (event) => {
     startRecording({ scope: 'target', targetId: target.id }, `为「${target.name}」按快捷键…`, event.currentTarget);
   });
+  // 文件选择是异步的：先把目标 id 记在 iconTargetId，#iconFile 的 change 里再取用。
+  panel.querySelector('[data-act="icon"]').addEventListener('click', () => {
+    iconTargetId = target.id;
+    $('iconFile').click();
+  });
   const list = panel.querySelector('[data-sc-list]');
   renderScopedShortcuts(list, shortcuts, 'target', target.id);
   return panel;
@@ -375,9 +457,9 @@ function renderScopedShortcuts(box, list, scope, targetId) {
     const display = hotkeyDisplay(shortcut.hotkey);
     const label = shortcut.label === display ? '' : shortcut.label;
     const row = document.createElement('div'); row.className = 'target-row';
-    row.innerHTML = `<b style="flex:0 0 auto;min-width:48px">${esc(label || display)}</b>
+    row.innerHTML = `<span class="drag-handle" aria-hidden="true">⠿</span><b style="flex:0 0 auto;min-width:48px">${esc(label || display)}</b>
       ${label ? `<span class="keycap">${esc(display)}</span>` : ''}
-      <button class="btn ghost icon-btn danger" data-act="remove-sc" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
+      <button class="btn ghost icon-btn danger" data-act="remove-sc" style="margin-left:auto" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
     row.querySelector('[data-act="remove-sc"]').addEventListener('click', async event => {
       if (!armConfirm(event.target.closest('button'))) return;
       const t = state.targets.find(item => item.id === targetId);
@@ -385,6 +467,14 @@ function renderScopedShortcuts(box, list, scope, targetId) {
       t.shortcuts = (t.shortcuts || []).filter((_, i) => i !== index);
       if (!t.shortcuts.length) t.shortcuts = null; // 清空即回退全局
       await save();
+    });
+    attachDragSort(row, {
+      key: 'sc:' + targetId, index,   // 每个应用一组，key 里带 id 免得跨应用串台
+      commit: async (from, to) => {
+        const t = state.targets.find(item => item.id === targetId);
+        if (!t || !Array.isArray(t.shortcuts)) return;
+        if (reorder(t.shortcuts, from, to)) await save();
+      },
     });
     box.append(row);
   });
@@ -416,7 +506,8 @@ async function save() {
     $('saveState').textContent = '已保存到本机';
     await refresh(); renderTargets();
     setTimeout(() => { $('saveState').textContent = ''; }, 2500);
-  } catch (error) { $('saveState').textContent = error.message; }
+    return true;
+  } catch (error) { $('saveState').textContent = error.message; return false; }
 }
 
 let searchTimer = 0;
@@ -430,12 +521,32 @@ $('search').addEventListener('input', () => {
     (data.apps || []).forEach(app => {
       const row = document.createElement('div'); row.className = 'app-row';
       row.innerHTML = `<img src="/api/app-icon?path=${encodeURIComponent(app.path)}" alt="">
-        <span class="meta"><b>${esc(app.name)}</b><small>${esc(app.path)}</small></span>
-        <button class="btn">添加</button>`;
-      row.querySelector('button').onclick = () => {
-        state.targets.push({id: '', name: app.name, bundleID: null, path: app.path, available: true});
-        renderTargets(); save();
-      };
+        <span class="meta"><b>${esc(app.name)}</b><small>${esc(app.path)}</small></span>`;
+      // 已在列表里的应用不再常驻"添加"按钮：添加成功后按钮收起，避免重复添加同一路径。
+      if (state.targets.some(t => t.path && t.path === app.path)) {
+        row.insertAdjacentHTML('beforeend', '<span class="app-added idle">已添加</span>');
+      } else {
+        const button = document.createElement('button');
+        button.className = 'btn';
+        button.textContent = '添加';
+        button.onclick = async () => {
+          button.disabled = true; button.textContent = '添加中…';
+          state.targets.push({id: '', name: app.name, bundleID: null, path: app.path, available: true});
+          renderTargets();
+          if (await save()) {
+            // 只留一次性提示，2.5s 后淡出——成功之后不再需要常驻的添加入口。
+            const tip = document.createElement('span');
+            tip.className = 'app-added done';
+            tip.textContent = '添加成功';
+            button.replaceWith(tip);
+            setTimeout(() => { tip.classList.add('fade'); setTimeout(() => tip.remove(), 400); }, 2500);
+          } else {
+            state.targets.pop(); renderTargets();   // 保存失败：撤掉刚加的这条，按钮恢复
+            button.disabled = false; button.textContent = '添加';
+          }
+        };
+        row.append(button);
+      }
       box.append(row);
     });
     if (!(data.apps || []).length) box.innerHTML = '<div class="app-row"><span class="meta">没有匹配的应用</span></div>';
@@ -462,6 +573,8 @@ const COMMON_SHORTCUT_LABELS = { '⌘C': '复制', '⌘V': '粘贴', '⌘X': '�
   '⌘⇧Z': '重做', '⌘A': '全选', '⌘S': '保存', '⌘F': '查找', '⌘N': '新建',
   '⌘O': '打开', '⌘P': '打印', '⌘W': '关闭', '⌘Q': '退出', '⌘T': '新建标签页' };
 let shortcuts = [];
+// 服务端下发的预设动作目录（/api/status.actions）：录不到的系统/应用操作，点选即添加。
+let presetActions = [];
 let recording = false;
 // 作用域录制模型：recordCtx 说清这次录给谁。scope=global → 全局快捷键；scope=target → 应用专属组。
 let recordCtx = null; // { scope: 'global'|'target', targetId?: string, index?: number }
@@ -569,11 +682,35 @@ $('scRecord').onclick = (event) => startRecording({ scope: 'global' }, '按下�
 async function saveShortcuts() {
   $('saveState').textContent = '保存中…';
   try {
-    await post('/api/shortcuts', shortcuts.map(s => ({ id: s.id, label: s.label, hotkey: s.hotkey })));
+    await post('/api/shortcuts', shortcuts.map(s => ({ id: s.id, label: s.label, hotkey: s.hotkey, action: s.action || null })));
     $('saveState').textContent = '已保存到本机';
-    await refresh();
+    // 必须显式重绘：reorder 是先改内存再存，等 refresh 比对时本地与服务端已一致，
+    // 光靠 refresh() 里那句 JSON diff 判定为"没变"，重排后的顺序就永远画不出来（与 save() 同构）。
+    await refresh(); renderShortcuts();
     setTimeout(() => { $('saveState').textContent = ''; }, 2500);
   } catch (error) { $('saveState').textContent = error.message; }
+}
+
+// 预设动作：录不到的系统/应用操作，点选即添加（服务端按平台展开按键串）。
+// 已添加的置灰，避免重复添加同一动作。
+function renderPresetActions() {
+  const row = $('scPresetRow');
+  const box = $('scPresetChips');
+  row.hidden = presetActions.length === 0;
+  box.innerHTML = '';
+  presetActions.forEach(action => {
+    const added = shortcuts.some(s => s.action === action.id);
+    const chip = document.createElement('button');
+    chip.className = 'btn ghost';
+    chip.disabled = added;
+    chip.textContent = added ? `${action.label} · 已添加` : action.label;
+    chip.title = `${action.label} · ${hotkeyDisplay(action.hotkey)}`;
+    chip.addEventListener('click', async () => {
+      shortcuts.push({ id: '', label: action.label, hotkey: action.hotkey, action: action.id });
+      await saveShortcuts();
+    });
+    box.append(chip);
+  });
 }
 
 function renderShortcuts() {
@@ -582,23 +719,27 @@ function renderShortcuts() {
     const display = hotkeyDisplay(shortcut.hotkey);
     // label 与键位展示重复时只显示一个（如 label=↑、hotkey=Up 都显示 ↑），避免同列两个相同符号。
     const label = shortcut.label === display ? '' : shortcut.label;
+    // 预设动作不可重录：它们在网页里按下去就被系统消费，录制器拿不到。故不挂 rerecord。
+    const preset = Boolean(shortcut.action);
     const row = document.createElement('div'); row.className = 'target-row';
-    row.innerHTML = `<b class="sc-editable" data-act="rerecord" title="点击重新录制按键" style="flex:0 0 auto;min-width:48px">${esc(label || display)}</b>
-      ${label ? `<span class="keycap" data-act="rerecord" title="点击重新录制组合键">${esc(display)}</span>` : ''}
-      <button class="btn ghost" data-act="up" ${index === 0 ? 'disabled' : ''}>↑</button>
-      <button class="btn ghost" data-act="down" ${index === shortcuts.length - 1 ? 'disabled' : ''}>↓</button>
-      <button class="btn ghost icon-btn danger" data-act="remove" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
+    row.innerHTML = `<span class="drag-handle" aria-hidden="true">⠿</span><b${preset ? '' : ' class="sc-editable" data-act="rerecord" title="点击重新录制按键"'} style="flex:0 0 auto;min-width:48px">${esc(label || display)}</b>
+      ${label ? `<span class="keycap"${preset ? '' : ' data-act="rerecord" title="点击重新录制组合键"'}>${esc(display)}</span>` : ''}
+      ${preset ? '<span class="pill" style="padding:2px 8px;font-size:11px">预设</span>' : ''}
+      <button class="btn ghost icon-btn danger" data-act="remove" style="margin-left:auto" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
     row.addEventListener('click', async event => {
       const act = event.target.closest('[data-act]')?.dataset?.act;
       if (!act) return;
       if (act === 'remove') { if (!armConfirm(event.target.closest('button[data-act]'))) return; shortcuts.splice(index, 1); await saveShortcuts(); }
-      if (act === 'up' && index > 0) { [shortcuts[index - 1], shortcuts[index]] = [shortcuts[index], shortcuts[index - 1]]; await saveShortcuts(); }
-      if (act === 'down' && index < shortcuts.length - 1) { [shortcuts[index + 1], shortcuts[index]] = [shortcuts[index], shortcuts[index + 1]]; await saveShortcuts(); }
       // 重录反馈显示在全局录制按钮上（重录发生在全局列表，与按钮同卡片）。
       if (act === 'rerecord') startRecording({ scope: 'rerecord-global', index }, `为「${shortcuts[index].label}」按新按键…`);
     });
+    attachDragSort(row, {
+      key: 'shortcuts', index,
+      commit: async (from, to) => { if (reorder(shortcuts, from, to)) await saveShortcuts(); },
+    });
     box.append(row);
   });
+  renderPresetActions();   // 增删会改变"已添加"置灰状态，随列表一起刷新
 }
 
 $('qr').onload = () => { $('qr').dataset.loaded = '1'; };

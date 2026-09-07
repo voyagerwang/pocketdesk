@@ -36,7 +36,7 @@
       </section>
 
       <section class="pad-card" id="pad-card" aria-label="触控板">
-        <div id="pad" tabindex="0" aria-label="触控板：单指移动光标，点按单击，双指滚动；方向键移动，回车单击，Esc 退出">
+        <div id="pad" tabindex="0" data-ruler="double" aria-label="触控板：单指移动光标，点按单击，双指滚动；方向键移动，回车单击，Esc 退出">
           <button id="pad-settings" class="pad-gear" type="button" aria-expanded="false" title="光标与滚动设置">
             <!-- 齿轮：带齿的外圈轮廓 + 中轴孔，与全站墨点血缘一致（中轴即墨点）。 -->
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -51,6 +51,7 @@
         <div class="pad-tuning">
           <label>光标<input id="sens" type="range" min="0.6" max="3" step="0.1" value="1.5"></label>
           <label>滚动<input id="scroll-speed" type="range" min="0.5" max="4" step="0.1" value="1.5"></label>
+          <label>刻度<select id="ruler-mode"><option value="double">双排</option><option value="single">单排</option></select></label>
         </div>
       </section>
 

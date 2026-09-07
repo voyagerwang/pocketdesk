@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard 与 CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的 SendCommand/ShortcutConfig/InputError/ShortcutError/ShortcutKeys、TargetStore 的目标解析。
+ * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard、CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的 SendCommand/ShortcutConfig/InputError/ShortcutError/ShortcutKeys 与 ShortcutActions 的平台展开，消费 TargetStore 的目标解析。
  * [OUTPUT]: 对外提供 InputExecutor（图片预上传暂存、应用激活、图文发送的 activate → Unicode → 粘贴图片 → Return 注入序列、快捷键组合注入）；合成键盘事件统一经 postKey（真实 CGEventSource + characters 补齐 + down/up 间隔），解决 Zed 终端这类按 characters 取键的应用对合成 Return 的丢弃。
  * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -210,9 +210,31 @@ final class InputExecutor {
             guard AXIsProcessTrusted() else {
                 completion(.failure(.message("尚未授予“辅助功能”权限。请在控制台完成授权。"))); return
             }
+            // 系统级动作不走按键：锁屏跑系统命令、切换应用用 AppKit，两者都不依赖系统快捷键守护进程。
+            if let action = shortcut.action.flatMap(ShortcutAction.find) {
+                switch action.delivery {
+                case .systemCommand:
+                    guard let command = action.command(.current) else {
+                        completion(.failure(.message("「\(action.label)」在当前平台没有可用实现。"))); return
+                    }
+                    if self.runCommand(command) { completion(.success(())) }
+                    else { completion(.failure(.message("「\(action.label)」执行失败。"))) }
+                    return
+                case .switchPreviousApp:
+                    self.switchToPreviousApp { ok in
+                        if ok { completion(.success(())) }
+                        else { completion(.failure(.message("没有可切换的其他应用。"))) }
+                    }
+                    return
+                case .keyEvent:
+                    break   // 落到下面的 CGEvent 注入
+                }
+            }
             // 语义串经 ShortcutKeys.resolve 统一解析为 CGEvent 键码 + flags；失败给明确报错。
-            guard let resolved = ShortcutKeys.resolve(shortcut.hotkey) else {
-                completion(.failure(.message("快捷键无法识别：\(shortcut.hotkey)"))); return
+            // 预设动作（退出应用/关闭窗口等）先按当前平台展开成按键串，再走同一链路——不另起注入通道。
+            let hotkey = shortcut.effectiveHotkey
+            guard let resolved = ShortcutKeys.resolve(hotkey) else {
+                completion(.failure(.message("快捷键无法识别：\(hotkey)"))); return
             }
             if self.postKey(resolved.keycode, flags: resolved.flags) {
                 completion(.success(()))
@@ -220,5 +242,41 @@ final class InputExecutor {
                 completion(.failure(.message("快捷键事件创建失败。")))
             }
         }
+    }
+
+    // 锁屏这类"系统能力"动作：直接跑命令，不模拟按键、也不要额外授权。
+    private func runCommand(_ command: String) -> Bool {
+        let parts = command.split(separator: " ").map(String.init)
+        guard let executable = parts.first else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = Array(parts.dropFirst())
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch { return false }
+    }
+
+    // 切到上一个应用：CGWindowList 的顺序就是最近使用顺序（z-order），跳过当前前台的应用，
+    // 取下一个常规应用激活。绕开了 Cmd+Tab 到不了系统快捷键守护进程的问题。
+    // 激活沿用 activateTarget 那条已验证的 openApplication 路径（NSRunningApplication.activate 在此失败过）。
+    private func switchToPreviousApp(completion: @escaping (Bool) -> Void) {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
+            completion(false); return
+        }
+        let currentPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        for entry in list {
+            guard let pid = entry[kCGWindowOwnerPID as String] as? pid_t, pid != currentPID,
+                  let app = NSRunningApplication(processIdentifier: pid),
+                  app.activationPolicy == .regular,
+                  let url = app.bundleURL else { continue }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            configuration.addsToRecentItems = false
+            NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, _ in completion(true) }
+            return
+        }
+        completion(false)
     }
 }

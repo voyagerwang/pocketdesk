@@ -42,6 +42,7 @@ const pad = document.querySelector('#pad');
 const padTarget = document.querySelector('#pad-target');
 const sensEl = document.querySelector('#sens');
 const scrollSpeedEl = document.querySelector('#scroll-speed');
+const rulerEl = document.querySelector('#ruler-mode');
 const padSettings = document.querySelector('#pad-settings');
 
 let targets = [];
@@ -276,7 +277,7 @@ let lastTap = null;           // 双击检测：350ms 内同一附近的第二�
 let twoInfo = null;           // 双指中点与间距
 let twoVy = 0;                // 双指滚动的松手速度（px/ms）
 let momentumRaf = 0;          // 惯性滚动动画帧
-const SCROLL_ZONE_PX = 52;    // 触控板右缘单指滚动区宽度
+const SCROLL_ZONE_PX = 36;    // 触控板右缘单指滚动区宽度（与 ::after 视觉带宽同宽，视觉不撒谎）
 let twoStartedAt = 0;
 let twoMoved = 0;
 
@@ -287,6 +288,14 @@ sensEl.value = localStorage.getItem('pd-sens') || sensEl.value;
 scrollSpeedEl.value = localStorage.getItem('pd-scroll') || scrollSpeedEl.value;
 sensEl.addEventListener('input', () => localStorage.setItem('pd-sens', sensEl.value));
 scrollSpeedEl.addEventListener('input', () => localStorage.setItem('pd-scroll', scrollSpeedEl.value));
+
+// 刻度尺排数：写进 #pad 的 data-ruler，CSS 据此隐去内列（单排锚点回退方案）。
+rulerEl.value = localStorage.getItem('pd-ruler') || rulerEl.value;
+pad.dataset.ruler = rulerEl.value;
+rulerEl.addEventListener('change', () => {
+  pad.dataset.ruler = rulerEl.value;
+  localStorage.setItem('pd-ruler', rulerEl.value);
+});
 
 /* ---------- 设置齿轮：默认收起，点开才显示滑杆 ---------- */
 
@@ -494,7 +503,8 @@ function renderShortcuts() {
         const response = await fetch('/api/shortcut-trigger', {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({ id: shortcut.id, label: shortcut.label, hotkey: shortcut.hotkey }),
+          // action 一并上报：服务端按 id 回查配置，查不到时用上报内容兜底（旧列表/重启后场景）。
+          body: JSON.stringify({ id: shortcut.id, label: shortcut.label, hotkey: shortcut.hotkey, action: shortcut.action || null }),
         });
         if (!response.ok) {
           const result = await response.json().catch(() => ({}));
