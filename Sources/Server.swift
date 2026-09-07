@@ -99,18 +99,6 @@ final class Server {
         }
     }
 
-    // 真实前台应用：取窗口服务器里 layer 0（普通窗口）中最前面的窗口归属者。
-    // NSWorkspace.frontmostApplication 在长期无窗口的常驻进程里缓存冻结（实测永远返回旧值），
-    // CGWindowList 每次直接问窗口服务器，不依赖 AppKit 的激活状态。
-    private static func realFrontmostApp() -> NSRunningApplication? {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
-        // CGWindowList 按从前到后排序；layer 0 的第一个有归属者的窗口就是前台应用的主窗口。
-        let windowLayer = kCGWindowLayer as String
-        let windowOwnerPID = kCGWindowOwnerPID as String
-        guard let entry = list.first(where: { ($0[windowLayer] as? Int) == 0 && $0[windowOwnerPID] != nil }),
-              let pid = entry[windowOwnerPID] as? Int32 else { return nil }
-        return NSRunningApplication(processIdentifier: pid)
-    }
 
     private func route(headerText: String, body: [UInt8], connection: NWConnection) {
         let requestLine = headerText.components(separatedBy: "\r\n").first ?? ""
@@ -138,7 +126,7 @@ final class Server {
             // 交给手机端做"注入当前前台"的伪目标（不切换应用）。
             // 不用 NSWorkspace.frontmostApplication：长期无窗口的常驻应用里它的缓存会冻结
             // （实测永远返回某个旧应用）；CGWindowList 直接问窗口服务器，谁在前台就是谁。
-            let frontmost = Self.realFrontmostApp()
+            let frontmost = Util.frontmostApp()
             let frontmostId = frontmost.flatMap { app in
                 store.targets.first { config in
                     (config.bundleID != nil && app.bundleIdentifier == config.bundleID)
@@ -181,6 +169,8 @@ final class Server {
                 "actions": ShortcutAction.allCases.map { action in
                     ["id": action.rawValue, "label": action.label, "hotkey": action.hotkey(.current)]
                 },
+                // 最近动作日志：事后排查"我点了但没反应"的唯一依据，控制台第 5 个面板消费。
+                "log": ExecutionLog.shared.recent(30),
             ]
             respond(connection, status: 200, json: payload)
         case ("GET", "/console"), ("GET", "/console.html"):
@@ -291,7 +281,9 @@ final class Server {
             }
             executor.send(command) { result in
                 switch result {
-                case .success: self.respond(connection, status: 200, json: ["ok": true])
+                case .success(let feedback):
+                    // 发送成功也带结论：sent 表示"发出去了但无法确认是否落到输入框"，detail 已含人话说明。
+                    self.respond(connection, status: 200, json: ["ok": true, "outcome": feedback.outcome.rawValue, "detail": feedback.detail])
                 case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
                 }
             }
@@ -330,7 +322,10 @@ final class Server {
             let resolved = store.shortcuts.first { $0.id == shortcut.id } ?? shortcut
             executor.triggerShortcut(resolved) { result in
                 switch result {
-                case .success: self.respond(connection, status: 200, json: ["ok": true])
+                case .success(let feedback):
+                    // outcome 是本次动作的可信度：delivered=观察到生效，sent=发出去了但没确认。
+                    // 前端据此区分"已完成"与"已发送，不确定"，不再一律当成成功。
+                    self.respond(connection, status: 200, json: ["ok": true, "outcome": feedback.outcome.rawValue, "detail": feedback.detail])
                 case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
                 }
             }

@@ -1,15 +1,28 @@
 /**
- * [INPUT]: 依赖 Foundation 的 Data/URL 与 AppKit 的 NSWorkspace/NSImage、CoreImage 的二维码滤镜。
- * [OUTPUT]: 对外提供 Util（主局域网地址与 Tailscale 私网地址探测、稳定 .local 主机名、QR PNG 生成、应用图标 PNG 提取）。
- * [POS]: Sources 的无状态工具层；Server 的 /api/status、/api/qr、图标端点调用它渲染地址与图像。
+ * [INPUT]: 依赖 Foundation 的 Data/URL 与 AppKit 的 NSWorkspace/NSImage、CoreGraphics 的 CGWindowList、CoreImage 的二维码滤镜。
+ * [OUTPUT]: 对外提供 Util（主局域网地址与 Tailscale 私网地址探测、稳定 .local 主机名、QR PNG 生成、应用图标 PNG 提取、前台应用探测）。
+ * [POS]: Sources 的无状态工具层；Server 的 /api/status、/api/qr、图标端点调用它渲染地址与图像，InputExecutor 的窗口动作调用它定位前台应用。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
+import CoreGraphics
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import Foundation
 
 enum Util {
+    // 前台应用：不用 NSWorkspace.frontmostApplication——长期无窗口的常驻进程里它的缓存会冻结
+    // （实测永远返回某个旧应用）。CGWindowList 直接问窗口服务器：列表按从前到后排序，
+    // layer 0 的第一个有归属者的窗口即前台应用的主窗口。
+    static func frontmostApp() -> NSRunningApplication? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let windowLayer = kCGWindowLayer as String
+        let windowOwnerPID = kCGWindowOwnerPID as String
+        guard let entry = list.first(where: { ($0[windowLayer] as? Int) == 0 && $0[windowOwnerPID] != nil }),
+              let pid = entry[windowOwnerPID] as? Int32 else { return nil }
+        return NSRunningApplication(processIdentifier: pid)
+    }
+
     private static func ipv4Interfaces() -> [(name: String, ip: String)] {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0 else { return [] }

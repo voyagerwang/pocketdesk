@@ -20,7 +20,7 @@
   })();
 </script>
 <style>
-:root{color-scheme:light;--ink:#171c2c;--muted:#4a5266;--faint:#7d8494;--bg:#eef1f7;--panel:#f1f2f5;--line:rgb(15 30 68 / 10%);--line-strong:rgb(15 30 68 / 24%);--accent:#1f6bff;--accent-soft:rgb(31 107 255 / 10%);--accent-line:rgb(31 107 255 / 38%);--danger:#d93843}
+:root{color-scheme:light;--ink:#171c2c;--muted:#4a5266;--faint:#7d8494;--bg:#eef1f7;--panel:#f1f2f5;--line:rgb(15 30 68 / 10%);--line-strong:rgb(15 30 68 / 24%);--accent:#1f6bff;--accent-soft:rgb(31 107 255 / 10%);--accent-line:rgb(31 107 255 / 38%);--danger:#d93843;--warn:#a5600a;--ok:#157a3c}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",sans-serif;font-size:14px;-webkit-font-smoothing:antialiased}
 main{max-width:860px;margin:auto;padding:40px 24px 60px;display:flex;flex-direction:column;gap:24px}
@@ -112,6 +112,21 @@ button{font:inherit;cursor:pointer}
 /* armed 态要压过 :hover（更高优先级），否则悬停时红底被染回白底、"确认移除"红字不可见。 */
 .icon-btn.armed,.icon-btn.armed:hover{background:var(--danger);border-color:var(--danger);color:#fff}
 .icon-btn.armed .confirm-text{display:inline;margin-left:5px}
+/* 最近动作日志：四列网格 = 时间 / 结论徽章 / 动作+前台 / 说明。
+   结论徽章用颜色分三态：绿=已生效、琥珀=已发出未确认、红=未执行或失败。 */
+.activity-log{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.activity-log .hint{padding:12px}
+.act-row{display:grid;grid-template-columns:64px 56px 1fr;grid-template-areas:"time badge body" "time badge detail";gap:2px 10px;padding:8px 12px;background:#fff;font-size:12.5px;align-items:baseline}
+.act-time{grid-area:time;color:var(--faint);font-variant-numeric:tabular-nums}
+.act-badge{grid-area:badge;justify-self:start;padding:1px 6px;border-radius:3px;font-size:11px;font-weight:600;white-space:nowrap;color:var(--muted);background:var(--panel)}
+.act-body{grid-area:body;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;min-width:0}
+.act-label{font-weight:600;color:var(--ink)}
+.act-front{color:var(--faint);font-size:11.5px}
+.act-detail{grid-area:detail;color:var(--muted);line-height:1.45;overflow-wrap:anywhere}
+.act-row[data-outcome="delivered"] .act-badge{color:var(--ok);background:rgb(21 122 60 / 10%)}
+.act-row[data-outcome="sent"] .act-badge{color:var(--warn);background:rgb(165 96 10 / 12%)}
+.act-row[data-outcome="blocked"] .act-badge,.act-row[data-outcome="failed"] .act-badge{color:var(--danger);background:rgb(217 56 67 / 10%)}
+.act-row[data-outcome="blocked"] .act-detail,.act-row[data-outcome="failed"] .act-detail{color:var(--danger)}
 </style>
 </head>
 <body>
@@ -175,6 +190,12 @@ button{font:inherit;cursor:pointer}
     <p class="hint" style="margin:0 0 12px">这些在网页里按下去就会被浏览器或系统本身吃掉（真的锁屏、真的退出浏览器），录制器拿不到，所以点选即添加。系统级的不模拟按键，直接调系统能力：锁屏走关屏（需系统已开启「需要密码」），切换应用按最近使用顺序切。</p>
     <div id="scList"></div>
   </section>
+
+  <section class="card">
+    <h2><span class="step">5</span>最近动作</h2>
+    <p class="sub">手机端每一次点击都会记在这里。手机上「点了没反应」时，来这里看它到底走到哪一步——多数情况是电脑锁了屏、或当时前台不是你以为的那个应用。</p>
+    <div id="activityLog" class="activity-log"></div>
+  </section>
 </main>
 <input id="iconFile" type="file" accept="image/*" hidden>
 <script>
@@ -210,6 +231,7 @@ themeSwitch.addEventListener('click',async event=>{
 const $ = id => document.getElementById(id);
 let state = { targets: [], platform: 'macOS', status: null };
 let iconTargetId = null;
+let lastActivityLog = [];
 
 function esc(text) { const div = document.createElement('div'); div.textContent = text ?? ''; return div.innerHTML; }
 
@@ -240,6 +262,12 @@ async function refresh() {
     if (JSON.stringify(status.actions || []) !== JSON.stringify(presetActions)) {
       presetActions = status.actions || [];
       renderPresetActions();
+    }
+    // 动作日志同样做变化检测：3 秒一轮询，无脑重绘会打断正在阅读/选中的用户。
+    const incomingLog = status.log || [];
+    if (JSON.stringify(incomingLog) !== JSON.stringify(lastActivityLog)) {
+      lastActivityLog = incomingLog;
+      renderActivity(incomingLog);
     }
     if (!$('qr').src || $('qr').dataset.loaded !== '1') {
       $('qr').src = '/api/qr';
@@ -740,6 +768,27 @@ function renderShortcuts() {
     box.append(row);
   });
   renderPresetActions();   // 增删会改变"已添加"置灰状态，随列表一起刷新
+}
+
+// 最近动作：把"发出去了"与"生效了"分开显示，不确定态用琥珀色单独标出。
+// 这是排查"手机点了没反应"的第一现场——日志里明确失败与仅发出未确认，排查方向完全不同。
+function renderActivity(log) {
+  const box = $('activityLog');
+  if (!box) return;
+  if (!log || !log.length) {
+    box.innerHTML = '<p class="hint" style="margin:0">还没有记录。用手机点一下快捷键或发一条消息，结果会实时出现在这里。</p>';
+    return;
+  }
+  box.innerHTML = log.map(item => {
+    const time = (item.time || '').slice(11, 19) || '--:--:--';
+    const front = item.frontApp ? `<span class="act-front">前台 ${esc(item.frontApp)}</span>` : '';
+    return `<div class="act-row" data-outcome="${esc(item.outcome)}">
+      <span class="act-time">${esc(time)}</span>
+      <span class="act-badge">${esc(item.outcomeLabel || item.outcome)}</span>
+      <span class="act-body"><span class="act-label">${esc(item.label)}</span>${front}</span>
+      <span class="act-detail">${esc(item.detail)}</span>
+    </div>`;
+  }).join('');
 }
 
 $('qr').onload = () => { $('qr').dataset.loaded = '1'; };

@@ -25,6 +25,9 @@
   --accent-soft: rgb(31 107 255 / 10%);
   --accent-line: rgb(31 107 255 / 38%);
   --danger: #cf2b36;
+  /* 琥珀：既非成功也非失败的"未能确认"态。三态结论必须有第三种颜色，否则只能二选一地撒谎。 */
+  --warn: #a5600a;
+  --warn-soft: rgb(165 96 10 / 12%);
   --shadow-tile: 0 1px 2px rgb(16 24 40 / 6%);
 
   /* 玻璃高光与蓝色发光：classic 独有；muji 覆盖为透明或无。 */
@@ -402,6 +405,13 @@ textarea:focus {
 
 #message.error {
   color: var(--danger);
+}
+
+/* 中间态：操作发出去了但服务端没观察到生效（按键类动作的外部可见上限）。
+   用 fg 主色而非 danger——它是"不确定"不是"失败"，但要和默认是"已完成"区分开。 */
+#message.warn {
+  color: var(--warn);
+  font-weight: 500;
 }
 
 /* ---------- 触控板卡片：碰到即进入触控板模式 ---------- */

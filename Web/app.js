@@ -55,9 +55,16 @@ let manualUntil = 0;        // 手动滑动 Dock 期间暂停跟随，避免抢�
 
 /* ---------- 通用 ---------- */
 
+// tone: true/'error'=失败；'warn'=发出去了但未能确认生效；其余=正常。
+// 中间态必须有自己的长相——"不确定"和"成功"共用一张脸，就是"点了没反应还以为是自己错觉"的来源。
 function message(text, error = false) {
   messageEl.textContent = text;
-  messageEl.className = error ? 'error' : '';
+  messageEl.className = error === 'warn' ? 'warn' : (error ? 'error' : '');
+}
+
+// 触感反馈：成功轻点一下，不确定稍重，失败双震。手机常常不在视线里，震动是唯一不看屏也能分辨的通道。
+function haptic(pattern) {
+  if (navigator.vibrate) { try { navigator.vibrate(pattern); } catch (error) { /* 不支持震动则忽略 */ } }
 }
 
 /* ---------- 渲染 ---------- */
@@ -506,12 +513,24 @@ function renderShortcuts() {
           // action 一并上报：服务端按 id 回查配置，查不到时用上报内容兜底（旧列表/重启后场景）。
           body: JSON.stringify({ id: shortcut.id, label: shortcut.label, hotkey: shortcut.hotkey, action: shortcut.action || null }),
         });
+        const result = await response.json().catch(() => ({}));
         if (!response.ok) {
-          const result = await response.json().catch(() => ({}));
+          // blocked/failed：前置条件不满足或执行出错，明确失败，不要含糊。
           message(result.error || '快捷键触发失败。', true);
+          haptic([28, 50, 28]);
+          return;
+        }
+        if (result.outcome === 'sent') {
+          // 发出去了但服务端没观察到任何状态变化：说清楚"不确定"，别假装成功。
+          message(result.detail || '已发送，未能确认是否生效。', 'warn');
+          haptic([22]);
+        } else {
+          message(result.detail || '已完成。');
+          haptic([12]);
         }
       } catch {
         message('无法连接本机服务。', true);
+        haptic([28, 50, 28]);
       } finally {
         button.disabled = false;
       }
@@ -901,9 +920,17 @@ async function send() {
     pendingImage = null;
     imageThumb.src = '';
     imagePreview.hidden = true;
-    message('已发送。');
+    // outcome=sent 表示目标没能在前台，内容可能没落到它的输入框：这是"发了却说没收到"的主因，必须说出来。
+    if (result.outcome === 'sent') {
+      message(result.detail || '已发送，未能确认是否生效。', 'warn');
+      haptic([22]);
+    } else {
+      message(result.detail || '已发送。');
+      haptic([12]);
+    }
   } catch (error) {
     message(error.message, true);
+    haptic([28, 50, 28]);
   } finally {
     sendEl.disabled = false;
   }
