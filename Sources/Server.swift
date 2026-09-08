@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
+ * [INPUT]: 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 ScreenCapture 的鉴权画面读取、Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
  * [OUTPUT]: 对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活/发送/图片预上传/快捷键触发、静态页面服务；非回环写请求强制 Bearer 校验）。
  * [POS]: Sources 的传输层；只翻译协议不做系统调用，与 WSServer（触控板通道）平行为一对传输兄弟。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -9,6 +9,8 @@ import Foundation
 import Network
 
 final class Server {
+    private let screenCapture = ScreenCapture()
+    private var captureBusy = false
     private let port: UInt16
     private let webRoot: URL
     private let executor: InputExecutor
@@ -112,12 +114,48 @@ final class Server {
         // 写端点鉴权：手机 token 来自扫码 URL；控制台走 localhost 回环豁免（本机即机主）。
         let isWrite = method != "GET"
         let fromLoopback = Self.isLoopback(connection)
-        if isWrite && !fromLoopback && !Auth.verify(authorizationHeader: authorization) {
+        if (isWrite || path.hasPrefix("/api/screen/")) && !fromLoopback && !Auth.verify(authorizationHeader: authorization) {
             respond(connection, status: 401, json: ["error": "未授权：请重新扫码连接。"])
             return
         }
 
         switch (method, path) {
+        case ("POST", "/api/screen/permission"):
+            screenCapture.requestPermission()
+            respond(connection, status: 200, json: ["ok": true])
+        case ("GET", "/api/screen/displays"), ("GET", "/api/screen/frame"):
+            guard !captureBusy else {
+                respond(connection, status: 503, json: ["error": "画面采集中，请稍后重试。"]); return
+            }
+            let displayID = Self.queryValue("display", in: rawPath).flatMap(UInt32.init)
+            if path.hasSuffix("/frame") && displayID == nil {
+                respond(connection, status: 400, json: ["error": "请选择显示器。"]); return
+            }
+            captureBusy = true
+            Task {
+                do {
+                    if let displayID {
+                        let data = try await screenCapture.snapshot(displayID: displayID)
+                        queue.async {
+                            self.captureBusy = false
+                            self.respond(connection, status: 200, data: data, contentType: "image/jpeg")
+                        }
+                    } else {
+                        let displays = try await screenCapture.displays()
+                        queue.async {
+                            self.captureBusy = false
+                            self.respond(connection, status: 200, json: ["displays": displays])
+                        }
+                    }
+                } catch {
+                    let message = error.localizedDescription
+                    queue.async {
+                        self.captureBusy = false
+                        self.respond(connection, status: 422, json: ["error": message])
+                    }
+                }
+            }
+
         case ("GET", "/api/status"):
             let stableURL = Util.stableURL(port)
             let lanIP = Util.primaryLANAddress()
@@ -331,7 +369,7 @@ final class Server {
             }
         case ("GET", "/"), ("GET", "/index.html"):
             serveFile("index.html", connection: connection)
-        case ("GET", "/app.js"), ("GET", "/style.css"):
+        case ("GET", "/screen.js"), ("GET", "/app.js"), ("GET", "/style.css"):
             serveFile(String(path.dropFirst()), connection: connection)
         default:
             respond(connection, status: 404, json: ["error": "未找到资源。"])
@@ -346,21 +384,23 @@ final class Server {
     }
 
     private func serveIcon(_ targetId: String, connection: NWConnection) {
+        // 图标内容近乎不变（仅控制台换图标时变，且会重置内存缓存），长缓存让浏览器
+        // 刷新页面时直接复用本地副本——没有重新下载就没有"先首字后图标"的闪跳。
         if let cached = iconCache["id:" + targetId] {
-            respond(connection, status: 200, data: cached, contentType: "image/png"); return
+            respond(connection, status: 200, data: cached, contentType: "image/png", cacheControl: "public, max-age=86400"); return
         }
         let customURL = store.customIconURL(targetId)
         let sourcePath: String?
         if FileManager.default.fileExists(atPath: customURL.path), let data = try? Data(contentsOf: customURL) {
             iconCache["id:" + targetId] = data
-            respond(connection, status: 200, data: data, contentType: "image/png"); return
+            respond(connection, status: 200, data: data, contentType: "image/png", cacheControl: "public, max-age=86400"); return
         }
         if let config = store.resolve(targetId), let url = store.appURL(config) { sourcePath = url.path } else { sourcePath = nil }
         guard let path = sourcePath, let png = Util.appIconPNG(forFile: path) else {
             respond(connection, status: 404, json: ["error": "图标不可用。"]); return
         }
         iconCache["id:" + targetId] = png
-        respond(connection, status: 200, data: png, contentType: "image/png")
+        respond(connection, status: 200, data: png, contentType: "image/png", cacheControl: "public, max-age=86400")
     }
 
     private func respond(_ connection: NWConnection, status: Int, json: Any) {
@@ -371,9 +411,9 @@ final class Server {
         respond(connection, status: status, data: data, contentType: "application/json; charset=utf-8")
     }
 
-    private func respond(_ connection: NWConnection, status: Int, data: Data, contentType: String) {
+    private func respond(_ connection: NWConnection, status: Int, data: Data, contentType: String, cacheControl: String = "no-store") {
         let reason = status == 200 ? "OK" : status == 400 ? "Bad Request" : status == 404 ? "Not Found" : status == 413 ? "Payload Too Large" : status == 503 ? "Service Unavailable" : "Unprocessable Entity"
-        let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(contentType)\r\nContent-Length: \(data.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+        let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(contentType)\r\nContent-Length: \(data.count)\r\nCache-Control: \(cacheControl)\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(header.utf8) + data, completion: .contentProcessed { _ in connection.cancel() })
     }
 }

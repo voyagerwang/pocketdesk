@@ -1,7 +1,7 @@
 <!--
-  [INPUT]: 依赖 style.css 的设计令牌与 app.js 的 Dock、触控板手势与 WebSocket 通道。
+  [INPUT]: 依赖 screen.js 的鉴权截图查看器，依赖 style.css 的设计令牌与 app.js 的 Dock、触控板手势与 WebSocket 通道。
   [OUTPUT]: 单页布局：顶部（标题 + 当前应用 + 连接状态）、单行滚动 Dock、可展开触控板卡片（设置默认收起）、
-            输入区（输入框下方的历史发送面板：清空带二次确认、收起按钮；图片预览）；目标选中态跟随 Mac 前台应用；
+            按需打开的全屏画面查看器（关闭返回原输入位置）；输入区（输入框下方的历史发送面板：清空带二次确认、收起按钮；图片预览）；目标选中态跟随 Mac 前台应用；
             主题跟随电脑端（/api/status 下发，Muji ↔ classic；localStorage 只做刷新闪烁缓解，无切换按钮）。
   [POS]: Web 的唯一页面入口；只收集文本与手势，绝不处理或上传语音。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -22,7 +22,7 @@
         } catch (e) { /* 无属性 = 经典蓝 */ }
       })();
     </script>
-    <link rel="stylesheet" href="/style.css?v=2.2.5">
+    <link rel="stylesheet" href="/style.css?v=2.3.1">
   </head>
   <body>
     <main>
@@ -81,6 +81,9 @@
           <button id="image-btn" class="hist-btn" type="button" title="插入图片">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.75"/><path d="M3.5 16.5l4.6-4.6a1.5 1.5 0 0 1 2.12 0l4.53 4.53"/><path d="M14.5 14l1.9-1.9a1.5 1.5 0 0 1 2.12 0l2 2"/></svg>
           </button>
+          <button id="screen-open" class="screen-open" type="button" aria-haspopup="dialog" aria-controls="screen-view" title="查看电脑画面">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+          </button>
           <input id="image-file" type="file" accept="image/*" hidden>
           <button id="send" type="button">发送</button>
         </div>
@@ -88,6 +91,33 @@
       </section>
     </main>
 
-    <script src="/app.js?v=2.2.5"></script>
+    <dialog id="screen-view" class="screen-view" aria-labelledby="screen-title">
+      <div class="screen-heading">
+        <h2 id="screen-title">电脑画面</h2>
+        <button id="screen-close" type="button" autofocus>返回操控</button>
+      </div>
+      <div id="screen-display-row" hidden>
+        <select id="screen-display" aria-label="选择显示器"></select>
+      </div>
+      <div class="screen-viewport" tabindex="0" aria-label="电脑画面，放大后可滚动查看">
+        <div id="screen-empty" class="screen-empty">
+          <p id="screen-empty-title">正在获取画面…</p>
+          <p id="screen-empty-help">稍等片刻，就能看到电脑当前屏幕。</p>
+          <button id="screen-permission" type="button" hidden>前往 Mac 授权</button>
+        </div>
+        <img id="screen-image" alt="电脑当前画面" hidden>
+      </div>
+      <div class="screen-footer">
+        <p id="screen-status" role="status">正在连接电脑…</p>
+        <div class="screen-controls">
+          <button id="screen-refresh" type="button">刷新</button>
+          <button id="screen-auto" type="button" aria-pressed="true">暂停更新</button>
+          <button id="screen-zoom" type="button" aria-pressed="false" disabled>放大画面</button>
+        </div>
+      </div>
+    </dialog>
+
+    <script src="/app.js?v=2.3.1"></script>
+    <script src="/screen.js?v=2.3.1"></script>
   </body>
 </html>
