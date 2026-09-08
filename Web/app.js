@@ -3,6 +3,8 @@
  * [OUTPUT]: 提供配对 token 管理（URL ?token= → localStorage → 写请求 Authorization 头与 WS 首帧 auth）、
  *           本地状态加载、应用唤醒、send 命令提交、在线心跳（可见 5s、隐藏停轮）与前台应用跟随（选中态自动对齐 Mac 前台）；
  *           触控板卡片经 ws:46388 发送 move/click/down/up/scroll/zoom 手势命令（每帧合并一次，降低包率），支持指针手势与键盘方向键；
+ *           同一条 ws 也收下行：auth_ok / cursor（Mac 光标位置）/ error（命令被拒原因）/ closed，经 window.pocketdeskOnWSMessage 分发；
+ *           wsReady 只说明 socket 打开，**不等于鉴权通过**——要等服务端 auth_ok 才是 wsAuthorized（回环豁免也会回执）。
  *           快捷键按钮条：渲染 /api/status 下发的 shortcuts（语义串 hotkey），点击 POST /api/shortcut-trigger 注入组合键到 Mac 前台应用；
  *           Dock 选中项采用 roving tabindex，方向键在组内移动选中。
  * [POS]: Web 的交互适配层；与未来 WebSocket transport 共享 SendCommand JSON 形状。
@@ -225,8 +227,33 @@ function wsConnect() {
     }
     wsReady = true;
   };
-  ws.onclose = () => { wsReady = false; scheduleReconnect(); };
+  ws.onclose = () => { wsReady = false; wsAuthorized = false; notifyWS({ t: 'closed' }); scheduleReconnect(); };
   ws.onerror = () => { try { ws.close(); } catch { /* 已关闭 */ } };
+  // 下行：服务端主动推的光标位置、错误与鉴权回执都从这里分发。
+  // 触控板此前是纯上行通道，鼠标叠加层需要它变成双向的。
+  ws.onmessage = event => {
+    let message;
+    try { message = JSON.parse(event.data); } catch { return; }
+    if (message?.t === 'auth_ok') wsAuthorized = true;
+    notifyWS(message);
+  };
+}
+
+// 鉴权是否真的通过了。wsReady 只说明 socket 打开，不等于服务端认可——
+// 订阅鼠标这类"要等服务端放行"的动作必须看这个，不能看 wsReady。
+let wsAuthorized = false;
+const wsListeners = new Set();
+
+function notifyWS(message) {
+  for (const listener of wsListeners) {
+    try { listener(message); } catch { /* 单个订阅者出错不影响别人 */ }
+  }
+}
+
+/** 订阅下行消息；返回退订函数。screen.js 用它收光标位置。 */
+function onWSMessage(listener) {
+  wsListeners.add(listener);
+  return () => wsListeners.delete(listener);
 }
 
 function scheduleReconnect() {
@@ -966,5 +993,7 @@ function applyTheme(name) {
 
 // 画面层（screen.js）与触控板通道的桥：tap 等即时消息经此直发（queuePad 对非合并消息不缓冲）。
 window.pocketdeskSend = queuePad;
+// 下行入口：screen.js 订阅服务端推送（光标位置 / 错误 / 鉴权回执）。
+window.pocketdeskOnWSMessage = onWSMessage;
 
 boot();

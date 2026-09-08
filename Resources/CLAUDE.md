@@ -3,7 +3,7 @@
 
 成员清单
 
-Info.plist: PocketDesk 独立 macOS App 的身份声明，保留 dev.voicedeck.app 以延续辅助功能授权。
+Info.plist: PocketDesk 独立 macOS App 的身份声明，保留 dev.voicedeck.app 以延续辅助功能授权；同时承载 NSScreenCaptureUsageDescription，缺此键时 ScreenCapture 的授权请求会被 TCC 终止进程。
 icon-source.png: 当前蓝紫 P 口袋图标原稿，末端融合鼠标指针、内部保留单个显示器，由导入器生成分辨率资产。
 icon-source-original.png: 本次优化前的图标原稿，供对照与回退。
 AppIcon.icns: 安装脚本消费的 macOS 图标包，由 iconutil 打包。

@@ -38,8 +38,9 @@ try server.start()
 // 启动即生成配对 token（懒加载在此刻触发落盘），QR 与写请求校验都依赖它。
 _ = Auth.token
 let pointerExecutor = PointerExecutor()
+let cursorMonitor = CursorMonitor()
 let wsPort: UInt16 = 46388
-let wsServer = WSServer(port: wsPort, pointer: pointerExecutor)
+let wsServer = WSServer(port: wsPort, pointer: pointerExecutor, cursor: cursorMonitor)
 try? wsServer.start()
 let consoleURL = URL(string: "http://localhost:\(selectedPort)/console")!
 print("PocketDesk 已启动。控制台：\(consoleURL.absoluteString)（触控板通道 ws:\(wsPort)）")

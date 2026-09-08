@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 Data/URL 与 AppKit 的 NSWorkspace/NSImage、CoreGraphics 的 CGWindowList、CoreImage 的二维码滤镜。
- * [OUTPUT]: 对外提供 Util（主局域网地址与 Tailscale 私网地址探测、稳定 .local 主机名、QR PNG 生成、应用图标 PNG 提取、前台应用探测）。
+ * [OUTPUT]: 对外提供 Util（主局域网地址与 Tailscale 私网地址探测、稳定 .local 主机名、QR PNG 生成、应用图标 PNG 提取、前台应用探测）。前台探测以用户视角为准：CGWindowList 当前桌面最前的 layer 0 窗口，pid 经 NSWorkspace 运行列表换成带完整 bundle 信息的应用对象。
  * [POS]: Sources 的无状态工具层；Server 的 /api/status、/api/qr、图标端点调用它渲染地址与图像，InputExecutor 的窗口动作调用它定位前台应用。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -11,15 +11,30 @@ import CoreImage.CIFilterBuiltins
 import Foundation
 
 enum Util {
-    // 前台应用：不用 NSWorkspace.frontmostApplication——长期无窗口的常驻进程里它的缓存会冻结
-    // （实测永远返回某个旧应用）。CGWindowList 直接问窗口服务器：列表按从前到后排序，
-    // layer 0 的第一个有归属者的窗口即前台应用的主窗口。
+    // 前台应用：CGWindowList 直接问窗口服务器，列表按从前到后排序，
+    // layer 0 的第一个有归属者的窗口即用户眼前最前的那个应用。
+    // 不用 NSWorkspace.frontmostApplication——长期无窗口的常驻进程里它的缓存会冻结
+    // （实测永远返回某个旧应用）。
+    //
+    // 也不要改用 AX 的 kAXFocusedApplicationAttribute（试过，已回退）：AX 问的是"键盘焦点归谁"，
+    // 与"用户眼前是哪个应用"不是一回事。目标应用的窗口在另一块显示器或另一个桌面空间时，
+    // 它可以被激活成 active app（lsappinfo 会答它），键盘焦点却还留在原来那个应用上——
+    // 于是 AX 答错、CGWindowList 答对。用户报的"唤醒没反应"正是这种：应用确实起来了，
+    // 只是没出现在他正看着的那块屏幕上。判定要与用户视角一致，故维持 CGWindowList。
     static func frontmostApp() -> NSRunningApplication? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
         let windowLayer = kCGWindowLayer as String
         let windowOwnerPID = kCGWindowOwnerPID as String
         guard let entry = list.first(where: { ($0[windowLayer] as? Int) == 0 && $0[windowOwnerPID] != nil }),
               let pid = entry[windowOwnerPID] as? Int32 else { return nil }
+        return Self.app(processIdentifier: pid)
+    }
+
+    /// pid → 应用对象。优先从 NSWorkspace 的运行列表里取同一个 pid：列表里的对象带完整 bundle 信息，
+    /// 而 NSRunningApplication(processIdentifier:) 现造的对象 bundleIdentifier/bundleURL 常常是 nil，
+    /// 一 nil 就匹配不上任何 Dock 目标（前台是谁认不出来，激活校验也跟着全误判为失败）。
+    private static func app(processIdentifier pid: pid_t) -> NSRunningApplication? {
+        if let hit = NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid }) { return hit }
         return NSRunningApplication(processIdentifier: pid)
     }
 

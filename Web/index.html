@@ -1,17 +1,18 @@
 <!--
-  [INPUT]: 依赖 screen.js 的鉴权截图查看器，依赖 style.css 的设计令牌与 app.js 的 Dock、触控板手势与 WebSocket 通道。
+  [INPUT]: 依赖 screen.js 的鉴权截图查看器（PiP 浮窗 + 整层全屏两种形态，非模态浮层），依赖 style.css 的设计令牌与 app.js 的 Dock、触控板手势与 WebSocket 通道。
   [OUTPUT]: 单页布局：顶部（标题 + 当前应用 + 连接状态）、单行滚动 Dock、可展开触控板卡片（设置默认收起）、
-            按需打开的全屏画面查看器（关闭返回原输入位置）；输入区（输入框下方的历史发送面板：清空带二次确认、收起按钮；图片预览）；目标选中态跟随 Mac 前台应用；
-            主题跟随电脑端（/api/status 下发，Muji ↔ classic；localStorage 只做刷新闪烁缓解，无切换按钮）。
+            按需打开的电脑画面查看器（可拖可缩的 PiP 浮窗，浮层只留切屏键与刷新/关闭两个圆形图标按钮，
+            无状态条；关闭即回主页面）；输入区（输入框下方的历史发送面板：清空带二次确认、收起按钮；图片预览）；
+            目标选中态跟随 Mac 前台应用；主题跟随电脑端（/api/status 下发，Muji ↔ classic；localStorage 只做刷新闪烁缓解，无切换按钮）。
   [POS]: Web 的唯一页面入口；只收集文本与手势，绝不处理或上传语音。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
 <!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="theme-color" content="#eef1f7">
+<html lang="zh-CN" data-page-node-id="VTBJVFChhQ27I8d5v4uvjR">
+  <head data-page-node-id="nH457eBgGBApUNCe6Hmrhk">
+    <meta charset="utf-8" data-page-node-id="qmpDI4iVTdfG382JO3eIPM">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" data-page-node-id="Q4TowMylKGBeJgKP8aoADL">
+    <meta name="theme-color" content="#eef1f7" data-page-node-id="M3mJO7EdrDJd3Wm0CngLkr">
     <title>PocketDesk</title>
     <!-- 主题由电脑端控制台统一决定，手机页经 /api/status 跟随（boot 与心跳应用）；此处预读 localStorage 仅作上次已知值的闪烁缓解。约定与控制台一致：data-theme="muji" = 米白，无属性 = 经典蓝。 -->
     <script>
@@ -22,115 +23,135 @@
         } catch (e) { /* 无属性 = 经典蓝 */ }
       })();
     </script>
-    <link rel="stylesheet" href="/style.css?v=2.3.1">
+    <link rel="stylesheet" href="/style.css?v=2.9.0" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
   </head>
-  <body>
-    <main>
-      <header>
-        <h1>PocketDesk</h1>
-        <span id="pad-target" class="app-chip">ChatGPT</span>
-        <span id="connection" class="pill" role="status" aria-live="polite">连接中</span>
+  <body data-page-node-id="2eqrPm23J7ToUXDDq0CibO">
+    <main data-page-node-id="vqfJmN7gi1ptl0qmDEQ4Iv">
+      <header data-page-node-id="j8eyOMdmcnqramwSGzuvsC">
+        <h1 data-page-node-id="EnuboMMkioipHtxqUYD2pD">PocketDesk</h1>
+        <span id="pad-target" class="app-chip" data-page-node-id="Jf2Hd4jiP4XRoAF5u1BNBH">ChatGPT</span>
+        <span id="connection" class="pill" role="status" aria-live="polite" data-page-node-id="tToblJsFFTT4uPkfk5n8RV">连接中</span>
       </header>
-      <section class="deck" aria-label="输入到哪个应用">
-        <div id="targets" class="targets edge-fade scroll-cue" role="radiogroup" aria-label="目标应用列表"></div>
+      <section class="deck" aria-label="输入到哪个应用" data-page-node-id="EaAbvM2CmNpnHkFvWSHnbk">
+        <div id="targets" class="targets edge-fade scroll-cue" role="radiogroup" aria-label="目标应用列表" data-page-node-id="jpwaQeF5pcFlSohw7u7sUz"></div>
       </section>
 
-      <section class="pad-card" id="pad-card" aria-label="触控板">
-        <div id="pad" tabindex="0" data-ruler="double" aria-label="触控板：单指移动光标，点按单击，双指滚动；方向键移动，回车单击，Esc 退出">
-          <button id="pad-settings" class="pad-gear" type="button" aria-expanded="false" title="光标与滚动设置">
+      <section class="pad-card" id="pad-card" aria-label="触控板" data-page-node-id="WD6XWASiG4n39zid4esaFU">
+        <div id="pad" tabindex="0" data-ruler="double" aria-label="触控板：单指移动光标，点按单击，双指滚动；方向键移动，回车单击，Esc 退出" data-page-node-id="zazCKZ3xiyFtCRUuMc1MES">
+          <button id="pad-settings" class="pad-gear" type="button" aria-expanded="false" title="光标与滚动设置" data-page-node-id="Lp01NovgCyejzKsLCxL1rk">
             <!-- 齿轮：带齿的外圈轮廓 + 中轴孔，与全站墨点血缘一致（中轴即墨点）。 -->
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            <svg viewBox="0 0 24 24" aria-hidden="true" data-page-node-id="Z8eKI4eObYBY05IKyDD8EB">
+              <circle cx="12" cy="12" r="3" data-page-node-id="RokrYyldENASGN8Hc01w2K"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" data-page-node-id="DDHJQswh6Shd5HBLjuwuqp"/>
             </svg>
           </button>
-          <span class="pad-badge">拖动中</span>
-          <span class="pad-title">触控板</span>
-          <p class="pad-hint">单击左键 · 双指单击右键</p>
+          <span class="pad-badge" data-page-node-id="zqwDwvua28BQWIg8Q1oRDZ">拖动中</span>
+          <span class="pad-title" data-page-node-id="FxPaRcuOlIwaIyFSk04wty">触控板</span>
+          <p class="pad-hint" data-page-node-id="yZEiDx9vFDf9Xf2X0mRPTD">单击左键 · 双指单击右键</p>
         </div>
-        <div class="pad-tuning">
-          <label>光标<input id="sens" type="range" min="0.6" max="3" step="0.1" value="1.5"></label>
-          <label>滚动<input id="scroll-speed" type="range" min="0.5" max="4" step="0.1" value="1.5"></label>
-          <label>刻度<select id="ruler-mode"><option value="double">双排</option><option value="single">单排</option></select></label>
+        <div class="pad-tuning" data-page-node-id="ZcHI4QpJsvUZIf5hCssf9r">
+          <label data-page-node-id="30iYuvcvxgPY12Mv2RqPFg">光标<input id="sens" type="range" min="0.6" max="3" step="0.1" value="1.5" data-page-node-id="jvN6EIx1fzMrvnCZlW4f3x"></label>
+          <label data-page-node-id="TCTBpreYw5caeJVHVraiwF">滚动<input id="scroll-speed" type="range" min="0.5" max="4" step="0.1" value="1.5" data-page-node-id="ugwsxi5Vd1l1IZCwulB5hY"></label>
+          <label data-page-node-id="CLso8PHyjnADzeqQbdcjt1">刻度<select id="ruler-mode" data-page-node-id="K5wRjWJjauzDs5AM2FKxYg"><option value="double" data-page-node-id="xnSym1TGJaOBK95FrgF9GL">双排</option><option value="single" data-page-node-id="5bwGltBcESyQBApsRW4FqQ">单排</option></select></label>
         </div>
       </section>
 
-      <section class="compose" aria-label="要输入的文本">
+      <section class="compose" aria-label="要输入的文本" data-page-node-id="0ZcVuev8NMMuOPyD02o9O6">
         <textarea id="text" rows="7" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="点这里，用手机键盘或听写输入…"></textarea>
-        <div id="history-panel" class="history-panel" hidden>
-          <div class="hist-head">
-            <span>最近发送</span>
-            <span class="hist-actions">
-              <button id="history-clear" class="hist-clear" type="button">清空</button>
-              <button id="history-collapse" class="hist-collapse" type="button">收起</button>
+        <div id="history-panel" class="history-panel" hidden data-page-node-id="LNyuhfSQtQRqKlrfGvAsUc">
+          <div class="hist-head" data-page-node-id="nOYbSHqR3XF4fusuuaEo3W">
+            <span data-page-node-id="wTD3PrCfDTFOjX4GYci23o">最近发送</span>
+            <span class="hist-actions" data-page-node-id="MGnKue0tQahYCFFFRLdwzT">
+              <button id="history-clear" class="hist-clear" type="button" data-page-node-id="WaNyqTariUtEHWp7Xg86oF">清空</button>
+              <button id="history-collapse" class="hist-collapse" type="button" data-page-node-id="Qfd7qyxXn5eBCGFUko5APA">收起</button>
             </span>
           </div>
-          <div id="history-list"></div>
+          <div id="history-list" data-page-node-id="JflToNfQz45VYZ5osaAEO1"></div>
         </div>
-        <div id="image-preview" class="image-preview" hidden>
-          <img id="image-thumb" alt="待发送图片">
-          <button id="image-remove" class="image-remove" type="button" title="移除图片" aria-label="移除图片">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+        <div id="image-preview" class="image-preview" hidden data-page-node-id="Yv01Wj6ITyutHDY731iuHu">
+          <img id="image-thumb" alt="待发送图片" data-page-node-id="EaBonH5GvKe65WVFG9MKBH">
+          <button id="image-remove" class="image-remove" type="button" title="移除图片" aria-label="移除图片" data-page-node-id="N8jRoA4XiGC6DyO3SZFRSX">
+            <svg viewBox="0 0 24 24" aria-hidden="true" data-page-node-id="HdlgeQ7LFPXea6MxdQKl9F"><line x1="6" y1="6" x2="18" y2="18" data-page-node-id="pYp6lz6JrxEzJDnL1omFbJ"/><line x1="18" y1="6" x2="6" y2="18" data-page-node-id="gXSyd2xnb8ANv85jndt6NX"/></svg>
           </button>
         </div>
-        <div id="shortcut-bar" class="shortcut-bar edge-fade scroll-cue" hidden></div>
-        <div class="send-row">
-          <button id="history-btn" class="hist-btn" type="button" title="历史发送" aria-pressed="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+        <div id="shortcut-bar" class="shortcut-bar edge-fade scroll-cue" hidden data-page-node-id="TeaIlnxQNQ7RaraSz0Zmay"></div>
+        <div class="send-row" data-page-node-id="em7FkzTZWSz9iYE83BULnD">
+          <button id="history-btn" class="hist-btn" type="button" title="历史发送" aria-pressed="false" data-page-node-id="Y100VYXHAc64BCCrfNW4D4">
+            <svg viewBox="0 0 24 24" aria-hidden="true" data-page-node-id="XZUAS5ZApgHmwafkZGESTG"><circle cx="12" cy="12" r="9" data-page-node-id="DzkvxOqWOlXicADkBn5cCD"/><path d="M12 7v5l3 3" data-page-node-id="eQqBkergJrQVTXDeTmDHPG"/></svg>
           </button>
-          <button id="image-btn" class="hist-btn" type="button" title="插入图片">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.75"/><path d="M3.5 16.5l4.6-4.6a1.5 1.5 0 0 1 2.12 0l4.53 4.53"/><path d="M14.5 14l1.9-1.9a1.5 1.5 0 0 1 2.12 0l2 2"/></svg>
+          <button id="image-btn" class="hist-btn" type="button" title="插入图片" data-page-node-id="fNZZ2IolUWWftsYiY481gb">
+            <svg viewBox="0 0 24 24" aria-hidden="true" data-page-node-id="ImLXWk824rEUyKX94r4RIP"><rect x="3.5" y="5" width="17" height="14" rx="2.5" data-page-node-id="efX1ipXErBrHGgKtx7Uj8X"/><circle cx="9" cy="10" r="1.75" data-page-node-id="zjHtEDWjg8LpKhleleaG2w"/><path d="M3.5 16.5l4.6-4.6a1.5 1.5 0 0 1 2.12 0l4.53 4.53" data-page-node-id="99RpCzBCMZ2pKpfbFDfQVa"/><path d="M14.5 14l1.9-1.9a1.5 1.5 0 0 1 2.12 0l2 2" data-page-node-id="tDMoZzMOGqwPuB727pdk2o"/></svg>
           </button>
-          <button id="screen-pip-toggle" class="screen-open" type="button" title="悬浮小窗看画面" aria-pressed="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="13" rx="2"/><rect x="12" y="12" width="7" height="5" rx="1" fill="currentColor" stroke="none"/></svg>
+          <button id="screen-open" class="screen-open" type="button" aria-pressed="false" title="查看电脑画面" data-page-node-id="n7WGB3CIpFwMMxZX1c8yKE">
+            <svg viewBox="0 0 24 24" aria-hidden="true" data-page-node-id="LgtCWtt1S0O2GtHHTNOcmF"><rect x="3" y="4" width="18" height="13" rx="2" data-page-node-id="N8IWiFon4CclsmzvNKXHnZ"/><path d="M8 21h8M12 17v4" data-page-node-id="BXWJc8Gq2yirAo1sKFnQ7n"/></svg>
           </button>
-          <button id="screen-open" class="screen-open" type="button" aria-haspopup="dialog" aria-controls="screen-view" title="查看电脑画面">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-          </button>
-          <input id="image-file" type="file" accept="image/*" hidden>
-          <button id="send" type="button">发送</button>
+          <input id="image-file" type="file" accept="image/*" hidden data-page-node-id="eyMy1tCUZvWADnbckpI1fH">
+          <button id="send" type="button" data-page-node-id="lFyNzZ6hu8yMEIr9gF4sTE">发送</button>
         </div>
-        <p id="message" role="status" aria-live="polite"></p>
+        <p id="message" role="status" aria-live="polite" data-page-node-id="e6wlP1uFgkcWptXxGMIOmZ"></p>
       </section>
     </main>
 
-    <dialog id="screen-view" class="screen-view" aria-labelledby="screen-title">
-      <div class="screen-heading">
-        <h2 id="screen-title">电脑画面</h2>
-        <button id="pip-open" class="pip-chip" type="button" title="转为悬浮窗，边操控边看">悬浮</button>
-        <button id="screen-close" type="button" autofocus>返回操控</button>
-      </div>
-      <div id="screen-display-row" hidden>
-        <select id="screen-display" aria-label="选择显示器"></select>
-      </div>
-      <div class="screen-viewport" tabindex="0" aria-label="电脑画面，放大后可滚动查看">
-        <div id="screen-empty" class="screen-empty">
-          <p id="screen-empty-title">正在获取画面…</p>
-          <p id="screen-empty-help">稍等片刻，就能看到电脑当前屏幕。</p>
-          <button id="screen-permission" type="button" hidden>前往 Mac 授权</button>
+    <!-- 画面查看器两种形态：可拖可缩的 PiP 浮窗（默认）与整层全屏（点全屏按钮进入）。
+         PiP 浮窗避开连接胶囊与输入区；非模态 dialog，开着时主页触控板仍可操作；转屏交给手机自己转。 -->
+    <dialog id="screen-view" class="screen-view pip" aria-label="电脑画面" data-page-node-id="oBKsEUqceSoXtW2Ix3yFkj">
+      <div class="screen-resize nw" data-page-node-id="I3HtA1b2c4d5e6f7g8h9i0" aria-hidden="true"></div>
+      <div class="screen-resize n"  data-page-node-id="J4HuB2c3d5e6f7g8h9i0j1" aria-hidden="true"></div>
+      <div class="screen-resize ne" data-page-node-id="K5HvC3d4e6f7g8h9i0j1k2" aria-hidden="true"></div>
+      <div class="screen-resize e"  data-page-node-id="L6HwD4e5f7g8h9i0j1k2l3" aria-hidden="true"></div>
+      <div class="screen-resize se" data-page-node-id="M7HxE5f6g8h9i0j1k2l3m4" aria-hidden="true"></div>
+      <div class="screen-resize s"  data-page-node-id="N8HyF6g7h9i0j1k2l3m4n5" aria-hidden="true"></div>
+      <div class="screen-resize sw" data-page-node-id="O9HzG7h8i0j1k2l3m4n5o6" aria-hidden="true"></div>
+      <div class="screen-resize w"  data-page-node-id="P0I0H8i9j0k1l2m3n4o5p6" aria-hidden="true"></div>
+      <div class="screen-viewport" data-page-node-id="DT8HFKuwU9tZ1JzLIsaNkT">
+        <div id="screen-empty" class="screen-empty" data-page-node-id="tXSuXRFv3ZLPR1U9xQDsPO">
+          <p id="screen-empty-title" data-page-node-id="vS8LGZphFskOPSmGKA70da">正在获取画面…</p>
+          <p id="screen-empty-help" data-page-node-id="2auXDaaOxIjH9fi5rk5x2J">稍等片刻，就能看到电脑当前屏幕。</p>
+          <button id="screen-permission" type="button" hidden data-page-node-id="ygFHA63wx4xGTyEtuJ2G8m">在电脑上请求授权</button>
         </div>
-        <img id="screen-image" alt="电脑当前画面" hidden>
-      </div>
-      <div class="screen-footer">
-        <p id="screen-status" role="status">正在连接电脑…</p>
-        <div class="screen-controls">
-          <button id="screen-refresh" type="button">刷新</button>
-          <button id="screen-auto" type="button" aria-pressed="true">暂停更新</button>
-          <button id="screen-zoom" type="button" aria-pressed="false" disabled>放大画面</button>
+        <img id="screen-image" alt="电脑当前画面" hidden data-page-node-id="mdQOYVFRBOmb2tjUlE9tRA">
+        <!-- 鼠标叠加层：位置来自 30Hz 的坐标通道，与 1fps 的画面各走各的路。
+             只指示位置，不假装复刻系统光标形状；pointer-events:none 才不挡住点画面。 -->
+        <div id="screen-cursor" class="screen-cursor" hidden aria-hidden="true" data-page-node-id="qR2sT3uV4wX5yZ6aB7cD8e">
+          <svg viewBox="0 0 12 18" width="12" height="18" aria-hidden="true">
+            <path d="M1 1 L1 14 L4.5 10.5 L7 16.5 L9.2 15.5 L6.7 9.8 L11 9.8 Z" fill="#fff" stroke="#000" stroke-width="1.1" stroke-linejoin="round"></path>
+          </svg>
         </div>
+      </div>
+      <!-- 显示器列表只此一份数据源；浮层切换键与右侧滑动手势都是它的视图，
+           两者都走同一条 change 流程，不另写一套拉流。 -->
+      <select id="screen-display" aria-label="选择显示器" hidden data-page-node-id="zNi6O8ZCcbeudUgV8VzQ2E"></select>
+
+      <!-- 浮层：画面之上没有正文流可放控件，一律浮起来。
+           只留三样真的用得上的：多显示器时的切屏键（左）、全屏 / 刷新 / 关闭 三个图标按钮（右）。
+           浮窗态常态淡出（小小的浮窗不该被按钮吃掉一半），悬停或点一下浮窗再淡入。
+           整块浮窗都能拖（按钮与 8 个缩放 handle 除外），所以没有专门的把手元素。 -->
+      <div class="screen-hud screen-hud-top" data-page-node-id="iE93dIZMIxdV0n1EQ7tFK5">
+        <button id="screen-display-switch" class="hud-chip" type="button" hidden data-page-node-id="HZUPrdxcOlmVoW0TGrAydn"></button>
+        <span class="hud-spacer" data-page-node-id="Y9FM6SFv1GJio5Ph6qXKnf"></span>
+        <button id="screen-fullscreen" class="hud-icon" type="button" title="全屏" aria-label="全屏" data-page-node-id="aB1cD2eF3gH4iJ5kL6mN7o">
+          <!-- 两个图标各管一个方向，由 .fullscreen 类决定谁显形，JS 不碰 DOM。 -->
+          <svg class="fs-expand" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+            <path d="M9 3 H3 V9 M15 3 H21 V9 M21 15 V21 H15 M9 21 H3 V15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+          <svg class="fs-collapse" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+            <path d="M3 9 H9 V3 M15 3 V9 H21 M21 15 H15 V21 M9 21 V15 H3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </button>
+        <button id="screen-refresh" class="hud-icon" type="button" title="刷新画面" aria-label="刷新画面" data-page-node-id="zGEoCXDQlWP27L7szltcUK">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+            <path d="M23 4v6h-6M1 20v-6h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </button>
+        <button id="screen-close" class="hud-icon" type="button" title="关闭画面" aria-label="关闭画面" data-page-node-id="e3ep84aA0wFXns6hgT0hHX">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+            <path d="M18 6 L6 18 M6 6 L18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          </svg>
+        </button>
       </div>
     </dialog>
-
-
-    <div id="screen-pip" class="screen-pip" hidden>
-      <div class="pip-bar">
-        <span class="pip-dot"></span>
-        <button id="pip-expand" class="pip-chip" type="button" title="展开全屏画面">展开</button>
-        <button id="pip-close" class="pip-chip" type="button" title="关闭悬浮窗">×</button>
-      </div>
-      <img id="pip-image" alt="电脑画面小窗" draggable="false">
-    </div>
-    <script src="/app.js?v=2.3.1"></script>
-    <script src="/screen.js?v=2.3.1"></script>
+    <script src="/app.js?v=2.9.0"></script>
+    <script src="/screen.js?v=2.9.0"></script>
   </body>
 </html>
