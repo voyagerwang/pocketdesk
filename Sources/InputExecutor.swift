@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard、ApplicationServices 的 AXUIElement、CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的 SendCommand/ShortcutConfig/InputError/ShortcutError/ShortcutKeys、ShortcutActions 的平台展开、ExecutionTrace 的结果分级与环境门禁、Util 的前台应用探测、TargetStore 的目标解析。
- * [OUTPUT]: 对外提供 InputExecutor（图片预上传暂存、应用激活、图文发送的 activate → Unicode → 粘贴图片 → Return 注入序列、快捷键组合注入、预设动作的窗口关闭与应用隐藏）；合成键盘事件统一经 postKey（真实 CGEventSource + characters 补齐 + down/up 间隔），解决 Zed 终端这类按 characters 取键的应用对合成 Return 的丢弃。
+ * [OUTPUT]: 对外提供 InputExecutor（图片预上传暂存、应用激活与**唤醒后校验**、**注入前的可输入焦点确认与自动聚焦**、图文发送的 activate → Unicode → 粘贴图片 → Return 注入序列、快捷键组合注入、预设动作的窗口关闭与应用隐藏）；合成键盘事件统一经 postKey（真实 CGEventSource + characters 补齐 + down/up 间隔），解决 Zed 终端这类按 characters 取键的应用对合成 Return 的丢弃。
  * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -78,15 +78,17 @@ final class InputExecutor {
         if command.targetId == Self.uuRemoteId || isUUFrontmost() {
             queue.asyncAfter(deadline: .now() + .milliseconds(450)) {
                 self.performUURemotePaste(text: command.text, imageData: imageData)
-                self.finishSend(label: label, targetId: Self.uuRemoteId, completion: completion)
+                // UU 的内容由剪贴板同步到远端机器，本机的焦点状态与它无关、也无从判定，沿用既有结论。
+                self.finishSend(label: label, targetId: Self.uuRemoteId, editableFocus: true, completion: completion)
             }
             return
         }
         // 伪目标：不切换应用，直接注入当前前台（前台是非 Dock 应用时的发送路径）。
         if command.targetId == Self.frontmostPseudoId {
             queue.asyncAfter(deadline: .now() + .milliseconds(80)) {
+                let editable = self.ensureEditableFocus(pid: Util.frontmostApp()?.processIdentifier ?? -1)
                 self.performPaste(imageData: imageData, text: command.text)
-                self.finishSend(label: label, targetId: Self.frontmostPseudoId, completion: completion)
+                self.finishSend(label: label, targetId: Self.frontmostPseudoId, editableFocus: editable, completion: completion)
             }
             return
         }
@@ -100,10 +102,11 @@ final class InputExecutor {
             }
             // 给桌面应用取得前台焦点；后续步骤都在同一串行队列中执行。
             self.queue.asyncAfter(deadline: .now() + .milliseconds(450)) {
+                let editable = self.ensureEditableFocus(pid: self.runningApp(targetId: command.targetId)?.processIdentifier ?? -1)
                 self.performPaste(imageData: imageData, text: command.text)
                 // 粘完再看一眼：目标是具体应用时，前台不是它就说明这一发大概率落空了。
                 self.queue.asyncAfter(deadline: .now() + .milliseconds(350)) {
-                    self.finishSend(label: label, targetId: command.targetId, completion: completion)
+                    self.finishSend(label: label, targetId: command.targetId, editableFocus: editable, completion: completion)
                 }
             }
         }
@@ -112,17 +115,19 @@ final class InputExecutor {
     // 发送收尾：把「目标有没有真的在前台」变成一句人话，写进回执与日志。
     // 目标确实在最前面接收 → delivered（这是外部能观察到的最强证据）；前台是别的应用 → sent，
     // 因为这种时候内容多半落在了别人家的窗口里，是"点了没反应"的高发场景。
-    private func finishSend(label: String, targetId: String, completion: @escaping (Result<ExecutionFeedback, InputError>) -> Void) {
+    private func finishSend(label: String, targetId: String, editableFocus: Bool, completion: @escaping (Result<ExecutionFeedback, InputError>) -> Void) {
         let frontName = Util.frontmostApp()?.localizedName
         let outcome: ExecutionOutcome
         let detail: String
         // 伪目标与 UU 走当前前台，前台即目标，无需比对归属。
         if targetId == Self.frontmostPseudoId || targetId == Self.uuRemoteId {
-            outcome = .delivered
-            detail = "已输入到\(frontName ?? "当前前台应用")。"
+            outcome = editableFocus ? .delivered : .sent
+            detail = editableFocus ? "已输入到\(frontName ?? "当前前台应用")。" : Self.noFocusHint(frontName ?? "当前前台应用")
         } else if self.frontmostMatches(targetId: targetId) {
-            outcome = .delivered
-            detail = "已输入到\(frontName ?? "目标应用")。"
+            // 只比对前台应用是不够的：应用在前台、里面却没有输入框拿着焦点时（Electron 应用常见），
+            // 按键照样没有去处。这种情况不能报"已输入"，那是把失败说成成功。
+            outcome = editableFocus ? .delivered : .sent
+            detail = editableFocus ? "已输入到\(frontName ?? "目标应用")。" : Self.noFocusHint(frontName ?? "目标应用")
         } else {
             outcome = .sent
             let expected = self.store.resolve(targetId)?.name ?? targetId
@@ -139,6 +144,145 @@ final class InputExecutor {
         if let bundleID = config.bundleID, front.bundleIdentifier == bundleID { return true }
         if let path = config.path, front.bundleURL?.path == path { return true }
         return false
+    }
+
+
+    private func runningApp(targetId: String) -> NSRunningApplication? {
+        guard let config = store.resolve(targetId) else { return nil }
+        // 同时按 path 与 bundleID 收集候选：NSRunningApplication(processIdentifier:) 现造的对象
+        // bundle 信息常常是 nil，而运行列表里的对象是完整的，匹配要建立在后者上。
+        let candidates = NSWorkspace.shared.runningApplications.filter { app in
+            if let path = config.path, app.bundleURL?.path == path { return true }
+            if let bundleID = config.bundleID, app.bundleIdentifier == bundleID { return true }
+            return false
+        }
+        guard !candidates.isEmpty else { return nil }
+        // 同一个应用可能跑着多个实例（实测这台机器上就有两个 Chrome，bundle 与路径完全相同，
+        // 只有一个带着窗口）。激活没带窗口的那个，界面上什么都不会发生——这就是"唤醒没反应"。
+        // 故多个候选时优先挑带可见窗口的那个。
+        if candidates.count > 1,
+           let withWindow = candidates.first(where: { Self.hasVisibleWindow(pid: $0.processIdentifier) }) {
+            return withWindow
+        }
+        return candidates.first
+    }
+
+    /// 该进程有没有像样的可见窗口（layer 0、尺寸正常）。用来从同 bundle 的多个实例里认出"带界面的那个"。
+    private static func hasVisibleWindow(pid: pid_t) -> Bool {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
+        let ownerPID = kCGWindowOwnerPID as String
+        let layer = kCGWindowLayer as String
+        let bounds = kCGWindowBounds as String
+        return list.contains { entry in
+            guard (entry[ownerPID] as? Int32) == pid, (entry[layer] as? Int) == 0,
+                  let dict = entry[bounds] as? [String: Any],
+                  let width = dict["Width"] as? CGFloat, let height = dict["Height"] as? CGFloat else { return false }
+            return width > 80 && height > 60
+        }
+    }
+
+    /* ---------- 注入前的焦点确认 ---------- */
+    // 激活（activate）只保证应用到了前台，不保证里面有输入框拿着键盘焦点。
+    // Electron/Chromium 应用尤其典型：窗口起来了，页面里却没有任何 first responder，
+    // 此时 postUnicode 投出去的按键石沉大海——这正是"点了发送却什么都没进去"的根因。
+    // 用户手动点一下输入框就好，因为那一步才真正把焦点放进去。
+
+    // 当前聚焦元素的角色；nil = 这个应用里没有任何元素拿着焦点（AX 返回 noValue）。
+    private static func focusedRole(_ pid: pid_t) -> String? {
+        let app = AXUIElementCreateApplication(pid)
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
+              let element = raw, CFGetTypeID(element) == AXUIElementGetTypeID() else { return nil }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element as! AXUIElement, kAXRoleAttribute as CFString, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    private static func focusedWindow(_ pid: pid_t) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(pid)
+        var raw: CFTypeRef?
+        if AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &raw) == .success,
+           let window = raw, CFGetTypeID(window) == AXUIElementGetTypeID() { return (window as! AXUIElement) }
+        // 少数应用不给"聚焦窗口"（尤其是刚被激活、窗口还没稳定的时候），退回取第一个窗口。
+        var windows: CFTypeRef?
+        if AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windows) == .success,
+           let list = windows as? [AXUIElement], let first = list.first { return first }
+        return nil
+    }
+
+    // 抢焦点：先直接设 AXFocused，不行就退化为"按一下"——对输入框而言按一下就是聚焦，与用户手动点击等效。
+    // 关键是写完必须等一拍再读：Chromium/Electron 对 AX 聚焦是异步生效的，调用返回 success 时
+    // 焦点还没到位，立刻读会读到旧的 AXWebArea，从而误判失败（实测踩到过）。
+    private static func takeFocus(_ element: AXUIElement, pid: pid_t) -> Bool {
+        if AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success {
+            usleep(150_000)
+            if hasEditableFocus(pid: pid) { return true }
+        }
+        guard AXUIElementPerformAction(element, kAXPressAction as CFString) == .success else { return false }
+        usleep(150_000)
+        return hasEditableFocus(pid: pid)
+    }
+
+    /// 注入前确保有地方能接字：本来就有可输入焦点就直接用；没有就按角色优先级挑一个输入框聚焦。
+    /// 尽力而为——AX 不保证每个应用都允许设置焦点，抢不到就如实返回 false，交给回执说清楚，绝不假装成功。
+    @discardableResult
+    private func ensureEditableFocus(pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
+        if Self.hasEditableFocus(pid: pid) { return true }
+        let candidates = Self.editableCandidates(pid: pid)
+        // 只去抢「输入框」：BFS 是层序的，浅层的搜索框/下拉会排在前头，而把内容打进搜索框
+        // 比打不进去更难发现。所以既不能"找到第一个就用"，也不碰 ComboBox/SearchField。
+        for role in Self.focusPriority {
+            guard let hit = candidates.first(where: { $0.role == role }) else { continue }
+            if Self.takeFocus(hit.element, pid: pid) { return true }
+        }
+        return false
+    }
+
+    private static func hasEditableFocus(pid: pid_t) -> Bool {
+        guard let role = focusedRole(pid) else { return false }
+        return editableRoles.contains(role)
+    }
+
+    // 窗口里所有可输入元素（有界 BFS，最多 400 个节点）。
+    private static func editableCandidates(pid: pid_t) -> [(element: AXUIElement, role: String)] {
+        guard let window = focusedWindow(pid) else { return [] }
+        var found: [(element: AXUIElement, role: String)] = []
+        var level = [window]
+        var visited = 0
+        while !level.isEmpty, visited < 400 {
+            var next: [AXUIElement] = []
+            for element in level {
+                visited += 1
+                var roleValue: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue) == .success,
+                   let role = roleValue as? String, editableRoles.contains(role) {
+                    found.append((element, role))
+                }
+                var childrenValue: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenValue) == .success,
+                   let children = childrenValue as? [AXUIElement] { next.append(contentsOf: children) }
+            }
+            level = next
+        }
+        return found
+    }
+
+    // 可输入角色：AX 里能接住键盘输入的元素。Chromium/Electron 把 <textarea> 与 contenteditable
+    // 暴露成 AXTextArea，把 <input> 暴露成 AXTextField，搜索框是 AXSearchField。
+    private static let editableRoles: Set<String> = [
+        kAXTextFieldRole as String, kAXTextAreaRole as String,
+        kAXComboBoxRole as String, "AXSearchField",
+    ]
+
+    // 抢焦点的角色优先级：只认输入框，不碰下拉与搜索（理由见 ensureEditableFocus）。
+    private static let focusPriority: [String] = [
+        kAXTextAreaRole as String, kAXTextFieldRole as String,
+    ]
+
+    // 「应用在前台但里面没有聚焦输入框」这句人话：既说清现象，也给出一步可执行的补救。
+    private static func noFocusHint(_ appName: String) -> String {
+        "\(appName)已在前台，但它没有聚焦的输入框，内容可能没进去——请先在电脑上点一下要输入的位置，再发送。"
     }
 
     // 前台应用是不是 UU 远程（发往伪目标时的兜底判定）。
@@ -181,6 +325,9 @@ final class InputExecutor {
         postKey(36) // Return：图文一起发，或纯图直发
     }
 
+    // 激活分三段：发起 → 校验 → 抢救。之所以不能"发起完就回成功"，是因为 PocketDesk 自己从不是前台应用，
+    // 请求递出去之后系统同不同意（窗口在别的桌面空间、被最小化、被远控软件按住焦点）它一概不知。
+    // 回执只能由系统说了算：问 AX 现在谁拿着焦点。
     private func activateTarget(_ targetId: String, completion: @escaping (Result<Void, InputError>) -> Void) {
         guard let config = store.resolve(targetId) else {
             completion(.failure(.message("未知的目标应用。"))); return
@@ -188,17 +335,122 @@ final class InputExecutor {
         guard let url = store.appURL(config) else {
             completion(.failure(.message("未找到 \(config.name)。请确认应用已安装或在控制台重新选择。"))); return
         }
+        // 一律走 NSWorkspace.openApplication：它是 LaunchServices 的"用户意图"通道，实测能把应用带到前台，
+        // 已运行的应用也只是被激活、不会重复开。
+        // 不能用 NSRunningApplication.activate() 代替：PocketDesk 是常驻后台的 agent，从不是活动应用，
+        // 由此发起的 activate 会被系统丢弃（实测对 Chrome 必失败，而 openApplication 稳定成功）；
+        // 想靠 .activateIgnoringOtherApps 加强也不行了——macOS 14 起它被废弃且明确不再有效果。
+        // 这里的 activate 只是 openApplication 之后的轻推，不是主力。
+        let wasRunning = runningApp(targetId: targetId) != nil
+        let activate: (NSRunningApplication?) -> Void = { app in
+            app?.unhide()
+            app?.activate(options: [.activateAllWindows])
+        }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         configuration.addsToRecentItems = false
         NSWorkspace.shared.openApplication(at: url, configuration: configuration) { application, error in
             if let error {
+                self.record("activate", "唤醒 \(config.name)", .failed, "无法打开：\(error.localizedDescription)")
                 completion(.failure(.message("无法打开 \(config.name)：\(error.localizedDescription)"))); return
             }
-            application?.unhide()
-            application?.activate(options: [.activateAllWindows])
-            completion(.success(()))
+            activate(application)
+            // 冷启动要等应用把窗口建起来再开始轮询；已运行的直接进入轮询。
+            self.queue.asyncAfter(deadline: .now() + .milliseconds(wasRunning ? 150 : 800)) {
+                self.verifyActivation(targetId: targetId, name: config.name, attempt: 1, completion: completion)
+            }
         }
+    }
+
+    /// 校验激活是否真的生效：轮询等待，中途抢救一次，到期仍不生效就如实报错。
+    /// 宁可让用户看到"它没起来，你去电脑上点一下"，也不返回一个假 ok——假 ok 只会让人反复点手机。
+    private func verifyActivation(targetId: String, name: String, attempt: Int, completion: @escaping (Result<Void, InputError>) -> Void) {
+        let label = "唤醒 \(name)"
+        // 没有辅助功能授权时无从判定，退回旧行为（相信系统调用），绝不因为判不了就报失败。
+        guard AXIsProcessTrusted() else { completion(.success(())); return }
+        // 实测：目标窗口在另一块显示器 / 另一个桌面空间时，激活到焦点落定可能要 2~3 秒
+        //（显示器或空间切换本身有开销）。只等几百毫秒会把"慢"误判成"失败"——
+        // 用户看到报错，可几秒后画面其实已经切过去了。故轮询到 3.5 秒再下结论。
+        let maxAttempts = 7   // 7 × 500ms ≈ 3.5s
+        queue.asyncAfter(deadline: .now() + .milliseconds(500)) {
+            // 判定复用 frontmostMatches（按 bundleID/path 认应用），别拿 pid 硬比：
+            // 多进程应用里"目标 pid"和"AX 焦点 pid"未必是同一个进程。
+            if self.frontmostMatches(targetId: targetId) {
+                let pid = self.runningApp(targetId: targetId)?.processIdentifier ?? -1
+                // 焦点对了不等于用户看得见：窗口可能在另一个桌面空间或另一块显示器上（多屏时很常见，
+                // 用户盯着内建屏就会以为"没唤醒"）。日志里说清楚，回执仍算成功——毕竟它确实在最前了。
+                let visible = pid <= 0 || self.windowCount(pid: pid) > 0
+                self.record("activate", label, visible ? .delivered : .sent,
+                            visible ? "已置于前台。"
+                                    : "已激活，但当前桌面看不到它的窗口——可能在另一个桌面空间或另一块显示器。", name)
+                completion(.success(())); return
+            }
+            guard attempt < maxAttempts else {
+                let front = Util.frontmostApp()
+                let frontName = front?.localizedName ?? "其他应用"
+                // 锁屏时前台是 loginwindow：这是硬限制，不是 PocketDesk 的毛病，文案必须说准，
+                // 否则用户会去翻"窗口是不是最小化了"这种不存在的可能。
+                if front?.bundleIdentifier == "com.apple.loginwindow" {
+                    self.record("activate", label, .blocked, "电脑处于锁屏/登录界面。", frontName)
+                    completion(.failure(.message("这台电脑当前停在锁屏或登录界面，切不了应用。请先在电脑上解锁，再点一次唤醒。")))
+                    return
+                }
+                let pid = self.runningApp(targetId: targetId)?.processIdentifier ?? -1
+                // 多显示器下最常见的一种"唤醒没反应"：应用其实起来了，只是窗口在旁边那块屏，
+                // 用户盯着主屏自然什么都没看见。与其让他去猜，不如直说窗口在哪儿。
+                if Self.hasWindowOutsideMainScreen(pid: pid) {
+                    self.record("activate", label, .sent, "已激活，但窗口不在主屏（在另一块显示器上）。", name)
+                    completion(.failure(.message(
+                        "\(name) 已经起来了，可它的窗口在另一块显示器上——请看看旁边那块屏；想在主屏操作，把它拖过来再唤醒。")))
+                    return
+                }
+                self.record("activate", label, .failed, "未能置于前台，当前前台是 \(frontName)。", frontName)
+                completion(.failure(.message(
+                    "\(name) 没能切到前台（画面仍停在 \(frontName)）。它的窗口可能最小化了，或在另一个桌面空间——请先在这台电脑上点一下它，再试一次。")))
+                return
+            }
+            // 抢救：取消最小化并把窗口提到最前。救的是"应用已被激活、窗口却没跟过来"这一种
+            //（多桌面、多显示器、最小化后都可能这样）。只在第一次没落定时做，之后纯粹等。
+            if attempt == 1 { Self.raiseWindow(pid: self.runningApp(targetId: targetId)?.processIdentifier ?? -1) }
+            self.verifyActivation(targetId: targetId, name: name, attempt: attempt + 1, completion: completion)
+        }
+    }
+
+    /// 应用有像样的可见窗口，但没有一个落在主屏上——多显示器下"唤醒了却什么都没变"的典型成因。
+    /// CGWindowList 的 bounds 是左上原点，NSScreen.frame 是左下原点，这里只比横向范围，
+    /// 不做坐标换算（够用，也不引入翻转出错的机会）。
+    private static func hasWindowOutsideMainScreen(pid: pid_t) -> Bool {
+        guard pid > 0, let main = NSScreen.main,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
+        let ownerPID = kCGWindowOwnerPID as String
+        let layer = kCGWindowLayer as String
+        let bounds = kCGWindowBounds as String
+        var sawWindow = false
+        for entry in list where (entry[ownerPID] as? Int32) == pid && (entry[layer] as? Int) == 0 {
+            guard let dict = entry[bounds] as? [String: Any],
+                  let x = dict["X"] as? CGFloat, let width = dict["Width"] as? CGFloat,
+                  let height = dict["Height"] as? CGFloat, width > 80, height > 60 else { continue }
+            sawWindow = true
+            if x < main.frame.width && x + width > 0 { return false }   // 与主屏有横向交集，算在主屏
+        }
+        return sawWindow
+    }
+
+    /// 把某应用的窗口提到最前：先设 frontmost，再逐个取消最小化并 raise。
+    /// 跨桌面空间的窗口 AX 未必列得出来，那时这里会安静地失败，交给上层如实报错。
+    @discardableResult
+    private static func raiseWindow(pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw) == .success,
+              let windows = raw as? [AXUIElement], !windows.isEmpty else { return false }
+        for window in windows.prefix(3) {
+            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+            AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        }
+        return true
     }
 
     private func postUnicode(_ text: String) {

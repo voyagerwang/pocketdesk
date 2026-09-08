@@ -12,5 +12,7 @@
   <key>CFBundleShortVersionString</key><string>0.3.0</string>
   <key>CFBundleVersion</key><string>3</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <!-- ScreenCaptureKit 的 TCC 强制要求：缺失本键时 CGRequestScreenCaptureAccess() 会直接终止进程，而不是弹窗。 -->
+  <key>NSScreenCaptureUsageDescription</key><string>PocketDesk 需要屏幕录制权限，用于在手机端查看这台 Mac 的画面。</string>
 </dict>
 </plist>

@@ -11,6 +11,9 @@ import Network
 final class Server {
     private let screenCapture = ScreenCapture()
     private var captureBusy = false
+    // 系统对每个安装只弹一次录屏授权窗，重复调用不再弹。记住"已请求过"，
+    // 让前端能区分"点了会有弹窗"和"点了没反应，只能去系统设置"。
+    private var permissionRequested = false
     private let port: UInt16
     private let webRoot: URL
     private let executor: InputExecutor
@@ -121,6 +124,7 @@ final class Server {
 
         switch (method, path) {
         case ("POST", "/api/screen/permission"):
+            permissionRequested = true
             screenCapture.requestPermission()
             respond(connection, status: 200, json: ["ok": true])
         case ("GET", "/api/screen/displays"), ("GET", "/api/screen/frame"):
@@ -131,11 +135,15 @@ final class Server {
             if path.hasSuffix("/frame") && displayID == nil {
                 respond(connection, status: 400, json: ["error": "请选择显示器。"]); return
             }
+            // 手机自己画叠加箭头时要求画面里别烘焙鼠标（cursor=0），避免两个指针。
+            let showsCursor = Self.queryValue("cursor", in: rawPath) != "0"
+            // 在派发前取快照，避免 Task 内再读 self 的可变状态。
+            let canRequest = !permissionRequested
             captureBusy = true
             Task {
                 do {
                     if let displayID {
-                        let data = try await screenCapture.snapshot(displayID: displayID)
+                        let data = try await screenCapture.snapshot(displayID: displayID, showsCursor: showsCursor)
                         queue.async {
                             self.captureBusy = false
                             self.respond(connection, status: 200, data: data, contentType: "image/jpeg")
@@ -151,7 +159,7 @@ final class Server {
                     let message = error.localizedDescription
                     queue.async {
                         self.captureBusy = false
-                        self.respond(connection, status: 422, json: ["error": message])
+                        self.respond(connection, status: 422, json: ["error": message, "canRequest": canRequest])
                     }
                 }
             }
