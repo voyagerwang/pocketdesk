@@ -964,4 +964,7 @@ function applyTheme(name) {
   try { localStorage.setItem('voicedeck.last-theme', name === 'muji' ? 'muji' : 'classic'); } catch (e) { /* 无痕模式 */ }
 }
 
+// 画面层（screen.js）与触控板通道的桥：tap 等即时消息经此直发（queuePad 对非合并消息不缓冲）。
+window.pocketdeskSend = queuePad;
+
 boot();

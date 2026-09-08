@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 CoreGraphics 的 CGEvent/CGDisplay 系列 API；消费 WSServer 转发的手势 JSON。
- * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、双屏包围盒钳制、move/drag/click/scroll/zoom 手势到 CGEvent 的映射、会话重置）。
+ * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、双屏包围盒钳制、move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置）。
  * [POS]: Sources 的指针执行层；仅被 WSServer 消费，与 InputExecutor（键盘）平行为一对执行兄弟。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -10,6 +10,8 @@ import Foundation
 // 手势命令来自 WebSocket（端口 46388）：
 // {"t":"move","dx":..,"dy":..} 相对移动光标；拖动时客户端改发 {"t":"drag"}（左键按住移动）
 // {"t":"down"}/{"t":"up"} 左键按下/抬起；{"t":"click","button":"left"|"right"}
+// {"t":"tap","rx":..,"ry":..,"display":<id>,"click":true|false}
+//   —— 点画面移光标：rx/ry 是目标显示器内的比例坐标（0~1），click=true 时顺带左键单击。
 // {"t":"scroll","dx":..,"dy":..} 自然滚动（内容跟随手指方向）
 // {"t":"zoom","delta":..} 捏合缩放，经 Cmd+滚轮 合成（Chrome/Safari 页面缩放）
 final class PointerExecutor {
@@ -50,6 +52,17 @@ final class PointerExecutor {
                        y: min(max(point.y, bounds.minY), bounds.maxY))
     }
 
+    // 指定显示器的逻辑包围盒（点，非像素）；离线或未知 ID 回退主屏。
+    // macOS 全局坐标 Y 轴向下（CGEvent 语义），CGDisplayBounds 返回的即是该坐标系下的矩形，
+    // 比例坐标直接线性映射，无需翻转。
+    private func displayBounds(_ displayID: CGDirectDisplayID) -> CGRect {
+        var bounds = CGRect.null
+        if displayID != 0, CGDisplayIsOnline(displayID) != 0 { bounds = CGDisplayBounds(displayID) }
+        if bounds.isNull { bounds = CGDisplayBounds(CGMainDisplayID()) }
+        if bounds.isNull { bounds = CGRect(x: 0, y: 0, width: 1440, height: 900) }
+        return bounds
+    }
+
     private func post(_ type: CGEventType, at point: CGPoint, button: CGMouseButton = .left, clickState: Int64 = 1) {
         let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button)
         // 显式标记 clickState：Electron/Chromium 系应用会丢弃未带按下次数的合成点击（表现为点不动、无法聚焦）。
@@ -76,6 +89,20 @@ final class PointerExecutor {
                 post(.leftMouseDragged, at: next)
             } else {
                 post(.mouseMoved, at: next)
+            }
+        case "tap":
+            // 点画面移光标：比例坐标 → 目标显示器绝对坐标。先移动，可选顺带单击。
+            let rx = min(1, max(0, command["rx"] as? Double ?? 0))
+            let ry = min(1, max(0, command["ry"] as? Double ?? 0))
+            let displayID = command["display"] as? UInt32 ?? 0
+            let bounds = displayBounds(displayID)
+            let point = CGPoint(x: bounds.minX + rx * bounds.width,
+                                y: bounds.minY + ry * bounds.height)
+            position = point
+            post(.mouseMoved, at: point)
+            if command["click"] as? Bool == true {
+                post(.leftMouseDown, at: point)
+                post(.leftMouseUp, at: point)
             }
         case "down":
             dragging = true
