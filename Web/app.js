@@ -80,11 +80,16 @@ function renderTargets() {
     button.setAttribute('aria-checked', String(target.id === selected));
     // roving tabindex：整组只留一个 Tab 停靠点，就是当前选中项。
     button.tabIndex = target.id === selected ? 0 : -1;
-    // 应用图标由服务端从系统取；取不到时露出首字兜底（首字只给眼睛看，读屏念下方名称）。
+    // 应用图标由服务端从系统取；img 加载失败才露出首字兜底（首字只给眼睛看，读屏念下方名称）。
     button.innerHTML = `<span class="target-icon"><img src="/api/icon?id=${encodeURIComponent(target.id)}" alt="" draggable="false"><span class="target-initial" aria-hidden="true"></span></span><small></small>`;
     const image = button.querySelector('img');
-    image.addEventListener('error', () => image.classList.add('missing'));
-    button.querySelector('.target-initial').textContent = target.name.slice(0, 1).toUpperCase();
+    // 首字默认隐藏：加载中不闪文字，确认拿不到图标时才由 CSS 放出来。
+    const initial = button.querySelector('.target-initial');
+    initial.textContent = target.name.slice(0, 1).toUpperCase();
+    image.addEventListener('error', () => {
+      image.classList.add('missing');
+      initial.classList.add('visible');
+    });
     button.querySelector('small').textContent = target.name;
     row.append(button);
   });

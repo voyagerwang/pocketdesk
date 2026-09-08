@@ -1,5 +1,5 @@
 /*
- * [INPUT]: 依赖 index.html 的语义结构。
+ * [INPUT]: 依赖 index.html 的语义结构，包含电脑画面面板与原尺寸滚动展示。
  * [OUTPUT]: PocketDesk 手机页样式。默认 Muji 主题（米白纸面 + 深炭字 + 赭红单一强调，去发光去渐变去毛玻璃，方正小圆角）；
  *           :root[data-theme="muji"] 覆盖令牌恢复原蓝色玻璃主题，两主题共用令牌名与选择器，切换零结构改动。
  * [POS]: Web 的唯一样式来源；颜色、间距、圆角、字号、动效只允许从这里取值。
@@ -78,6 +78,8 @@
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   /* 尺寸 */
+  --control-size: 44px;
+  --viewer-max-width: 1200px;
   --tile-w: 68px;
   --icon-size: 60px;
 
@@ -261,10 +263,16 @@ h1 {
   display: none;
 }
 
+/* 首字兜底默认隐藏（加载中不闪文字）；img 加载失败后才由 .visible 放出。 */
 .target-initial {
+  display: none;
   color: var(--accent);
   font-size: var(--text-xl);
   font-weight: 600;
+}
+
+.target-icon img.missing ~ .target-initial.visible {
+  display: block;
 }
 
 .target small {
@@ -750,6 +758,14 @@ main:not(.pad-mode) .pad-gear {
 
 .send-row #send {
   flex: 1;
+  min-width: 0;
+  font-size: var(--text-md);
+  letter-spacing: 0;
+}
+
+.send-row .hist-btn {
+  flex-basis: var(--control-size);
+  min-height: var(--control-size);
 }
 
 /* 历史/图片按钮：与设置角标同一墨点血缘——无框、淡墨静息、交互落墨。
@@ -1101,3 +1117,145 @@ main.pad-mode .pad-title,
   box-shadow: var(--glow-thumb);
 }
 
+
+/* ---------- 电脑画面：工具入口与专注查看层 ---------- */
+.screen-open {
+  flex: 0 0 var(--control-size);
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--s-1);
+  min-height: var(--control-size);
+  padding: var(--s-1);
+  border: 0;
+  border-radius: var(--r-field);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.screen-open svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+body.screen-viewing {
+  overflow: hidden;
+}
+.screen-view {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  max-width: var(--viewer-max-width);
+  height: 100%;
+  height: 100dvh;
+  max-height: 100%;
+  margin: auto;
+  padding: max(var(--s-3), env(safe-area-inset-top)) max(var(--s-4), env(safe-area-inset-right)) max(var(--s-3), env(safe-area-inset-bottom)) max(var(--s-4), env(safe-area-inset-left));
+  border: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+.screen-view[open] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.screen-view::backdrop {
+  background: var(--bg);
+}
+.screen-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+.screen-heading h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+.screen-view button, .screen-view select {
+  min-height: var(--control-size);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-field);
+  background: var(--field);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+.screen-view select {
+  width: 100%;
+}
+.screen-view #screen-close {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.screen-view button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.screen-view button:active, .screen-open:active {
+  background: var(--accent-soft);
+}
+.screen-view :focus-visible, .screen-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.screen-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--surface-3);
+  border-radius: var(--r-field);
+}
+#screen-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+#screen-image.zoomed {
+  width: auto;
+  height: auto;
+  max-width: none;
+}
+.screen-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: var(--s-6);
+  text-align: center;
+}
+#screen-empty-title {
+  margin: 0 0 var(--s-2);
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+#screen-empty-help {
+  max-width: 36ch;
+  margin: 0 0 var(--s-4);
+  color: var(--fg-muted);
+  font-size: var(--text-md);
+  line-height: 1.6;
+}
+#screen-status {
+  margin: var(--s-1) 0 var(--s-2);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+.screen-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s-2);
+}

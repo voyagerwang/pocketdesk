@@ -2,8 +2,8 @@
 Swift + Network + Quartz Event Services，搭配零依赖手机 Web 页面；局域网直连或经 Tailscale 私网跨网连接，macOS 先行，命令协议为 Windows helper 保留稳定边界。
 
 <directory>
-Sources/ - macOS HTTP 服务、控制台接口、目标应用配置持久化、应用激活、Unicode 输入注入与触控板 WebSocket 指针注入 (10 个 Swift 源文件，按职责分模块，单文件 ≤300 行)
-Web/ - 手机输入页 + 电脑端控制台 (4 个静态文件)
+Sources/ - macOS HTTP 服务、控制台接口、目标应用配置持久化、应用激活、Unicode 输入注入与触控板 WebSocket 指针注入、ScreenCaptureKit 按需画面回传 (11 个 Swift 源文件，按职责分模块，单文件 ≤300 行)
+Web/ - 手机输入页 + 电脑端控制台 (5 个静态文件)
 Resources/ - 独立 macOS App 的 bundle 元数据与应用图标 (plist + icns + iconset)
 scripts/ - 独立应用安装脚本与图标生成脚本 (3 个脚本)
 </directory>
