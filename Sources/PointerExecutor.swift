@@ -10,8 +10,10 @@ import Foundation
 
 // 手势命令来自 WebSocket（端口 46388）：
 // {"t":"move","dx":..,"dy":..} 相对移动光标；拖动时客户端改发 {"t":"drag"}（左键按住移动）
-// {"t":"down"}/{"t":"up"} 左键按下/抬起；{"t":"click","button":"left"|"right"}
-// {"t":"tap","rx":..,"ry":..,"display":<id>,"click":true|false}
+// {"t":"down"}/{"t":"up"} 左键按下/抬起；{"t":"click","button":"left"|"right","clickState":1|2}
+//   —— clickState 是**这一下**在点击序列中的序号（1=单击，2=双击的第二下），只发一组 down/up；
+//      旧字段 count 是"完整点击次数"（会循环 1...count），只为旧客户端保留，新前端请用 clickState。
+// {"t":"tap","rx":..,"ry":..,"display":<id>,"click":true|false,"clickState":1|2}
 //   —— 点画面移光标：rx/ry 是目标显示器内的比例坐标（0~1），click=true 时顺带左键单击。
 // {"t":"scroll","dx":..,"dy":..} 自然滚动（内容跟随手指方向）
 // {"t":"zoom","delta":..} 捏合缩放，经 Cmd+滚轮 合成（Chrome/Safari 页面缩放）
@@ -137,8 +139,14 @@ final class PointerExecutor {
             expected = point
             post(.mouseMoved, at: point)
             if command["click"] as? Bool == true {
-                post(.leftMouseDown, at: point)
-                post(.leftMouseUp, at: point)
+                // down/up 留 40ms：与下方 "click" 分支统一。很多应用（含 WebKit/Electron/
+                // 自定义 NSTextView）的输入框在 mousedown 阶段抢焦点，down/up 之间零间隔时
+                // 系统来不及派发"设置第一响应者"就被 up 中断，表现为"指针动了但框没聚焦"。
+                // clickState=2 表示"这是双击的第二下"，绝不是"再点两次"。
+                let clickState = Int64(min(2, max(1, command["clickState"] as? Int ?? 1)))
+                post(.leftMouseDown, at: point, clickState: clickState)
+                usleep(40_000)
+                post(.leftMouseUp, at: point, clickState: clickState)
             }
         case "down":
             dragging = true
@@ -150,18 +158,28 @@ final class PointerExecutor {
         case "click":
             let right = (command["button"] as? String) == "right"
             let button: CGMouseButton = right ? .right : .left
-            let count = min(3, max(1, command["count"] as? Int ?? 1))
             let point = basePosition()
+            // clickState（新语义）：这一下在点击序列中的序号——1=单击，2=双击的第二下，
+            //   **只发一组 down/up**。前端的双击是"第一下 clickState=1 + 第二下 clickState=2"。
+            // count（旧语义）：完整点击次数，按 1...count 循环注入。前端曾先发 count=1 再发
+            //   count=2，被循环执行成 3 次点击——所以前端已改走 clickState；count 只为旧客户端保留。
+            let states: [Int64]
+            if let state = command["clickState"] as? Int {
+                states = [Int64(min(2, max(1, state)))]
+            } else {
+                let count = min(3, max(1, command["count"] as? Int ?? 1))
+                states = (1...count).map { Int64($0) }
+            }
             // 按下与抬起间隔 40ms，双击按真实系统的 clickState 1→2 序列注入。
-            for i in 1...count {
-                let base = Double(i - 1) * 0.12
+            for (index, state) in states.enumerated() {
+                let base = Double(index) * 0.12
                 let down: CGEventType = right ? .rightMouseDown : .leftMouseDown
                 let up: CGEventType = right ? .rightMouseUp : .leftMouseUp
                 queue.asyncAfter(deadline: .now() + base) { [weak self] in
                     guard let self else { return }
-                    self.post(down, at: point, button: button, clickState: Int64(i))
+                    self.post(down, at: point, button: button, clickState: state)
                     self.queue.asyncAfter(deadline: .now() + 0.04) {
-                        self.post(up, at: point, button: button, clickState: Int64(i))
+                        self.post(up, at: point, button: button, clickState: state)
                     }
                 }
             }

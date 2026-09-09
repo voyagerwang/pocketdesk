@@ -33,7 +33,10 @@ final class ScreenCapture {
         try checkAccess()
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         return content.displays.sorted { $0.displayID < $1.displayID }.enumerated().map { index, display in
-            ["id": display.displayID, "name": "显示器 \(index + 1) · \(display.width) × \(display.height)"]
+            // width/height 是显示器的逻辑点分辨率（与 CGEvent 全局坐标同单位），
+            // 前端做"远端拖动"时要把比例差 × 分辨率换算成鼠标位移像素，必须下发。
+            ["id": display.displayID, "name": "显示器 \(index + 1) · \(display.width) × \(display.height)",
+             "width": display.width, "height": display.height]
         }
     }
 

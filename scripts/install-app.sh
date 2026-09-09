@@ -22,5 +22,14 @@ ditto "$BUILD_APP" "$INSTALL_APP"
 # 清理历史更名遗留的安装目录（Voice Deck / Pocket Deck）。
 if [ "$INSTALL_DIR/Voice Deck.app" != "$INSTALL_APP" ]; then rm -rf "$INSTALL_DIR/Voice Deck.app"; fi
 if [ "$INSTALL_DIR/Pocket Deck.app" != "$INSTALL_APP" ]; then rm -rf "$INSTALL_DIR/Pocket Deck.app"; fi
+# open 对已经在运行的应用只会把它激活，不会换成刚装进去的新二进制——
+# 不先退出旧实例，改完的代码永远跑不起来（"我改了却没变化"的根源就在这）。
+# 进程名取可执行文件 VoiceDeck（与 app 名 PocketDesk 不同，历史遗留）。
+if pgrep -x VoiceDeck >/dev/null 2>&1; then
+  echo "Quitting running VoiceDeck…"
+  pkill -x VoiceDeck || true
+  # 等端口释放：退得不够干净时新进程会绑不上 46387，白装一次。
+  sleep 1.5
+fi
 open "$INSTALL_APP"
 echo "Installed and started: $INSTALL_APP"

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard、ApplicationServices 的 AXUIElement、CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的 SendCommand/ShortcutConfig/InputError/ShortcutError/ShortcutKeys、ShortcutActions 的平台展开、ExecutionTrace 的结果分级与环境门禁、Util 的前台应用探测、TargetStore 的目标解析。
- * [OUTPUT]: 对外提供 InputExecutor（图片预上传暂存、应用激活与**唤醒后校验**、**注入前的可输入焦点确认与自动聚焦**、图文发送的 activate → Unicode → 粘贴图片 → Return 注入序列、快捷键组合注入、预设动作的窗口关闭与应用隐藏）；合成键盘事件统一经 postKey（真实 CGEventSource + characters 补齐 + down/up 间隔），解决 Zed 终端这类按 characters 取键的应用对合成 Return 的丢弃。
- * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
+ * [OUTPUT]: 对外提供 InputExecutor（图片预上传暂存、应用激活与**唤醒后校验**、**注入前的焦点三态探测与按需自动聚焦**、图文发送的 activate → Unicode → 粘贴图片 → Return 注入序列、**实时同频输入**（手机输入框全文 → 差分退格/补字 → 可选回车提交）、快捷键组合注入、预设动作的窗口关闭与应用隐藏），以及 lastFocusProbe（最近一次焦点探测的现场：应用/role/AXError/结论，经 /api/status 暴露，是排查"报没聚焦却其实进去了"的唯一依据）；合成键盘事件统一经 postKey（真实 CGEventSource + characters 补齐 + down/up 间隔），解决 Zed 终端这类按 characters 取键的应用对合成 Return 的丢弃。
+ * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/live-input、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
@@ -79,16 +79,16 @@ final class InputExecutor {
             queue.asyncAfter(deadline: .now() + .milliseconds(450)) {
                 self.performUURemotePaste(text: command.text, imageData: imageData)
                 // UU 的内容由剪贴板同步到远端机器，本机的焦点状态与它无关、也无从判定，沿用既有结论。
-                self.finishSend(label: label, targetId: Self.uuRemoteId, editableFocus: true, completion: completion)
+                self.finishSend(label: label, targetId: Self.uuRemoteId, verdict: .editable, completion: completion)
             }
             return
         }
         // 伪目标：不切换应用，直接注入当前前台（前台是非 Dock 应用时的发送路径）。
         if command.targetId == Self.frontmostPseudoId {
             queue.asyncAfter(deadline: .now() + .milliseconds(80)) {
-                let editable = self.ensureEditableFocus(pid: Util.frontmostApp()?.processIdentifier ?? -1)
+                let verdict = self.ensureEditableFocus(pid: Util.frontmostApp()?.processIdentifier ?? -1)
                 self.performPaste(imageData: imageData, text: command.text)
-                self.finishSend(label: label, targetId: Self.frontmostPseudoId, editableFocus: editable, completion: completion)
+                self.finishSend(label: label, targetId: Self.frontmostPseudoId, verdict: verdict, completion: completion)
             }
             return
         }
@@ -102,11 +102,11 @@ final class InputExecutor {
             }
             // 给桌面应用取得前台焦点；后续步骤都在同一串行队列中执行。
             self.queue.asyncAfter(deadline: .now() + .milliseconds(450)) {
-                let editable = self.ensureEditableFocus(pid: self.runningApp(targetId: command.targetId)?.processIdentifier ?? -1)
+                let verdict = self.ensureEditableFocus(pid: self.runningApp(targetId: command.targetId)?.processIdentifier ?? -1)
                 self.performPaste(imageData: imageData, text: command.text)
                 // 粘完再看一眼：目标是具体应用时，前台不是它就说明这一发大概率落空了。
                 self.queue.asyncAfter(deadline: .now() + .milliseconds(350)) {
-                    self.finishSend(label: label, targetId: command.targetId, editableFocus: editable, completion: completion)
+                    self.finishSend(label: label, targetId: command.targetId, verdict: verdict, completion: completion)
                 }
             }
         }
@@ -115,26 +115,36 @@ final class InputExecutor {
     // 发送收尾：把「目标有没有真的在前台」变成一句人话，写进回执与日志。
     // 目标确实在最前面接收 → delivered（这是外部能观察到的最强证据）；前台是别的应用 → sent，
     // 因为这种时候内容多半落在了别人家的窗口里，是"点了没反应"的高发场景。
-    private func finishSend(label: String, targetId: String, editableFocus: Bool, completion: @escaping (Result<ExecutionFeedback, InputError>) -> Void) {
+    private func finishSend(label: String, targetId: String, verdict: FocusVerdict, completion: @escaping (Result<ExecutionFeedback, InputError>) -> Void) {
+        // 走整段粘贴/提交的老路径后，目标输入框已被清空，同频基线必须跟着归零；
+        // 否则下一次同频会照着旧基线去退格，把刚发出去的内容又"删"一遍。
+        mirroredText = ""
         let frontName = Util.frontmostApp()?.localizedName
-        let outcome: ExecutionOutcome
-        let detail: String
+        let feedback: ExecutionFeedback
         // 伪目标与 UU 走当前前台，前台即目标，无需比对归属。
         if targetId == Self.frontmostPseudoId || targetId == Self.uuRemoteId {
-            outcome = editableFocus ? .delivered : .sent
-            detail = editableFocus ? "已输入到\(frontName ?? "当前前台应用")。" : Self.noFocusHint(frontName ?? "当前前台应用")
+            feedback = Self.receipt(name: frontName ?? "当前前台应用", verdict: verdict)
         } else if self.frontmostMatches(targetId: targetId) {
-            // 只比对前台应用是不够的：应用在前台、里面却没有输入框拿着焦点时（Electron 应用常见），
-            // 按键照样没有去处。这种情况不能报"已输入"，那是把失败说成成功。
-            outcome = editableFocus ? .delivered : .sent
-            detail = editableFocus ? "已输入到\(frontName ?? "目标应用")。" : Self.noFocusHint(frontName ?? "目标应用")
+            feedback = Self.receipt(name: frontName ?? "目标应用", verdict: verdict)
         } else {
-            outcome = .sent
             let expected = self.store.resolve(targetId)?.name ?? targetId
-            detail = "已输入，但当前前台是\(frontName ?? "其他应用")而不是\(expected)，内容可能没落到它的输入框。"
+            feedback = .sent("已输入，但当前前台是\(frontName ?? "其他应用")而不是\(expected)，内容可能没落到它的输入框。")
         }
-        self.record("send", label, outcome, detail, frontName)
-        completion(.success(ExecutionFeedback(outcome: outcome, detail: detail)))
+        self.record("send", label, feedback.outcome, feedback.detail, frontName)
+        completion(.success(feedback))
+    }
+
+    /// 焦点结论 → 回执。editable 与 unknown 都按"已输入到 X"处理；只有明确的 notEditable 才降级提示。
+    /// 这不是把失败说成成功：unknown 的含义是"外部判不了"，而实际使用中（Electron 把焦点报成
+    /// 容器）内容绝大多数是进去了的。判不了却给出确定的负面结论，才是真正的失真。
+    /// unknown 的现场一律写进 lastFocusProbe，控制台可查，不留无据的沉默。
+    private static func receipt(name: String, verdict: FocusVerdict) -> ExecutionFeedback {
+        switch verdict {
+        case .editable, .unknown:
+            return .delivered("已输入到\(name)。")
+        case .notEditable:
+            return .sent(Self.noFocusHint(name))
+        }
     }
 
     // 前台应用是不是某个目标应用（按 bundleID 或路径比对，与 /api/status 判定保持一致）。
@@ -181,21 +191,196 @@ final class InputExecutor {
         }
     }
 
+    /* ---------- 实时同频输入 ---------- */
+    // 手机输入框与电脑输入框的内容对齐：只注入「差异」，不做整框重写。
+    // 之所以不整框重写：AXValue 在 Electron 应用上普遍不可写（ChatGPT 桌面版连"谁拿着焦点"
+    // 都不肯回答，见 probeFocus 的 -25212 现场），而 CGEvent 键流是本项目唯一被验证过的通路。
+    // 差异 = 公共前缀之后的「退掉旧尾巴 + 打上新尾巴」；手机端绝大多数编辑发生在末尾，代价极小。
+
+    /// 当前已同步到电脑端输入框的文本（基线）。它假定"电脑端输入框里的内容就是我们打进去的"，
+    /// 一旦这个前提被别处打破（用户在电脑上手动改了框），两端就会漂——故删除量设了上限，
+    /// 越界即停手，绝不把用户别处的内容退掉。
+    private var mirroredText = ""
+    /// 正在为它做激活的目标：激活在途时放弃本次注入（手机端每 ~90ms 会再发一次全文，
+    /// 下一次自然补上，没必要在这里排队堆积）。
+    private var mirroringTarget: String?
+    /// 一次同频最多允许删除的字符数（字素簇）。超过说明基线八成漂了，真按下去会误删。
+    private static let maxMirrorDelete = 800
+
+    func mirror(_ command: LiveInputCommand, completion: @escaping (Result<ExecutionFeedback, InputError>) -> Void) {
+        queue.async {
+            if let reason = EnvironmentGate.blockReason() {
+                self.record("live", "实时同频", .blocked, reason)
+                completion(.failure(.message(reason))); return
+            }
+            guard command.text.utf16.count <= 8_000 else {
+                completion(.failure(.message("同频文本超过 8,000 字符上限。"))); return
+            }
+            let targetId = command.targetId ?? Self.frontmostPseudoId
+            if self.mirroringTarget != targetId {
+                if !self.mirroredText.isEmpty {
+                    self.record("live", "实时同频", .sent,
+                                "目标切到 \(targetId)，基线归零；已输到上一个目标的文本不会自动撤回。")
+                }
+                self.mirroredText = ""
+                self.mirroringTarget = targetId
+            }
+            if command.reset == true {
+                self.mirroredText = command.text
+                completion(.success(.delivered("同步基线已重置为 \(command.text.utf16.count) 字符。")))
+                return
+            }
+            // 目标就在前台（或本来就只投前台）：直接注入。
+            if targetId == Self.frontmostPseudoId || self.frontmostMatches(targetId: targetId) {
+                self.applyMirror(text: command.text, submit: command.submit == true, completion: completion)
+                return
+            }
+            if self.mirroringTarget != nil {
+                let name = self.store.resolve(targetId)?.name ?? targetId
+                completion(.failure(.message("正在把\(name)切到前台，稍候。")))
+                return
+            }
+            // 目标不在前台：先把它叫到前台再注入，与 send 的语义一致（选了谁就发给谁）。
+            self.mirroringTarget = targetId
+            self.activateTarget(targetId) { result in
+                self.mirroringTarget = nil
+                guard case .success = result else {
+                    if case .failure(.message(let message)) = result { completion(.failure(.message(message))) }
+                    return
+                }
+                // 唤醒后给桌面应用一拍把焦点落定，否则头几个字会打在空气里。
+                self.queue.asyncAfter(deadline: .now() + .milliseconds(400)) {
+                    self.applyMirror(text: command.text, submit: command.submit == true, completion: completion)
+                }
+            }
+        }
+    }
+
+    /// 真正落键：算差异 → 退旧尾巴 → 打新尾巴 →（可选）回车。
+    private func applyMirror(text: String, submit: Bool, completion: @escaping (Result<ExecutionFeedback, InputError>) -> Void) {
+        guard let front = Util.frontmostApp() else {
+            completion(.failure(.message("读不到当前前台应用，无法同频。"))); return
+        }
+        // UU 远程不吃合成按键（只吃剪贴板），同频对它必然落空——早失败，别让人对着没反应的框打字。
+        if self.isUUFrontmost() {
+            completion(.failure(.message("UU 远程不接收合成按键，实时同频对它无效——请直接点发送（走剪贴板通道）。")))
+            return
+        }
+        let delta = Self.delta(from: self.mirroredText, to: text)
+        // 没有差异也不提交：一次键都不敲。手机端每次 input 都可能触发同步，空转要绝对廉价。
+        if delta.delete == 0, delta.insert.isEmpty, !submit {
+            completion(.success(.delivered("已同频（无变化）。"))); return
+        }
+        let verdict = self.ensureEditableFocus(pid: front.processIdentifier)
+        guard delta.delete <= Self.maxMirrorDelete else {
+            let detail = "基线漂移：要删 \(delta.delete) 个字符（上限 \(Self.maxMirrorDelete)），已停手。"
+            self.record("live", "实时同频", .failed, detail, front.localizedName)
+            completion(.failure(.message(
+                "电脑端输入框里的内容和我们同步过去的不一致了（要删 \(delta.delete) 个字才对得上）。为避免误删，已停手——请在电脑上清空那个输入框，再重新输入。")))
+            return
+        }
+        self.deleteBackward(delta.delete)
+        self.typeText(delta.insert)
+        self.mirroredText = text
+        if submit {
+            usleep(60_000)           // 让最后一个字落定，再回车
+            self.postKey(36)        // Return：内容已经在框里，发送就等价于按一次回车
+            self.mirroredText = ""  // 提交后目标框被清空，基线跟着归零
+        }
+        let name = front.localizedName ?? "当前前台应用"
+        let detail = submit ? "已同频并回车提交到\(name)。"
+            : "已同频到\(name)（删 \(delta.delete)、补 \(delta.insert.count)）。"
+        let feedback: ExecutionFeedback = verdict == .notEditable
+            ? .sent(Self.noFocusHint(name)) : .delivered(detail)
+        self.record("live", "实时同频", feedback.outcome, feedback.detail, name)
+        completion(.success(feedback))
+    }
+
+    /// 求新旧文本的差异：公共前缀保留，旧尾巴退掉，新尾巴补上。
+    /// 按 Character（字素簇）而不是 UTF-16 计数：一次退格在几乎所有应用里删掉的是一个字素簇，
+    /// 若按 UTF-16 计，一个 emoji（代理对）会算成两次退格，从而多删掉它前面那个字。
+    private static func delta(from old: String, to new: String) -> (delete: Int, insert: String) {
+        let before = Array(old)
+        let after = Array(new)
+        var index = 0
+        while index < before.count && index < after.count && before[index] == after[index] { index += 1 }
+        return (before.count - index, String(after[index...]))
+    }
+
+    /// 逐字退格。量大时缩短按下时长：几百次退格若沿用贴合物理键盘的 25ms 会拖到好几秒。
+    private func deleteBackward(_ count: Int) {
+        guard count > 0 else { return }
+        let pressMicros: useconds_t = count > 24 ? 3_000 : 25_000
+        for index in 0..<count {
+            postKey(51, pressMicros: pressMicros)
+            if index < count - 1 { usleep(pressMicros) }
+        }
+    }
+
+    /// 打字。换行不塞进 Unicode 串——"\n" 直接投进聊天输入框会被当成回车发出去，
+    /// 故改用 Shift+Return（各家的"换行"键）；其余内容按 32 字一批注入，
+    /// 既控制单事件的 Unicode 串长度，也顺带打出逐段落字的观感。
+    private func typeText(_ text: String) {
+        guard !text.isEmpty else { return }
+        for (lineIndex, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            if lineIndex > 0 { postKey(36, flags: .maskShift); usleep(30_000) }
+            let units = Array(line)
+            var offset = 0
+            while offset < units.count {
+                let end = min(offset + 32, units.count)
+                postUnicode(String(units[offset..<end]))
+                offset = end
+                if offset < units.count { usleep(8_000) }
+            }
+        }
+    }
+
     /* ---------- 注入前的焦点确认 ---------- */
     // 激活（activate）只保证应用到了前台，不保证里面有输入框拿着键盘焦点。
     // Electron/Chromium 应用尤其典型：窗口起来了，页面里却没有任何 first responder，
     // 此时 postUnicode 投出去的按键石沉大海——这正是"点了发送却什么都没进去"的根因。
     // 用户手动点一下输入框就好，因为那一步才真正把焦点放进去。
 
-    // 当前聚焦元素的角色；nil = 这个应用里没有任何元素拿着焦点（AX 返回 noValue）。
-    private static func focusedRole(_ pid: pid_t) -> String? {
+    /// 探测某应用里现在谁拿着键盘焦点。
+    /// 连 AXError 一起带出来：只有看得到失败原因，才能区分「真的没焦点」「AX 不许我问」
+    /// 「焦点停在容器上」——这三种在旧实现里都塌缩成同一个 false，正是误报的来源。
+    private static func probeFocus(pid: pid_t) -> (verdict: FocusVerdict, note: String) {
+        guard pid > 0 else { return (.unknown, "pid 无效，未探测") }
         let app = AXUIElementCreateApplication(pid)
         var raw: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
-              let element = raw, CFGetTypeID(element) == AXUIElementGetTypeID() else { return nil }
+        let focusStatus = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &raw)
+        if focusStatus == .success, let element = raw, CFGetTypeID(element) == AXUIElementGetTypeID() {
+            return Self.classify(element as! AXUIElement, source: "应用级")
+        }
+        // 应用级问不出来时（实测 ChatGPT 桌面版直接返回 noValue -25212），不代表没有输入框——
+        // 它只是不肯回答。退回系统级 AX 再问一次：系统级问的是"全系统当前谁拿着键盘焦点"，
+        // 对这类应用常常答得上来。
+        var systemRaw: CFTypeRef?
+        let systemStatus = AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(),
+                                                        kAXFocusedUIElementAttribute as CFString, &systemRaw)
+        if systemStatus == .success, let element = systemRaw, CFGetTypeID(element) == AXUIElementGetTypeID() {
+            var ownerPID: pid_t = 0
+            AXUIElementGetPid(element as! AXUIElement, &ownerPID)
+            // pid 对不上说明焦点在别的应用上，这份答案不属于本次探测的目标，不能采信。
+            guard ownerPID == pid else {
+                return (.unknown, "系统级焦点属于 pid \(ownerPID)，与目标 \(pid) 不符")
+            }
+            return Self.classify(element as! AXUIElement, source: "系统级回退")
+        }
+        return (.unknown, "读不到聚焦元素（应用级 \(focusStatus.rawValue)，系统级 \(systemStatus.rawValue)）")
+    }
+
+    /// 给一个已确认拿到手的聚焦元素分类。
+    private static func classify(_ element: AXUIElement, source: String) -> (verdict: FocusVerdict, note: String) {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element as! AXUIElement, kAXRoleAttribute as CFString, &value) == .success else { return nil }
-        return value as? String
+        let roleStatus = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &value)
+        guard roleStatus == .success, let role = value as? String else {
+            return (.unknown, "\(source)：读不到 role（AXError \(roleStatus.rawValue)）")
+        }
+        if editableRoles.contains(role) { return (.editable, "\(source)：聚焦 \(role)") }
+        if nonInputRoles.contains(role) { return (.notEditable, "\(source)：聚焦 \(role)，不是可输入控件") }
+        // 认不出的角色（容器、web 页面、新角色）一律 unknown：不替用户下负面结论。
+        return (.unknown, "\(source)：聚焦 \(role)，无法判定能否接字")
     }
 
     private static func focusedWindow(_ pid: pid_t) -> AXUIElement? {
@@ -223,25 +408,75 @@ final class InputExecutor {
         return hasEditableFocus(pid: pid)
     }
 
-    /// 注入前确保有地方能接字：本来就有可输入焦点就直接用；没有就按角色优先级挑一个输入框聚焦。
-    /// 尽力而为——AX 不保证每个应用都允许设置焦点，抢不到就如实返回 false，交给回执说清楚，绝不假装成功。
+    /// 注入前确保有地方能接字，并给出探测结论供回执分级。
+    ///
+    /// 只在**明确没有输入框**时才去抢焦点。焦点状态都读不出来（unknown）时绝不乱按：
+    /// BFS 找到的第一个输入框未必是用户想要的那个（搜索框常排在更浅层），按下即改焦点，
+    /// 把内容送进错误的框比送不进去更难发现。
     @discardableResult
-    private func ensureEditableFocus(pid: pid_t) -> Bool {
-        guard pid > 0 else { return false }
-        if Self.hasEditableFocus(pid: pid) { return true }
+    private func ensureEditableFocus(pid: pid_t) -> FocusVerdict {
+        guard pid > 0 else {
+            Self.noteProbe(pid: pid, verdict: .unknown, note: "pid 无效，未探测")
+            return .unknown
+        }
+        let probe = Self.probeFocus(pid: pid)
+        if probe.verdict != .notEditable {
+            Self.noteProbe(pid: pid, verdict: probe.verdict, note: probe.note + "（未干预焦点）")
+            return probe.verdict
+        }
         let candidates = Self.editableCandidates(pid: pid)
         // 只去抢「输入框」：BFS 是层序的，浅层的搜索框/下拉会排在前头，而把内容打进搜索框
         // 比打不进去更难发现。所以既不能"找到第一个就用"，也不碰 ComboBox/SearchField。
         for role in Self.focusPriority {
             guard let hit = candidates.first(where: { $0.role == role }) else { continue }
-            if Self.takeFocus(hit.element, pid: pid) { return true }
+            guard Self.takeFocus(hit.element, pid: pid) else { continue }
+            // 抢完必须重新探一次：焦点可能已经变了。探测仍是 unknown 也照实返回——
+            // 尽力干预过就把 unknown 交回去，不再升级成"没有输入框"的负面结论。
+            let after = Self.probeFocus(pid: pid)
+            Self.noteProbe(pid: pid, verdict: after.verdict, note: after.note + "（已尝试聚焦 \(role)）")
+            return after.verdict
         }
-        return false
+        Self.noteProbe(pid: pid, verdict: .notEditable, note: probe.note + "（未找到可聚焦的输入框）")
+        return .notEditable
+    }
+
+    /// 记下最近一次焦点探测的现场。只看到"没有聚焦的输入框"无法区分「真没聚焦」与
+    /// 「AX 把 Electron 的 contenteditable 报成了容器」，排查全靠这份现场。控制台可读。
+    private static let probeLock = NSLock()
+    private static var lastProbe: [String: Any] = [:]
+    static var lastFocusProbe: [String: Any] {
+        probeLock.lock(); defer { probeLock.unlock() }
+        return lastProbe
+    }
+    private static func noteProbe(pid: pid_t, verdict: FocusVerdict, note: String, via: String = "发送前探测") {
+        let app = NSRunningApplication(processIdentifier: pid)
+        let snapshot: [String: Any] = [
+            "time": ISO8601DateFormatter().string(from: Date()),
+            "app": app?.localizedName ?? "(未知)",
+            "bundleID": app?.bundleIdentifier ?? "",
+            "pid": Int(pid),
+            "verdict": String(describing: verdict),
+            "note": note,
+            "via": via,
+        ]
+        probeLock.lock()
+        lastProbe = snapshot
+        probeLock.unlock()
+    }
+
+    /// 只读探测当前前台应用的焦点现场：不注入任何事件，只回答"现在谁拿着键盘焦点"。
+    /// 排查「报没有聚焦的输入框」这类误报时，这是唯一能分清「真没聚焦」与
+    /// 「AX 把 Electron 的 contenteditable 报成容器角色」的手段。
+    static func probeFrontmostFocus() -> [String: Any] {
+        guard let front = Util.frontmostApp() else { return ["error": "读不到前台应用"] }
+        let probe = Self.probeFocus(pid: front.processIdentifier)
+        Self.noteProbe(pid: front.processIdentifier, verdict: probe.verdict,
+                       note: probe.note, via: "/api/focus-probe（只读）")
+        return Self.lastFocusProbe
     }
 
     private static func hasEditableFocus(pid: pid_t) -> Bool {
-        guard let role = focusedRole(pid) else { return false }
-        return editableRoles.contains(role)
+        Self.probeFocus(pid: pid).verdict == .editable
     }
 
     // 窗口里所有可输入元素（有界 BFS，最多 400 个节点）。
@@ -268,11 +503,34 @@ final class InputExecutor {
         return found
     }
 
+    // 焦点探测的三态结论。之所以不能只有「有 / 没有」两态：探测不到不等于没有。
+    // Electron / Chromium 常把聚焦元素报成 AXWebArea（页面容器）而不是真正的输入框，
+    // 此时 CGEvent 照样会路由到 DOM 的 document.activeElement，内容确实进去了——
+    // 把这种情况说成"没有聚焦的输入框"，就是每次发送都误报一次。
+    // 取舍：误报会让人不再相信这条提示（进而忽略真正需要它的那一次），代价高于漏报。
+    // 故只有拿到"聚焦的不是输入框"这个**正面证据**才提示，其余一律不打扰用户。
+    private enum FocusVerdict {
+        case editable       // 聚焦元素明确是可输入控件：内容有去处
+        case unknown        // 无从判定（探测失败 / 焦点停在容器上 / 认不出的角色）
+        case notEditable    // 聚焦元素明确不是可输入控件：内容大概率没有去处
+    }
+
     // 可输入角色：AX 里能接住键盘输入的元素。Chromium/Electron 把 <textarea> 与 contenteditable
     // 暴露成 AXTextArea，把 <input> 暴露成 AXTextField，搜索框是 AXSearchField。
     private static let editableRoles: Set<String> = [
         kAXTextFieldRole as String, kAXTextAreaRole as String,
         kAXComboBoxRole as String, "AXSearchField",
+    ]
+
+    // 「确定不是输入框」的角色。只有命中这些才敢说"内容没进去"。
+    // 认不出的角色一律归 unknown——遇到新角色时宁可沉默，也不误伤。
+    private static let nonInputRoles: Set<String> = [
+        kAXButtonRole as String, kAXCheckBoxRole as String, kAXRadioButtonRole as String,
+        kAXPopUpButtonRole as String, kAXMenuItemRole as String, kAXMenuBarItemRole as String,
+        kAXMenuBarRole as String, kAXMenuRole as String, kAXImageRole as String,
+        kAXStaticTextRole as String, kAXSliderRole as String,
+        kAXToolbarRole as String, kAXProgressIndicatorRole as String, kAXValueIndicatorRole as String,
+        "AXLink",   // SDK 没导出 kAXLinkRole，只能用字面量（web 页面里的超链接）
     ]
 
     // 抢焦点的角色优先级：只认输入框，不碰下拉与搜索（理由见 ensureEditableFocus）。
@@ -479,8 +737,10 @@ final class InputExecutor {
         36: "\r", 51: "\u{7F}", 48: "\t", 53: "\u{1B}", 49: " ",
     ]
 
+    /// pressMicros 是按下与抬起的间隔：默认 25ms 贴合物理按键；连续退格上百次时调用方会缩短它，
+    /// 否则光删一段话就要好几秒。
     @discardableResult
-    private func postKey(_ code: CGKeyCode, flags: CGEventFlags = []) -> Bool {
+    private func postKey(_ code: CGKeyCode, flags: CGEventFlags = [], pressMicros: useconds_t = 25_000) -> Bool {
         guard let down = CGEvent(keyboardEventSource: Self.eventSource, virtualKey: code, keyDown: true),
               let up = CGEvent(keyboardEventSource: Self.eventSource, virtualKey: code, keyDown: false) else { return false }
         for event in [down, up] {

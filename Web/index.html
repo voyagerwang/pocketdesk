@@ -23,7 +23,7 @@
         } catch (e) { /* 无属性 = 经典蓝 */ }
       })();
     </script>
-    <link rel="stylesheet" href="/style.css?v=2.9.0" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
+    <link rel="stylesheet" href="/style.css?v=2.9.23" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
   </head>
   <body data-page-node-id="2eqrPm23J7ToUXDDq0CibO">
     <main data-page-node-id="vqfJmN7gi1ptl0qmDEQ4Iv">
@@ -93,7 +93,9 @@
     </main>
 
     <!-- 画面查看器两种形态：可拖可缩的 PiP 浮窗（默认）与整层全屏（点全屏按钮进入）。
-         PiP 浮窗避开连接胶囊与输入区；非模态 dialog，开着时主页触控板仍可操作；转屏交给手机自己转。 -->
+         PiP 浮窗避开连接胶囊与输入区；非模态 dialog，开着时主页触控板仍可操作；转屏交给手机自己转。
+         全屏态：单指=远端单击/双击/移动/拖动，双指=捏合缩放(1x–6x)与平移画面，退出全屏 / 关闭 / 换显示器时归位；
+         全屏还会请求横屏（Android Chrome 能锁，iOS Safari 锁不了方向，只补一句「请把手机横过来」的引导）。 -->
     <dialog id="screen-view" class="screen-view pip" aria-label="电脑画面" data-page-node-id="oBKsEUqceSoXtW2Ix3yFkj">
       <div class="screen-resize nw" data-page-node-id="I3HtA1b2c4d5e6f7g8h9i0" aria-hidden="true"></div>
       <div class="screen-resize n"  data-page-node-id="J4HuB2c3d5e6f7g8h9i0j1" aria-hidden="true"></div>
@@ -117,6 +119,9 @@
             <path d="M1 1 L1 14 L4.5 10.5 L7 16.5 L9.2 15.5 L6.7 9.8 L11 9.8 Z" fill="#fff" stroke="#000" stroke-width="1.1" stroke-linejoin="round"></path>
           </svg>
         </div>
+        <!-- 本地触点环（§6 层1）：手指接触即时反馈，只代表收到触摸，不代表 Mac 已执行。
+             放在 viewport 内、随 .rotated 一起转，用局部坐标定位，不需单独处理旋转。 -->
+        <div id="screen-touch" class="screen-touch" hidden aria-hidden="true"></div>
       </div>
       <!-- 显示器列表只此一份数据源；浮层切换键与右侧滑动手势都是它的视图，
            两者都走同一条 change 流程，不另写一套拉流。 -->
@@ -128,6 +133,19 @@
            整块浮窗都能拖（按钮与 8 个缩放 handle 除外），所以没有专门的把手元素。 -->
       <div class="screen-hud screen-hud-top" data-page-node-id="iE93dIZMIxdV0n1EQ7tFK5">
         <button id="screen-display-switch" class="hud-chip" type="button" hidden data-page-node-id="HZUPrdxcOlmVoW0TGrAydn"></button>
+        <!-- 全屏右键 / 滚动工具（§3）：仅全屏态显示（.fs-only）。右键作用于最近一次远端光标位置
+             （先点画面把光标移到目标处，再点此）；滚动工具开启后单指拖=滚动、不与"单指控电脑"抢同一根手指。
+             两者点击都有 toast 反馈（见 screen.js showToast），否则手机端无可见反馈会像没反应。 -->
+        <button id="screen-rightclick" class="hud-icon fs-only" type="button" title="右键" aria-label="右键" data-page-node-id="RcP00001">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+            <path d="M9 3 v9 l-2.5 -2.5 M6.5 9.5 L12 15 V4 a1 1 0 0 0 -1 -1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="translate(3 2)"></path>
+          </svg>
+        </button>
+        <button id="screen-scroll" class="hud-icon fs-only" type="button" title="滚动工具" aria-label="滚动工具（开启后单指拖=滚动）" data-page-node-id="ScT00001">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+            <path d="M12 4 v16 M12 4 l-4 4 M12 4 l4 4 M12 20 l-4 -4 M12 20 l4 -4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </button>
         <span class="hud-spacer" data-page-node-id="Y9FM6SFv1GJio5Ph6qXKnf"></span>
         <button id="screen-fullscreen" class="hud-icon" type="button" title="全屏" aria-label="全屏" data-page-node-id="aB1cD2eF3gH4iJ5kL6mN7o">
           <!-- 两个图标各管一个方向，由 .fullscreen 类决定谁显形，JS 不碰 DOM。 -->
@@ -149,9 +167,30 @@
             <path d="M18 6 L6 18 M6 6 L18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
           </svg>
         </button>
+        <!-- 全屏键盘图标（#kb-toggle）：唯一的"点此才弹键盘"入口，与右侧常用按钮（全屏/刷新/关闭）一组；
+             仅全屏态显示（靠 .fs-only）。点画面不再自动弹键盘（见 screen.js / app.js）。再点一下收起。 -->
+        <button id="kb-toggle" class="hud-icon kb-toggle fs-only" type="button" title="键盘" aria-label="唤起键盘" data-page-node-id="KbT00001">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <rect x="2" y="6" width="20" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"></rect>
+            <path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+            <path d="M7 14h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          </svg>
+        </button>
       </div>
+
+      <!-- 原生键盘唤起代理：一个 1px 的隐形输入框，唯一职责是拿到焦点、弹出原生键盘、接住 IME。
+           浏览器只对真正可聚焦的元素弹键盘，所以这个"看不见的输入框"省不掉。
+           放进 dialog 内部是为了原生全屏（requestFullscreen）时它仍在渲染树里——
+           挂在外面的话，进入原生全屏后整份文档只剩 panel 一个元素，代理直接失焦、键盘弹不出来。
+           刻意钉在左上角：贴底的话浏览器为了把焦点元素露出来会滚动整页，画面就被"顶上去"了。 -->
+      <textarea id="kb-proxy" class="kb-proxy" rows="1" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" spellcheck="false" aria-label="唤起键盘" data-page-node-id="KbP00001"></textarea>
     </dialog>
-    <script src="/app.js?v=2.9.0"></script>
-    <script src="/screen.js?v=2.9.0"></script>
+
+    <!-- 全屏时点画面（点输入框）唤起的是**手机原生键盘本身**，这里没有、也不该有任何可见面板。
+         原因很实在：竖屏全屏会把整层转 90°（.rotated），右上角的最小化/刷新/关闭转到了手机右侧，
+         任何贴底的网页面板都会压住它们——那几个键是退出全屏的唯一出路，压住等于把人锁死在全屏里。
+         发送键同理不自造：原生键盘右下角就是"发送"（enterkeyhint=send），按它等于回车提交。 -->
+    <script src="/app.js?v=2.9.23"></script>
+    <script src="/screen.js?v=2.9.23"></script>
   </body>
 </html>
