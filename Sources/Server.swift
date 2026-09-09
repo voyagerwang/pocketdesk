@@ -127,6 +127,14 @@ final class Server {
             permissionRequested = true
             screenCapture.requestPermission()
             respond(connection, status: 200, json: ["ok": true])
+        // 锁屏状态刻意单独成端点：它只读会话字典，不碰 ScreenCaptureKit。
+        // 锁屏时 ScreenCaptureKit 本身就会失败，把状态塞进同一个响应里等于永远问不出来。
+        case ("GET", "/api/screen/state"):
+            respond(connection, status: 200, json: ["locked": Util.isScreenLocked()])
+        // 唤醒显示器（只对"没锁屏、只是屏幕睡了"有效；真锁屏时它只点亮锁屏界面）。
+        case ("POST", "/api/screen/wake"):
+            Util.wakeDisplay()
+            respond(connection, status: 200, json: ["ok": true, "locked": Util.isScreenLocked()])
         case ("GET", "/api/screen/displays"), ("GET", "/api/screen/frame"):
             guard !captureBusy else {
                 respond(connection, status: 503, json: ["error": "画面采集中，请稍后重试。"]); return
@@ -217,8 +225,15 @@ final class Server {
                 },
                 // 最近动作日志：事后排查"我点了但没反应"的唯一依据，控制台第 5 个面板消费。
                 "log": ExecutionLog.shared.recent(30),
+                // 最近一次焦点探测现场：判断"没进去"到底是真没聚焦还是 AX 报了容器角色，
+                // 全靠这一份记录（控制台可读）。
+                "focusProbe": InputExecutor.lastFocusProbe,
             ]
             respond(connection, status: 200, json: payload)
+        case ("GET", "/api/focus-probe"):
+            // 只读：不注入任何事件，只回答"现在谁拿着键盘焦点"。排查焦点误报用。
+            respond(connection, status: 200, json: InputExecutor.probeFrontmostFocus())
+
         case ("GET", "/console"), ("GET", "/console.html"):
             serveFile("console.html", connection: connection)
         case ("GET", "/api/qr"):
@@ -329,6 +344,19 @@ final class Server {
                 switch result {
                 case .success(let feedback):
                     // 发送成功也带结论：sent 表示"发出去了但无法确认是否落到输入框"，detail 已含人话说明。
+                    self.respond(connection, status: 200, json: ["ok": true, "outcome": feedback.outcome.rawValue, "detail": feedback.detail])
+                case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
+                }
+            }
+        case ("POST", "/api/live-input"):
+            // 实时同频：手机端把输入框全文发来，服务端按差异增量对齐电脑端输入框；
+            // submit=true 时对齐后再补一次 Return，等价于「内容已在框里 + 按回车」。
+            guard let command = try? JSONDecoder().decode(LiveInputCommand.self, from: bodyData) else {
+                respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
+            }
+            executor.mirror(command) { result in
+                switch result {
+                case .success(let feedback):
                     self.respond(connection, status: 200, json: ["ok": true, "outcome": feedback.outcome.rawValue, "detail": feedback.detail])
                 case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
                 }

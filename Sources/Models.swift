@@ -19,6 +19,21 @@ struct SendCommand: Decodable {
     let usePendingImage: Bool?
 }
 
+// 实时同频输入：手机端把输入框的**当前全文**发来，服务端按差异增量对齐电脑端输入框。
+// 传全文而不是"刚才敲了哪个键"——手机输入法的组合态（拼音候选、听写）只在 compositionend
+// 之后才交付文字，逐键转发既拿不到也容易乱序；全文交由服务端求差，乱序与丢包都能自愈
+// （下一次同步会把整段差异补齐）。
+struct LiveInputCommand: Decodable {
+    let text: String
+    // 目标应用；nil = 投当前前台（手机端未选目标时的默认）。
+    let targetId: String?
+    // true = 对齐后补一次 Return：内容已在框里，发送就等价于按回车。
+    let submit: Bool?
+    // true = 只把基线改写成 text，不注入任何按键。用于"电脑端输入框已被别处清空/改写"
+    // 这类两端已经不一致、但不应再敲键的场合。
+    let reset: Bool?
+}
+
 // 手机选图后立即预上传的请求体。
 struct PendingImage: Decodable {
     let data: String

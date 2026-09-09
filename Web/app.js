@@ -17,6 +17,11 @@ const sendEl = document.querySelector('#send');
 const messageEl = document.querySelector('#message');
 const connectionEl = document.querySelector('#connection');
 
+// 全屏原生键盘的隐形代理（index.html 的 #kb-proxy，在 #screen-view 内部，
+// 这样进入原生全屏后它仍被渲染、还能拿到焦点；它没有任何可见形态）。
+const screenViewEl = document.querySelector('#screen-view');
+let kbProxy = document.querySelector('#kb-proxy');   // let：卡死时整个换元素（见 recreateKbProxy）
+
 /* ---------- 配对 token：扫码 URL 携带，之后本地持久化 ---------- */
 
 const PAIR_TOKEN_KEY = 'voicedeck.pair-token';
@@ -433,6 +438,8 @@ function renderHistory() {
       histBtn.setAttribute('aria-pressed', 'false');
       disarmClear();
       textEl.focus();
+      // 程序赋值不会触发 input 事件，故需手动触发同频：否则电脑输入框要等你下次手敲/删除才同步。
+      scheduleLive();
     });
     historyList.append(div);
   });
@@ -756,10 +763,13 @@ function padLift(event) {
       }
     } else if (gesture === 'pending' && performance.now() - lift.ts < 300) {
       const now = performance.now();
-      let count = 1;
-      if (lastTap && now - lastTap.ts < 350 && Math.hypot(lift.x - lastTap.x, lift.y - lastTap.y) < 28) count = 2;
-      lastTap = count === 2 ? null : { ts: now, x: lift.x, y: lift.y };
-      queuePad({ t: 'click', button: 'left', count });
+      // 双击语义：第一下 clickState=1，第二下 clickState=2，**各自只有一组 down/up**。
+      // 以前发的是 count（= 完整点击次数）：先 count=1 再 count=2，服务端按次数循环执行
+      // 就成了 1+2 = 3 次点击。改用显式 clickState，一次轻点就是一次点击。
+      const isDouble = !!lastTap && now - lastTap.ts < 350
+        && Math.hypot(lift.x - lastTap.x, lift.y - lastTap.y) < 28;
+      lastTap = isDouble ? null : { ts: now, x: lift.x, y: lift.y };
+      queuePad({ t: 'click', button: 'left', clickState: isDouble ? 2 : 1 });
     } else if (lift.zone === 'scroll') {
       // 滚动区松手：有速度带惯性滑行，否则立即停稳。
       if (Math.abs(lift.vy) > 0.15) startMomentum(lift.vy);
@@ -922,13 +932,353 @@ async function boot() {
   }
 }
 
+/* ---------- 实时同频：手机输入框 ↔ 电脑输入框 ---------- */
+// 每次 input 把 textarea 的**全文**发给服务端，由服务端求差（保留公共前缀 → 退掉旧尾巴 → 补上新尾巴）。
+// 传全文而不是"刚敲了哪个键"：全文是幂等的，丢一包、乱一次序，下一次同步自然补齐。
+// 关键修复：曾经在输入法组合态（compositionstart→compositionend）期间直接跳过同步，导致"手机有字、电脑要松手才出字"。
+// 现在组合态也照常同步，只是尽量只发"已提交"部分（见 liveValue），既实时又把拼音倒进电脑的概率降到最低。
+const LIVE_DEBOUNCE = 90;          // 合并连打，别每个键一次往返
+const LIVE_COOLDOWN = 3000;        // 同步失败后歇一会儿，别拿同一条报错刷屏
+
+const liveFlagEl = document.querySelector('#live-flag');
+let liveComposing = false;   // 输入法组合态标记：仅用于决定取"全文"还是"已提交前缀"，不再据此跳过同步
+
+// 取"当前应同步到电脑"的文本。
+// 曾经的做法：组合态直接不派同步 → 要等"松手/停顿"才下发，体验就是手机有字、电脑没字。
+// 现在实时下发，但尽量只发"已提交"部分：
+//   - 非组合态：全文即已提交，直接发。
+//   - 组合态且能区分已提交/未提交（桌面端：未提交文本落在 selectionStart..selectionEnd）：剔除未提交部分，避免把拼音倒进电脑。
+//   - 组合态且 caret 折叠（移动端常见，iOS 打字期间 composition 一直不结束）：无法可靠剥离拼音，发全文以保证实时；
+//       中文会短暂露出拼音，提交后由服务端差值算法自动纠正为汉字。
+function liveValue() {
+  const el = textEl;
+  if (!el.isComposing && !liveComposing) return el.value;
+  const s = el.selectionStart, e = el.selectionEnd;
+  if (typeof s === 'number' && typeof e === 'number' && e > s) {
+    return el.value.slice(0, s) + el.value.slice(e);
+  }
+  return el.value;
+}
+let liveTimer = null;
+let liveInFlight = null;     // 在途请求的 Promise
+let liveQueued = null;       // 在途期间的最新文本：中间态无意义，只留最后一次
+let liveSynced = false;      // 电脑端输入框是否已被本轮同频接管（决定发送走回车还是整段粘贴）
+let liveBlockedUntil = 0;    // 冷却截止时刻
+
+function currentTargetName() {
+  if (selected === FRONTMOST_ID) return frontmostLabel || '当前前台';
+  return (targets.find(item => item.id === selected) || { name: selected }).name;
+}
+
+// state: off / on / error
+function paintLive(state, note) {
+  if (!liveFlagEl) return;
+  if (state === 'off') { liveFlagEl.hidden = true; return; }
+  liveFlagEl.hidden = false;
+  liveFlagEl.dataset.state = state;
+  liveFlagEl.textContent = note || '';
+}
+
+function pushLive(text, submit = false) {
+  // 严格串行：同时只让一个请求在途。后来者覆盖前一个排队项，于是服务端看到的永远是最新全文，
+  // 即便响应乱序回来也不会把旧文本写回去。
+  if (liveInFlight) {
+    liveQueued = { text, submit };
+    return liveInFlight;
+  }
+  const task = (async () => {
+    try {
+      const response = await fetch('/api/live-input', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ text, targetId: selected || FRONTMOST_ID, submit: submit || undefined }),
+      });
+      const result = await response.json();
+      if (response.status === 401) throw new Error('未配对：请在电脑端控制台重新扫码。');
+      if (!response.ok) throw new Error(result.error || '同步失败。');
+      liveSynced = !submit;   // 提交后电脑端输入框被清空，同频关系随之结束
+      liveBlockedUntil = 0;
+      paintLive('on', `已同频到${currentTargetName()}`);
+      return result;
+    } catch (error) {
+      // 冷却期内不再重试：一次失败往往是一串失败（应用切不过去、没授权），刷屏只会盖掉真正的原因。
+      liveBlockedUntil = Date.now() + LIVE_COOLDOWN;
+      paintLive('error', '未同频：点发送将整段粘贴');
+      throw error;
+    } finally {
+      liveInFlight = null;
+      if (liveQueued) {
+        const next = liveQueued;
+        liveQueued = null;
+        pushLive(next.text, next.submit).catch(() => {});
+      }
+    }
+  })();
+  liveInFlight = task;
+  return task;
+}
+
+function scheduleLive() {
+  if (Date.now() < liveBlockedUntil) return;
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(() => { pushLive(liveValue()).catch(() => {}); }, LIVE_DEBOUNCE);
+}
+
+// 发送前立刻把最新全文推过去：不等 debounce，否则最后一个字可能还没同步就按了回车。
+function flushLive(text, submit = false) {
+  clearTimeout(liveTimer);
+  return pushLive(text, submit);
+}
+
+// 输入法卡死防御（修 Gboard 等第三方键盘“上滑清空”后输入框点不进、只能刷新页面）：
+// 该手势是一次超大的 deleteSurroundingText，Android WebView 的编辑会话常被它搞死——
+// 之后敲字不出 input、点也点不进输入框，只剩刷新整页一条路。
+// 判据不看组合态（liveComposing）：Gboard 常在**没开组合态**时直接发这次大删除，
+// 只看组合态就等于把最常见的那条路漏掉了。
+function endCompositionState() {
+  liveComposing = false;
+}
+
+function recoverIME(el) {
+  // 卡死时 blur 再 focus，Android WebView 会重建编辑会话——比刷新整页轻得多。
+  // rAF 包一层确保 blur 先生效，不跟浏览器默认的点按聚焦打架。
+  liveComposing = false;
+  el.blur();
+  requestAnimationFrame(() => el.focus({ preventScroll: true }));
+}
+
+// 上一次 input 之后的长度：用来认"一次清空"这个指纹。
+const imePrevLen = new WeakMap();
+
+// 任一输入框（主页 textarea 或全屏键盘代理）都接同一套卡死防御；
+// 全屏代理的改动要镜像回主页 textarea，因为直播同步的"真值"始终读 textEl。
+// recover：会话卡死时怎么重建。主页框用 recoverIME（blur→focus 同元素）；
+// 全屏代理传 recreateKbProxy——Gboard「上滑清空」在某些 Android WebView 上对同元素
+// blur→focus 免疫，必须整个换掉元素（新元素带全新原生编辑会话）才救得回来。
+function wireComposeIME(el, mirrorTo, recover = recoverIME) {
+  el.addEventListener('compositionstart', () => { liveComposing = true; });
+  el.addEventListener('compositionend', () => { liveComposing = false; scheduleLive(); });
+  el.addEventListener('input', event => {
+    const was = imePrevLen.get(el) ?? 0;
+    imePrevLen.set(el, el.value.length);
+    // 没走 compositionend 就直接 input（Gboard 清空常见）→ 组合态其实已结束，强制清掉卡死标记。
+    if (!event.isComposing && liveComposing) liveComposing = false;
+    // 全屏代理敲的字要同步回主页 textarea，直播同频才认得到。
+    if (mirrorTo && mirrorTo !== el) mirrorTo.value = el.value;
+    scheduleLive();
+    // 「上滑清空」指纹：一次 input 就从非空一步归零（退格是一格一格删，不会一步清空）。
+    // 命中即重建——**不论是否处于组合态**，这正是以前漏掉 Gboard 的原因。
+    if (was > 0 && el.value === '') recover();
+  });
+  // 兜底：会话死透时连 input 都不派发（渲染进程与 IME 失联，敲字完全没反应）。
+  // beforeinput 到了却迟迟不见 input = 这次编辑没被吃进去，同样重建会话。
+  // 代价极小的误伤：在空框上按退格本来也不出 input，会白重建一次会话（无感）。
+  let editProbe = 0;
+  el.addEventListener('beforeinput', () => {
+    clearTimeout(editProbe);
+    editProbe = setTimeout(() => recover(), 700);
+  });
+  el.addEventListener('input', () => clearTimeout(editProbe));
+  // 失焦/聚焦都是全新编辑会话，不该带着上一次的卡死态。
+  el.addEventListener('blur', endCompositionState);
+  el.addEventListener('focus', endCompositionState);
+  // 兜底：点输入框时若组合态仍卡死，重建 IME 会话，解决“点不进、软键盘不弹”。
+  el.addEventListener('pointerdown', () => { if (liveComposing) recover(); });
+}
+wireComposeIME(textEl, null);
+
+/* ---------- 全屏原生键盘（参考 UU 远程：点画面输入框，直接把手机键盘浮起来）----------
+   这里**没有任何可见面板，也没有发送按钮**：#kb-proxy 只是个 1px 的隐形输入框，
+   职责是拿到焦点（浏览器只对可聚焦元素弹键盘）、接住 IME 输入。
+   不造可见面板是因为竖屏全屏整层转了 90°，HUD 的最小化/刷新/关闭落在手机右侧，
+   贴底面板必然压住它们；不造发送按钮是因为原生键盘右下角本来就有"发送"（enterkeyhint=send）。
+   敲的字经 wireComposeIME 镜像回 textEl，再走直播同频实时打进 Mac 当前聚焦的输入框——
+   全屏时手机看到的就是电脑画面，文字出现在"该出现的地方"，这里不必再抄一遍。
+
+   Gboard「上滑清空」会把当前元素的原生 IME 会话彻底搞死（之后敲字不出 input、
+   点也点不进、只剩刷新整页）。唯一可靠的解法是丢掉这个被污染的元素、换一个全新的
+   textarea——新元素带全新的原生编辑会话，绝不继承旧污点。所以代理一律用
+   buildKbProxy() 现造现用，卡死就 recreateKbProxy() 整个换掉。 */
+wireComposeIME(kbProxy, textEl, recreateKbProxy);
+wireKbProxyExtras(kbProxy);   // 初始代理也要接 blur/focus/keydown（recreate 出来的同样接这一份）
+
+// 这一轮会话里代理有没有真的吃到过字 / 是否怀疑会话已死 / 是否正在重建中。
+let kbGotInput = false;
+let kbSuspect = false;     // 上滑清空或 beforeinput 超时没回 input → 代理可能已死
+let kbRecreating = false; // 重建期间抑制 blur 误触发 pocketdeskKeyboardClosed（避免重建瞬间画面闪一下重排）
+
+// 键盘图标高亮态：键盘抬起=高亮，收起=灭。
+function syncKbToggle() {
+  const el = document.getElementById('kb-toggle');
+  if (el) el.classList.toggle('kb-active', kbActive);
+}
+
+// 隐形代理的"会话外"监听：失焦复位、聚焦摁滚动、回车发送。初始与 recreate 出来的都接这一份。
+function wireKbProxyExtras(p) {
+  p.addEventListener('input', () => { kbGotInput = true; });
+  // 用户收起原生键盘（返回键 / 键盘收起键）：失焦即复位，并交还布局权。
+  p.addEventListener('blur', () => {
+    if (kbRecreating) return;            // 重建时旧元素被移除会触发 blur，那是假失焦，跳过
+    kbActive = false;
+    window.pocketdeskKeyboardClosed?.(); // 让画面按真实视口重新铺一次
+    syncKbToggle();
+  });
+  // 重建会话是 blur→focus 两步，focus 回来要把键盘态补上（blur 那边刚把它清掉）。
+  p.addEventListener('focus', () => { kbActive = true; pinScroll(); syncKbToggle(); });
+  // 原生键盘右下角的"发送"键（enterkeyhint=send）按下来就是一个 Enter。
+  p.addEventListener('keydown', event => {
+    if (event.isComposing || event.keyCode === 229) return;   // 输入法选词期间的回车归 IME
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      sendFromKeyboard();
+    }
+  });
+}
+
+// 造一个全新的隐形代理：自带干净的原生编辑会话。每次需要都现造，旧的整个丢弃。
+function buildKbProxy() {
+  const p = document.createElement('textarea');
+  p.id = 'kb-proxy';
+  p.className = 'kb-proxy';
+  p.rows = 1;
+  p.setAttribute('enterkeyhint', 'send');
+  p.setAttribute('autocomplete', 'off');
+  p.setAttribute('autocapitalize', 'sentences');
+  p.setAttribute('spellcheck', 'false');
+  p.setAttribute('aria-label', '唤起键盘');
+  // 放进 #screen-view 内部：进原生全屏（requestFullscreen）后整份文档只剩 panel，
+  // 代理若挂在外面会随文档一起不渲染、键盘弹不出来。
+  (screenViewEl || document.body).appendChild(p);
+  wireComposeIME(p, textEl, recreateKbProxy);
+  wireKbProxyExtras(p);
+  return p;
+}
+
+// 卡死自愈的终极手段：整个换掉代理元素。被 wireComposeIME 在检测到「上滑清空指纹」
+// （一次 input 从非空一步归零）或「beforeinput 后迟迟没 input」时调用；
+// 也被 showKeyboard 在「代理仍聚焦却一个字都没收到」这种明显死透的情况下调用。
+// 全新元素 = 全新原生编辑会话，这是唯一能甩掉 Gboard 污点、不必刷新整页的办法。
+function recreateKbProxy() {
+  kbRecreating = true;
+  if (kbProxy && kbProxy.isConnected) kbProxy.remove();
+  kbProxy = buildKbProxy();
+  kbProxy.value = textEl.value;
+  imePrevLen.set(kbProxy, kbProxy.value.length);   // 重新播种，别把旧长度当"一次清空"的指纹
+  kbActive = true;
+  kbGotInput = false;
+  kbSuspect = false;
+  kbProxy.focus({ preventScroll: true });
+  // 键盘升起有动画，头几帧浏览器还会再滚一次，多点几下才摁得住。
+  [0, 60, 150, 300].forEach(delay => setTimeout(pinScroll, delay));
+  kbRecreating = false;
+  syncKbToggle();
+  haptic(8);
+}
+
+// 键盘弹起时浏览器会自作主张滚一下页面（把焦点元素顶进可视区）——对全屏看画面来说，
+// 那就是"整页被顶上去"：画面挪位，HUD 还可能被顶出屏幕。代理钉在左上角已经避开了
+// 大部分自动滚动，这里再兜一层：键盘使用期间任何滚动都被摁回 0，画面纹丝不动。
+// 只在代理真的持有焦点时才管，别去干扰主页的正常滚动。
+let kbActive = false;
+
+function pinScroll() {
+  if (!kbActive) return;
+  if (window.scrollY) window.scrollTo(0, 0);
+  if (document.scrollingElement?.scrollTop) document.scrollingElement.scrollTop = 0;
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', pinScroll);
+  window.visualViewport.addEventListener('scroll', pinScroll);
+}
+window.addEventListener('scroll', pinScroll, { passive: true });
+
+// 唤起原生键盘：把主页草稿带过来，聚焦即弹键盘。
+// 关键点：Gboard「上滑清空」会让代理**仍聚焦却已死透**（敲字不出 input）。这种情况
+// blur→focus 同元素在部分 Android WebView 上对 Gboard 无效，必须整个换元素。
+// 所以只要「仍聚焦且本轮没收到过字」或已打上 kbSuspect 标记，就直接 recreateKbProxy()
+// 换新元素——这是唯一能甩掉污点、不必刷新整页的办法。
+function showKeyboard() {
+  if (kbSuspect || (document.activeElement === kbProxy && !kbGotInput)) {
+    recreateKbProxy();
+    return;
+  }
+  // 普通唤起 / 已在聚焦（移动光标）：不重建，避免键盘闪一下。
+  kbProxy.value = textEl.value;
+  imePrevLen.set(kbProxy, kbProxy.value.length);
+  kbActive = true;
+  kbGotInput = false;
+  kbProxy.focus({ preventScroll: true });
+  [0, 60, 150, 300].forEach(delay => setTimeout(pinScroll, delay));
+  haptic(8);
+}
+
+// 收起：只需交出焦点，键盘自己会落下。
+// 刻意**不清 value**——代理只是草稿的暂存副本，下次唤起一律用 textEl 重新播种；
+// 清了反而可能在 IME 自愈（recreate）后把真值覆盖成空。
+function hideKeyboard() {
+  kbActive = false;
+  syncKbToggle();
+  if (document.activeElement === kbProxy) kbProxy.blur();
+  window.pocketdeskKeyboardClosed?.();   // 交还布局权，让画面按真实视口重新铺一次
+}
+
+// 发完就收：草稿空了说明已提交，键盘让位给画面。
+async function sendFromKeyboard() {
+  await send();
+  if (!textEl.value) hideKeyboard();
+}
+
+// 全屏键盘图标（#kb-toggle）：唯一的“点此才弹键盘”入口。
+// 点画面不再自动弹（避免切换窗口时点一下就蹦键盘）—— 见 screen.js 的 sendTap。
+// 关闭 / 退出全屏 → hideKeyboard；键盘抬起期间 → 画面尺寸冻结（不跟着键盘引起的视口变化重排）。
+  const kbToggle = document.getElementById('kb-toggle');
+  if (kbToggle) {
+    // 关键：在 pointerdown 时就快照 kbActive，再决定 click 时开还是关。
+    // 否则点按钮会让 #kb-proxy 失焦 → blur 先把 kbActive 翻成 false，
+    // 随后 click 里读到 false 反而去 showKeyboard() —— 表现成"再点一下收不起、高亮消不掉"。
+    let kbToggleWasActive = false;
+    kbToggle.addEventListener('pointerdown', () => { kbToggleWasActive = kbActive; });
+    kbToggle.addEventListener('click', event => {
+      event.stopPropagation();   // 防穿透；closest('button') 已让 panel 拖动跳过它
+      if (kbToggleWasActive) hideKeyboard(); else showKeyboard();
+      kbToggleWasActive = false;
+    });
+  }
+window.pocketdeskShowKeyboard = showKeyboard;
+window.pocketdeskHideKeyboard = hideKeyboard;
+window.pocketdeskKeyboardActive = () => kbActive;
+
+async function postSend(text, withImage) {
+  const response = await fetch('/api/send', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ targetId: selected, text, usePendingImage: withImage, image: null }),
+  });
+  const result = await response.json();
+  if (response.status === 401) throw new Error('未配对：请在电脑端控制台重新扫码。');
+  if (!response.ok) throw new Error(result.error || '发送失败。');
+  return result;
+}
+
+function clearCompose() {
+  textEl.value = '';
+  liveSynced = false;
+  liveQueued = null;
+  paintLive('off');
+  pendingImage = null;
+  imageThumb.src = '';
+  imagePreview.hidden = true;
+}
+
 async function send() {
   if (sendEl.disabled) return; // 发送进行中或未选目标（回车快捷键路径）
   if (!selected) {
     message('请先在上方 Dock 选择一个目标应用。', true);
     return;
   }
-  const text = textEl.value.trim();
+  // 同频链路要逐字符对齐，故用原文：trim 会吃掉首尾空格与换行，电脑端就对不上了。
+  const raw = textEl.value;
+  const text = raw.trim();
   if (!text && !pendingImage) {
     message('先输入一点内容或选择一张图片。', true);
     textEl.focus();
@@ -936,22 +1286,24 @@ async function send() {
   }
   exitPadMode();
   sendEl.disabled = true;
-  message(selected === FRONTMOST_ID ? `直接输入到 ${frontmostLabel || '当前前台应用'}…` : '正在打开应用并输入…');
+  // 已同频 → 内容早就在电脑端输入框里了，发送只是补一次回车。
+  const viaLive = liveSynced && !pendingImage;
+  message(viaLive ? '正在回车提交…'
+    : (selected === FRONTMOST_ID ? `直接输入到 ${frontmostLabel || '当前前台应用'}…` : '正在打开应用并输入…'));
   try {
-    const response = await fetch('/api/send', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ targetId: selected, text, usePendingImage: Boolean(pendingImage), image: null }),
-    });
-    const result = await response.json();
-    if (response.status === 401) throw new Error('未配对：请在电脑端控制台重新扫码。');
-    if (!response.ok) throw new Error(result.error || '发送失败。');
+    let result;
+    if (pendingImage) {
+      // 图片仍走粘贴通道：先把文字同频过去，再单独发图（text 留空，否则整段文字会被重复粘贴一遍）。
+      if (raw && !liveSynced) await flushLive(raw).catch(() => {});
+      result = await postSend('', true);
+    } else if (viaLive) {
+      result = await flushLive(raw, true);
+    } else {
+      result = await postSend(text, false);
+    }
     // 发送成功就进历史：即使注入效果不符预期，内容也不会丢，可从历史一键回填重发。
-    pushHistory(text || '[图片]', selected === FRONTMOST_ID ? (frontmostLabel || '当前前台') : (targets.find(item => item.id === selected) || { name: selected }).name);
-    textEl.value = '';
-    pendingImage = null;
-    imageThumb.src = '';
-    imagePreview.hidden = true;
+    pushHistory(text || '[图片]', currentTargetName());
+    clearCompose();
     // outcome=sent 表示目标没能在前台，内容可能没落到它的输入框：这是"发了却说没收到"的主因，必须说出来。
     if (result.outcome === 'sent') {
       message(result.detail || '已发送，未能确认是否生效。', 'warn');
@@ -961,6 +1313,8 @@ async function send() {
       haptic([12]);
     }
   } catch (error) {
+    // 同频失败时不回退到整段粘贴：内容可能已经打进去一半，再粘一遍就成了重复。
+    // 输入框原样保留，用户看清原因后可以自己重试。
     message(error.message, true);
     haptic([28, 50, 28]);
   } finally {

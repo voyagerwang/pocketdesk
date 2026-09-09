@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 Foundation 的 Data/URL 与 AppKit 的 NSWorkspace/NSImage、CoreGraphics 的 CGWindowList、CoreImage 的二维码滤镜。
- * [OUTPUT]: 对外提供 Util（主局域网地址与 Tailscale 私网地址探测、稳定 .local 主机名、QR PNG 生成、应用图标 PNG 提取、前台应用探测）。前台探测以用户视角为准：CGWindowList 当前桌面最前的 layer 0 窗口，pid 经 NSWorkspace 运行列表换成带完整 bundle 信息的应用对象。
+ * [INPUT]: 依赖 Foundation 的 Data/URL 与 AppKit 的 NSWorkspace/NSImage、CoreGraphics 的 CGWindowList 与 CGSession、系统 caffeinate 命令行（唤醒显示器）、CoreImage 的二维码滤镜。
+ * [OUTPUT]: 对外提供 Util（主局域网地址与 Tailscale 私网地址探测、稳定 .local 主机名、QR PNG 生成、应用图标 PNG 提取、前台应用探测、锁屏状态判定 isScreenLocked 与显示器唤醒 wakeDisplay）。前台探测以用户视角为准：CGWindowList 当前桌面最前的 layer 0 窗口，pid 经 NSWorkspace 运行列表换成带完整 bundle 信息的应用对象。
  * [POS]: Sources 的无状态工具层；Server 的 /api/status、/api/qr、图标端点调用它渲染地址与图像，InputExecutor 的窗口动作调用它定位前台应用。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -96,6 +96,37 @@ enum Util {
 
     static func stableURL(_ port: UInt16) -> String? {
         stableHost().map { "http://\($0):\(port)" }
+    }
+
+    /* ---------- 锁屏状态与唤醒 ----------
+       macOS 出于安全不允许第三方 App 获取锁屏会话的画面（否则任何 App 都能偷看密码框），
+       ScreenCaptureKit 在锁屏时要么失败、要么只给黑帧。这条限制绕不过去，
+       所以必须能区分两种"看不到画面"：
+         · 真锁屏 —— 只能让人去电脑前输密码，任何代码都帮不上；
+         · 只是显示器睡了 / 屏保 —— 可以唤醒，画面立刻回来。
+       区分开才能给出正确引导，而不是一律显示"暂时无法获取画面"让人瞎猜。 */
+
+    // CGSessionCopyCurrentDictionary 返回的字典只在会话被锁时才带 CGSSessionScreenIsLocked=1，
+    // 未锁屏时压根没有这个键——所以"键存在且为真"才算锁屏，取不到字典一律按未锁处理。
+    static func isScreenLocked() -> Bool {
+        guard let dict = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        return dict["CGSSessionScreenIsLocked"] as? Bool ?? false
+    }
+
+    // 唤醒显示器：等价于一次真实用户活动（和动一下鼠标同效）。
+    // **不会绕过锁屏**——真锁屏时它只会把锁屏界面点亮，依然拿不到画面。
+    //
+    // 走 `caffeinate -u` 而不是 IOPMAssertionDeclareUserActivity：后者的符号
+    // （IOPMAssertionID / kIOPMUserActiveLocal）在 Swift 里没有随 IOKit 导出，
+    // 且 `import IOKit.power` 这个子模块根本不存在；caffeinate 是系统自带的同一套机制的命令行入口。
+    // -t 1 让它 1 秒后自行退出，不常驻；放后台队列执行，不阻塞 HTTP 响应。
+    static func wakeDisplay() {
+        DispatchQueue.global(qos: .utility).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
+            task.arguments = ["-u", "-t", "1"]
+            do { try task.run(); task.waitUntilExit(); } catch { /* 唤醒失败不影响取帧，静默 */ }
+        }
     }
 
     static func qrPNG(_ text: String) -> Data? {

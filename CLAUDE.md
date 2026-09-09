@@ -22,4 +22,9 @@ scripts/ - 独立应用安装脚本与图标生成脚本 (3 个脚本)
 README.md - 安装、权限、安全边界与协议说明
 LICENSE - 本项目 MIT 许可证
 DESIGN.md - 界面视觉约束与品牌图标策略
+CURSOR_VIEW_PROPOSAL.md - 按需查看与鼠标实时反馈的交接方案、技术风险、分阶段实现和验收标准
+GYRO_MOUSE_RESEARCH.md - 手机体感鼠标的成熟交互、传感器与 HTTPS 限制、双击滚动方案及实验验收
+LIVE_INPUT_PROPOSAL.md - 手机草稿实时同步的可行性、AX 控件兼容验证、会话与版本协议、独立提交和执行验收方案（尚未实现）
+FULLSCREEN_POINTER_PROPOSAL.md - 全屏手机操控优化建议：绝对定位、单/双击协议、手势仲裁、权威光标、画面延迟与 UU 对照验收（方案）
+AGENT_PRODUCT_ARCHITECTURE.md - Agent 整体产品设计：任务与记忆、规则路由、Workbench 集成契约、执行权限/接管、token 成本及分阶段验收（方案）
 </config>

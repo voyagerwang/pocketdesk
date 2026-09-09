@@ -557,6 +557,75 @@ main.pad-mode #pad::before {
   --scroll-ink-in: var(--accent);
 }
 
+/* ---------- 全屏原生键盘的隐形代理 ----------
+   全屏点画面要的是"手机原生键盘浮起来"，不是网页再画一条输入条：
+   竖屏全屏整层转了 90°（.rotated），HUD 的最小化/刷新/关闭落在手机右侧，
+   贴底的网页面板必然压住它们。所以这里不留任何可见面板与按钮——
+   只有一个为了拿到焦点而存在的 1px 隐形输入框，键盘本身就是唯一的 UI。
+   手机上也不重复显示文本：敲的字经实时同频直接出现在电脑画面里的输入框中。 */
+.kb-proxy {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1;                  /* 压住 HUD 无所谓，反正完全透明；但要确保在渲染树里可被聚焦 */
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  resize: none;
+  overflow: hidden;
+  opacity: 0;                  /* 用 opacity 而非 display/visibility：后两者浏览器不弹键盘 */
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font: 400 16px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+  outline: none;
+  pointer-events: none;        /* 纯代理：只接受程序化 focus，绝不吃掉画面上的点击 */
+}
+.kb-proxy::placeholder { color: transparent; }
+.kb-proxy::selection { background: transparent; }
+
+/* ---------- 全屏键盘图标（#kb-toggle）----------
+   唯一的"点此才弹键盘"入口：点画面不再自动弹，避免切换窗口时点一下就蹦键盘。
+   放在顶部 HUD 栏里，与全屏/刷新/关闭等常用按钮一组；靠 .fs-only 控制"仅全屏态显示"，
+   竖屏 .rotated 时随整层旋转、和其余 HUD 按钮一起落到手机右侧，无需单独逆旋。
+   高亮态：键盘抬起时图标点亮，提示"再点一下收起"。 */
+.kb-toggle.kb-active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* ---------- 全屏操作反馈 toast（#screen-toast，由 screen.js 动态建到 body 上）----------
+   右键 / 滚动等动作在 Mac 上执行，手机端看不到任何反馈，容易误以为"没反应"。
+   点一下给个短暂提示证明指令已发出；fixed 定位不受全屏 .rotated 旋转影响，始终正立居中于底部。 */
+.screen-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--s-5) + env(safe-area-inset-bottom));
+  transform: translateX(-50%) translateY(8px);
+  z-index: 9999;
+  max-width: 80vw;
+  padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-pill);
+  background: rgb(16 24 40 / 85%);
+  color: #fff;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms var(--ease), transform 160ms var(--ease);
+}
+.screen-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 #pad.pad-scrolling::after,
 main.pad-mode #pad.pad-scrolling::after,
 #pad.pad-scrolling::before,
@@ -1195,6 +1264,13 @@ main.pad-mode .pad-title,
   bottom: auto;
   /* margin:auto 在 fixed 定位下会平分剩余空间，把浮窗推到意外位置（甚至算出负 margin）。 */
   margin: 0;
+  /* 提升为独立合成层：位置变化是纹理平移而非每帧重绘大图，手机上拖动才跟手。 */
+  will-change: transform;
+}
+/* 拖动期间先把面板提升为独立合成层：位置变化变成纹理平移，不再每帧重绘大图，手机上才跟手。 */
+.screen-view.pip.dragging {
+  will-change: transform;
+  cursor: grabbing;
 }
 /* 浮窗外（backdrop）不该吃掉点击：不点它，主页就还能正常操作。 */
 .screen-view.pip::backdrop {
@@ -1217,15 +1293,35 @@ main.pad-mode .pad-title,
 }
 
 /* ---------- 全屏态 ----------
-   铺满整个视口，**不做任何旋转**：整层 rotate(90deg) 那套是历史上
-   "画面只剩一半 / 顶部看不到"的根源，已经连根删掉。
-   横竖屏交给设备自己转，画面比例由 object-fit: contain 兜底。 */
+   竖屏手机进入全屏时，直接给 panel 加 .rotated 做 CSS 90° 旋转，
+   把 16:9 的电脑画面横铺满屏——不依赖浏览器的方向锁
+   （iOS Safari 压根没有 screen.orientation.lock），iPhone/安卓都生效。
+   旋转前的设计本就为此预留：点画面用 offsetX、光标用 offsetWidth，
+   都是不受 transform 影响的局部坐标，整层转 90° 换算依然正确；
+   只有双指缩放/平移的 clientX/Y 在 JS 的 toLocal() 里逆旋转一把即可。 */
 .screen-view.fullscreen {
   /* 几何不用写：基类 inset:0 + width/height:100% 就是满屏，
      JS 只需把 pip 态写在 inline style 上的 left/top/width/height 清掉即可。 */
   border-radius: 0;
   box-shadow: none;
   cursor: default;
+}
+/* 竖屏全屏：把整层绕中心转 90° 铺成横屏。布局尺寸用 vh/vw 互换，
+   视觉框恰好等于视口（100vh×100vw 转 90° 还是 100vw×100vh），不溢出、不触发滚动条。
+   paintPanel 在 fullscreen 态会把 inline 的 left/top/width/height/transform 全清掉，
+   这里的几何完全由 class 接管。 */
+.screen-view.fullscreen.rotated {
+  width: 100vh;
+  height: 100vw;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  margin-left: -50vh;
+  margin-top: -50vw;
+  transform: rotate(90deg);
+  transform-origin: center center;
+  overflow: hidden;
 }
 .screen-view.fullscreen::backdrop {
   background: #000;
@@ -1246,6 +1342,13 @@ main.pad-mode .pad-title,
   z-index: 3;
   touch-action: none;
 }
+/* 手柄视觉只有 18px，手机手指很难精准捞到——把可触摸热区外扩 8px（透明、不改视觉大小）。
+   捞不到手柄 = "放大不能放大"，这是 PiP 缩放最常见的真实失效原因。 */
+.screen-resize::before {
+  content: "";
+  position: absolute;
+  inset: -8px;
+}
 .screen-resize.nw { top: 0;    left: 0;   width: 18px; height: 18px; cursor: nwse-resize; }
 .screen-resize.n  { top: 0;    left: 18px;  right: 18px;  height: 18px; cursor: ns-resize; }
 .screen-resize.ne { top: 0;    right: 0;  width: 18px; height: 18px; cursor: nesw-resize; }
@@ -1255,19 +1358,37 @@ main.pad-mode .pad-title,
 .screen-resize.sw { bottom: 0; left: 0;   width: 18px; height: 18px; cursor: nesw-resize; }
 .screen-resize.w  { top: 18px;   bottom: 18px; left: 0;   width: 18px; cursor: ew-resize; }
 
-/* 画面铺满整层；细节交给手机自带的双指捏合，不另造一个"放大画面"。 */
+/* 画面铺满整层；放大看细节走 screen.js 自己实现的双指捏合——
+   .screen-view 上的 touch-action: none 早把浏览器默认捏合关掉了，指望它等于没有。 */
 .screen-viewport {
   position: absolute;
   inset: 0;
   overflow: auto;
   overscroll-behavior: contain;
   background: #000;
+  /* 必须显式关掉浏览器默认手势：只靠父级 .screen-view 的 touch-action:none 在部分机型上
+     不会可靠地透传给子元素，结果双指捏合被浏览器吃掉、onZoomPointerDown 收不到第二根手指。
+     这里自己关掉，全屏缩放才稳。 */
+  touch-action: none;
+}
+/* 全屏态的画面缩放由 JS 写 transform，容器不能再有自己的滚动：
+   两套滚动系各滚各的，光标叠加层会跟着漂。 */
+.screen-view.fullscreen .screen-viewport {
+  overflow: hidden;
 }
 #screen-image {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
+  /* 缩放锚点在左上：screen.js 的 tx/ty 全部按 origin 0 0 推导，改这里必须同步改那边的公式。 */
+  transform-origin: 0 0;
+  /* 同样要显式关默认手势，否则手指落在画面上时浏览器可能自行接管双指捏合。 */
+  touch-action: none;
+}
+/* 只在真的缩放时提合成层：常驻 will-change 会让每张 1fps 的 JPEG 都白占一份显存。 */
+.screen-view.zoomed #screen-image {
+  will-change: transform;
 }
 /* 鼠标叠加层：位置由 JS 用 transform 写（合成层，不触发重排）。
    热点对齐箭头尖端（SVG 路径起点 1,1），所以 svg 往左上偏移 1px。
@@ -1292,6 +1413,34 @@ main.pad-mode .pad-title,
 .screen-cursor[hidden] {
   display: none;
 }
+/* 本地触点环（§6 层1）：手指接触即时反馈，只代表收到触摸，不代表 Mac 已执行。
+   用局部坐标定位、落在 viewport 内，随 .rotated 一起转；pointer-events:none 不挡点画面。 */
+.screen-touch {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 2px solid rgb(255 255 255 / 85%);
+  background: rgb(80 160 255 / 28%);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 35%);
+  pointer-events: none;
+  will-change: transform;
+  transition: opacity 120ms ease;
+}
+.screen-touch[hidden] {
+  display: none;
+}
+/* 全屏专属工具（右键 / 滚动）：仅全屏态显示，PiP 浮窗不挤占空间 */
+.screen-hud .fs-only { display: none; }
+.screen-view.fullscreen .fs-only { display: inline-flex; }
+.screen-scroll.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+/* 强制横屏引导已移除：横屏改用 CSS 整层旋转（.rotated），不再需要"请把手机横过来"提示。 */
 /* 显示器下拉只作数据源，不直接展示：切屏走浮层的切换键与右侧滑动手势。 */
 #screen-display[hidden] {
   display: none;
