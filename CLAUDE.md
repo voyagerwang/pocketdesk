@@ -27,6 +27,7 @@ LICENSE - 本项目 MIT 许可证
 DESIGN.md - 界面视觉约束与品牌图标策略
 CURSOR_VIEW_PROPOSAL.md - 按需查看与鼠标实时反馈的交接方案、技术风险、分阶段实现和验收标准
 GYRO_MOUSE_RESEARCH.md - 手机体感鼠标的成熟交互、传感器与 HTTPS 限制、双击滚动方案及实验验收
+WRIST_SEND_EXECUTION_PLAN.md - 翻腕发送与唯一手机设置入口的执行交接：iPhone 撤销冲突、面板结构、HTTPS/WSS、发送一致性和真机验收（尚未实现）
 LIVE_INPUT_PROPOSAL.md - 手机草稿实时同步的原始方案，当前行为以 LIVE_INPUT_REVISION.md 为准
 LIVE_INPUT_REVISION.md - 已确认的语音纠正无回删方案、适配边界和验证记录
 FULLSCREEN_POINTER_PROPOSAL.md - 全屏手机操控优化建议：绝对定位、单/双击协议、手势仲裁、权威光标、画面延迟与 UU 对照验收（方案）
