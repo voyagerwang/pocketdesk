@@ -18,6 +18,10 @@ let livePaused = false;
 let liveFailure = '';
 let submittingDraft = false;
 
+// 最近一次用户输入时间：体感发送门禁用它判断“刚说完/还在输入”时不发。
+let lastInputAt = Date.now();
+function pocketdeskMarkInput() { lastInputAt = Date.now(); }
+
 let liveTimer = null;
 
 // 切换目标或失败后重选当前应用，都以电脑此刻的前台与输入位置开始新一轮；
@@ -161,11 +165,13 @@ function wireComposeIME(el, mirrorTo, recover = recoverIME) {
   el.addEventListener('compositionend', () => {
     if (!current()) return;
     liveComposing = false;
+    pocketdeskMarkInput();
     if (mirrorTo) textEl.value = el.value;
     scheduleLive();
   });
   el.addEventListener('input', event => {
     if (!current()) return;
+    pocketdeskMarkInput();
     const was = imePrevLen.get(el) ?? 0;
     imePrevLen.set(el, el.value.length);
     // 没走 compositionend 就直接 input（Gboard 清空常见）→ 组合态其实已结束，强制清掉卡死标记。
@@ -377,6 +383,16 @@ async function sendFromKeyboard() {
 window.pocketdeskShowKeyboard = showKeyboard;
 window.pocketdeskHideKeyboard = hideKeyboard;
 window.pocketdeskKeyboardActive = () => fullComposeOpen();
+
+// 体感发送门禁与触发入口（motion-send.js 委托至此，不重复实现发送逻辑）。
+window.pocketdeskSend = send;
+window.pocketdeskInputSettled = (ms = 700) => Date.now() - lastInputAt >= ms;
+window.pocketdeskHasDraft = () => Boolean(textEl.value || pendingImages.length);
+window.pocketdeskCanMotionSend = () => {
+  if (!selected || sendEl.disabled || submittingDraft || liveComposing) return false;
+  if (!(window.pocketdeskInputSettled && window.pocketdeskInputSettled(700))) return false; // 仍在输入/听写中
+  return true;
+};
 
 function clearCompose() {
   const keyboardFocused = document.activeElement === kbProxy;
