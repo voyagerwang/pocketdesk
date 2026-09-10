@@ -39,7 +39,6 @@ function authHeaders() {
 
 const mainEl = document.querySelector('main');
 const pad = document.querySelector('#pad');
-const padTarget = document.querySelector('#pad-target');
 // 三个触控板参数的真身已迁进 #phone-settings 面板，ID 未变，这里照旧取到同一批元素；
 // 值的读写与持久化仍在 pad.js，面板只负责把它们放到该在的位置。
 const sensEl = document.querySelector('#sens');
@@ -113,7 +112,6 @@ function markSelected() {
   sendEl.classList.toggle('no-target', !hasTarget);
   // 识别到什么就写什么：Dock 目标用配置名；伪目标用心跳识别出的前台应用名（frontmostLabel）。
   const label = front ? front.name : (selected === FRONTMOST_ID ? (frontmostLabel || '当前前台') : null);
-  padTarget.textContent = label || '未选择';
   sendEl.textContent = label ? `发送到 ${label}` : '请先选择应用';
 }
 
