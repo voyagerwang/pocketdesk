@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  [INPUT]: 依赖 /api/status、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility。
+  [INPUT]: 依赖 HTTPS 地址/二维码状态与 /api/status、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility。
   [OUTPUT]: 电脑端控制台：授权引导、局域网与 Tailscale 跨网扫码连接、应用管理（搜索/添加/拖拽排序/删除/自定义图标）、快捷键管理（录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"；主键只认 event.code 物理键位不回退 IME 可污染的 event.key，拦截 isComposing 与纯修饰键；键位标签用 .keycap 样式、label 与键位重复时只显示一个；支持重录/拖拽排序/删除；预设动作由 /api/status.actions 下发，点选即添加、不进录制流程，已添加的置灰判重，预设项不可重录）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
   [POS]: 电脑端唯一页面入口；目标顺序与快捷键都保存在 Mac 本机（App Support），手机端只渲染。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -159,6 +159,12 @@ button{font:inherit;cursor:pointer}
         <b>跨网地址 · Tailscale</b>
         <span id="remoteUrl" class="hint mono">生成中…</span>
       </div>
+      <div id="secureQrItem" class="qr-item" hidden>
+        <img id="qr-secure" alt="HTTPS 安全连接二维码">
+        <b>安全连接 · 支持锁屏解锁</b>
+        <span id="secureUrl" class="hint mono"></span>
+        <span class="hint">手机首次使用需安装本机生成的 PocketDesk CA 证书。</span>
+      </div>
       <div class="connect-info">
         <span id="phoneState">等待连接…</span>
         <span id="remoteHint" class="hint">跨网连接检测中…</span>
@@ -274,6 +280,12 @@ async function refresh() {
       $('qr-ip').src = '/api/qr?type=ip';
       $('url').textContent = status.lanURL || '未找到局域网地址，请确认 Wi-Fi 已连接。';
       $('ipUrl').textContent = status.ipURL || '未找到局域网地址';
+    }
+    $('secureQrItem').hidden = !status.secureURL;
+    if (status.secureURL && $('qr-secure').dataset.url !== status.secureURL) {
+      $('secureUrl').textContent = status.secureURL;
+      $('qr-secure').dataset.url = status.secureURL;
+      $('qr-secure').src = '/api/qr?type=secure';
     }
     if (status.remoteURL) {
       $('remoteQrItem').hidden = false;

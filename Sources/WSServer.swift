@@ -1,17 +1,12 @@
 /**
- * [INPUT]: 依赖 Network 的 NWListener/NWConnection 与 NWProtocolWebSocket；消费 PointerExecutor 的手势执行、CursorMonitor 的光标采样与 Auth 的 token 校验。
- * [OUTPUT]: 对外提供 WSServer（触控板 WebSocket 通道 :46388 的监听、首帧 token 鉴权与 auth_ok 回执、已鉴权连接表、鼠标位置广播、会话重置与消息转发）。
- * [POS]: Sources 的触控板传输层；只管连接与转发，与 Server（HTTP）平行为一对传输兄弟。
+ * [INPUT]: 依赖 Network WebSocket、Auth、PointerExecutor 和 CursorMonitor。
+ * [OUTPUT]: 提供控制所有权、心跳租约、能力握手、可靠回复和 latest-only 光标广播。
+ * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
+ * [POS]: Sources 控制传输边界；观看者不重置控制者，断线只释放所属按键。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import Foundation
+import AppKit
 import Network
-
-// MARK: - 触控板 WebSocket 服务
-
-// 这一层是双向的：上行是手机手势 → PointerExecutor，下行是 Mac 光标位置 → 手机叠加层。
-// 下行走 latest-only：同一连接最多一个在途帧 + 一个待发帧，过期的中间状态直接丢弃。
-// TCP 没有应用层背压，不这样限流的话网络一拥塞，延迟会单调变大且再也回不来。
 
 final class WSServer {
     private let port: UInt16
@@ -19,173 +14,152 @@ final class WSServer {
     private let cursor: CursorMonitor
     private let queue = DispatchQueue(label: "dev.voicedeck.ws")
     private var listener: NWListener?
-    private var clients: [UUID: Client] = [:]   // 只在 queue 上读写
-
+    private var secureListener: NWListener?
+    private var timer: DispatchSourceTimer?
+    private var clients: [UUID: Client] = [:]
+    private var owner: UUID?
     private final class Client {
         let id = UUID()
         let connection: NWConnection
         var authenticated = false
-        var cursorSubscribed = false
+        var subscribed = false
+        var modern = false
+        var sequence = -1
+        var lastSeen = ProcessInfo.processInfo.systemUptime
         var sending = false
-        var pending: String?        // latest-only：在途时最多留一个最新状态
+        var reliable: [String] = []
+        var cursor: String?
         init(_ connection: NWConnection) { self.connection = connection }
     }
-
     init(port: UInt16, pointer: PointerExecutor, cursor: CursorMonitor) {
-        self.port = port
-        self.pointer = pointer
-        self.cursor = cursor
+        self.port = port; self.pointer = pointer; self.cursor = cursor
         cursor.onSample = { [weak self] seq, display, rx, ry in
-            self?.broadcastCursor(seq: seq, display: display, rx: rx, ry: ry)
-        }
-        pointer.onError = { [weak self] message in self?.broadcastError(message) }
-    }
-
-    func start() throws {
-        let parameters = NWParameters.tcp
-        let webSocket = NWProtocolWebSocket.Options()
-        webSocket.autoReplyPing = true
-        parameters.defaultProtocolStack.applicationProtocols.insert(webSocket, at: 0)
-        let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
-        listener.newConnectionHandler = { [weak self] in self?.accept($0) }
-        listener.stateUpdateHandler = { state in
-            if case let .failed(error) = state { fputs("触控板通道失败：\(error)\n", stderr) }
-        }
-        self.listener = listener
-        listener.start(queue: queue)
-    }
-
-    private func accept(_ connection: NWConnection) {
-        // 局域网写通道必须鉴权：浏览器 WS 不能带自定义头，用首帧 auth 握手。
-        // 回环（控制台本机调试）豁免；非回环首帧必须是 {"t":"auth","token":"…"}，否则关闭连接。
-        let loopback = isLoopback(connection)
-        let client = Client(connection)
-        queue.async {
-            self.clients[client.id] = client
-            client.authenticated = loopback
-            if loopback {
-                self.pointer.resetSession()
-                // 回环豁免也回执：前端因此只有一条"我通过了"的判定路径，
-                // 不必再区分"本机调试不发 auth"和"局域网发了 auth"两种情形。
-                self.enqueue(client, "{\"t\":\"auth_ok\"}")
-            }
-        }
-        connection.start(queue: queue)
-        receive(client)
-    }
-
-    private func isLoopback(_ connection: NWConnection) -> Bool {
-        guard case .hostPort(let host, _)? = connection.currentPath?.remoteEndpoint else { return false }
-        switch host {
-        case .ipv4(let address): return address.rawValue.withUnsafeBytes { $0.first == 127 }
-        case .ipv6(let address): return address.rawValue.withUnsafeBytes { $0.dropLast().allSatisfy { $0 == 0 } && $0.last == 1 }
-        default: return false
-        }
-    }
-
-    private func receive(_ client: Client) {
-        client.connection.receiveMessage { [weak self] data, context, _, error in
-            guard let self else { return }
-            if let data, let context,
-               context.protocolMetadata(definition: NWProtocolWebSocket.definition) is NWProtocolWebSocket.Metadata,
-               let text = String(data: data, encoding: .utf8) {
-                self.handle(text, from: client)
-            }
-            if error != nil {
-                self.drop(client.id)
-            } else if self.clients[client.id] != nil {
-                self.receive(client)
-            }
-        }
-    }
-
-    private func handle(_ text: String, from client: Client) {
-        guard let data = text.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = object["t"] as? String else { return }
-
-        if type == "auth" {
-            guard let token = object["token"] as? String, Auth.verify(token: token) else {
-                drop(client.id); return
-            }
-            client.authenticated = true
-            pointer.resetSession()
-            // 手机此前只能靠 wsReady 猜自己通没通过鉴权；现在有明确回执，
-            // 之后才知道该不该订阅鼠标、该不该把"已发送"说成"已生效"。
-            enqueue(client, "{\"t\":\"auth_ok\"}")
-            return
-        }
-
-        guard client.authenticated else { drop(client.id); return }
-
-        if type == "cursor-subscribe" {
-            client.cursorSubscribed = object["enabled"] as? Bool ?? false
-            syncCursorSubscribers()
-            return
-        }
-
-        pointer.handle(text)
-    }
-
-    // MARK: - 下行广播
-
-    private func broadcastCursor(seq: UInt64, display: UInt32?, rx: Double, ry: Double) {
-        let id = display.map { String($0) } ?? "null"
-        let payload = String(format: "{\"t\":\"cursor\",\"seq\":%llu,\"displayId\":%@,\"rx\":%.4f,\"ry\":%.4f}",
-                             seq, id, rx, ry)
-        queue.async {
-            for client in self.clients.values where client.authenticated && client.cursorSubscribed {
-                self.enqueue(client, payload)
-            }
-        }
-    }
-
-    private func broadcastError(_ message: String) {
-        let escaped = message.replacingOccurrences(of: "\"", with: "\\\"")
-        let payload = "{\"t\":\"error\",\"message\":\"\(escaped)\"}"
-        queue.async {
-            for client in self.clients.values where client.authenticated { self.enqueue(client, payload) }
-        }
-    }
-
-    private func enqueue(_ client: Client, _ text: String) {
-        if client.sending {
-            client.pending = text     // 旧状态直接覆盖：鼠标位置看最新一帧才有意义
-            return
-        }
-        client.sending = true
-        send(client, text)
-    }
-
-    private func send(_ client: Client, _ text: String) {
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
-        let context = NWConnection.ContentContext(identifier: "pocketdesk-send", metadata: [metadata])
-        client.connection.send(content: Data(text.utf8), contentContext: context, isComplete: true,
-                               completion: .contentProcessed { [weak self] error in
             guard let self else { return }
             self.queue.async {
-                guard self.clients[client.id] != nil else { return }
-                guard error == nil else { self.drop(client.id); return }
-                if let next = client.pending {
-                    client.pending = nil
-                    self.send(client, next)
-                } else {
-                    client.sending = false
-                }
+                let body: [String: Any] = ["t": "cursor", "seq": seq, "displayId": display as Any? ?? NSNull(), "rx": rx, "ry": ry]
+                for c in self.clients.values where c.authenticated && c.subscribed { self.enqueue(c, body, latest: true) }
+            }
+        }
+        pointer.onError = { [weak self] message in
+            guard let self else { return }
+            self.queue.async { if let id = self.owner, let c = self.clients[id] { self.enqueue(c, ["t": "error", "message": message]) } }
+        }
+    }
+    // 供 HTTP 输入在执行队列落键前验证；调用者不能位于本服务队列。
+    func isController(_ session: String) -> Bool {
+        queue.sync {
+            guard let id = UUID(uuidString: session), owner == id, let c = clients[id], c.authenticated else { return false }
+            return !c.modern || ProcessInfo.processInfo.systemUptime - c.lastSeen < 2
+        }
+    }
+    func start() throws {
+        let p = NWParameters.tcp
+        let options = NWProtocolWebSocket.Options(); options.autoReplyPing = true
+        p.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
+        let listener = try NWListener(using: p, on: NWEndpoint.Port(rawValue: port)!)
+        listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+        self.listener = listener; listener.start(queue: queue)
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 1, repeating: 0.5)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            for c in Array(self.clients.values) where (!c.authenticated || c.modern) && now - c.lastSeen > 2 { self.drop(c.id) }
+        }
+        self.timer = timer; timer.resume()
+    }
+    func startSecure(_ transport: SecureTransport) throws {
+        let parameters = transport.parameters()
+        let options = NWProtocolWebSocket.Options(); options.autoReplyPing = true
+        parameters.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
+        let server = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: SecureTransport.port + 1)!)
+        server.newConnectionHandler = listener?.newConnectionHandler
+        secureListener = server; server.start(queue: queue)
+    }
+    private func accept(_ connection: NWConnection) {
+        let c = Client(connection); clients[c.id] = c
+        connection.stateUpdateHandler = { [weak self] state in
+            if case .failed = state { self?.drop(c.id) }
+            if case .cancelled = state { self?.drop(c.id) }
+        }
+        connection.start(queue: queue); receive(c)
+    }
+    private func receive(_ c: Client) {
+        c.connection.receiveMessage { [weak self] data, _, _, error in
+            guard let self, self.clients[c.id] != nil else { return }
+            if let data, data.count <= 16384, let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { self.handle(body, c) }
+            if error != nil { self.drop(c.id) }
+            else if self.clients[c.id] != nil { self.receive(c) }
+        }
+    }
+    private func handle(_ body: [String: Any], _ c: Client) {
+        let type = body["t"] as? String ?? ""
+        if type == "auth" {
+            guard let token = body["token"] as? String, (Auth.verify(token: token) || isLocalPeer(c.connection)) else { drop(c.id); return }
+            c.authenticated = true; c.modern = body["v"] as? Int == 1
+            c.lastSeen = ProcessInfo.processInfo.systemUptime
+            if owner == nil { owner = c.id; pointer.resetSession() }
+            enqueue(c, ["t": "auth_ok", "session": c.id.uuidString, "controller": owner == c.id,
+                        "absolutePointerV1": true, "doubleClickMs": NSEvent.doubleClickInterval * 1000])
+            return
+        }
+        guard c.authenticated else { drop(c.id); return }
+        c.lastSeen = ProcessInfo.processInfo.systemUptime
+        if type == "heartbeat" { return }
+        if type == "cursor-subscribe" { c.subscribed = body["enabled"] as? Bool == true; syncSubscribers(); return }
+        if type == "take-control" {
+            LockScreenInput.shared.cancel()
+            pointer.resetSession(); owner = c.id
+            for client in clients.values where client.authenticated { enqueue(client, ["t": "control", "controller": client.id == owner]) }
+            return
+        }
+        guard owner == c.id else { enqueue(c, ["t": "error", "message": "另一台手机正在控制，请先接管。"]); return }
+        if c.modern {
+            guard body["session"] as? String == c.id.uuidString, let seq = body["seq"] as? Int, seq > c.sequence else { return }
+            c.sequence = seq
+        }
+        if type == "unlock-cancel" { LockScreenInput.shared.cancel(); return }
+        if type == "cancel" { pointer.resetSession(); return }
+        guard !LockScreenInput.locked else { enqueue(c, ["t": "error", "message": "电脑已锁屏，请使用解锁入口。"]); return }
+        guard AXIsProcessTrusted() else { enqueue(c, ["t": "error", "message": "请在电脑上允许辅助功能后操作。"]); return }
+        if let data = try? JSONSerialization.data(withJSONObject: body), let text = String(data: data, encoding: .utf8) { pointer.handle(text) }
+    }
+    private func enqueue(_ c: Client, _ body: [String: Any], latest: Bool = false) {
+        guard let data = try? JSONSerialization.data(withJSONObject: body), let text = String(data: data, encoding: .utf8) else { return }
+        if latest { c.cursor = text }
+        else {
+            guard c.reliable.count < 64 else { drop(c.id); return }
+            c.reliable.append(text)
+        }
+        drain(c)
+    }
+    private func drain(_ c: Client) {
+        guard !c.sending else { return }
+        let next: String?
+        if !c.reliable.isEmpty { next = c.reliable.removeFirst() }
+        else { next = c.cursor; c.cursor = nil }
+        guard let next else { return }
+        c.sending = true
+        let context = NWConnection.ContentContext(identifier: "control", metadata: [NWProtocolWebSocket.Metadata(opcode: .text)])
+        c.connection.send(content: Data(next.utf8), contentContext: context, isComplete: true, completion: .contentProcessed { [weak self] error in
+            guard let self else { return }
+            self.queue.async {
+                guard self.clients[c.id] != nil else { return }
+                if error != nil { self.drop(c.id); return }
+                c.sending = false; self.drain(c)
             }
         })
     }
-
     private func drop(_ id: UUID) {
-        guard let client = clients.removeValue(forKey: id) else { return }
-        client.connection.cancel()
-        // 断线必须释放该会话的拖动状态：否则左键卡在按下态，重连后一点就变成拖拽。
-        pointer.resetSession()
-        syncCursorSubscribers()
+        guard let c = clients.removeValue(forKey: id) else { return }
+        c.connection.stateUpdateHandler = nil
+        c.connection.cancel()
+        if owner == id {
+            LockScreenInput.shared.cancel()
+            owner = nil; pointer.resetSession()
+            for client in clients.values where client.authenticated { enqueue(client, ["t": "control", "controller": false]) }
+        }
+        syncSubscribers()
     }
-
-    private func syncCursorSubscribers() {
-        let count = clients.values.filter { $0.authenticated && $0.cursorSubscribed }.count
-        cursor.setSubscribers(count)
-    }
+    private func syncSubscribers() { cursor.setSubscribers(clients.values.filter { $0.authenticated && $0.subscribed }.count) }
 }

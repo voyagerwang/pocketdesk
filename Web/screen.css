@@ -1,0 +1,410 @@
+/*
+ * [INPUT]: 消费 style.css 主题令牌与 index.html 工作台语义结构。
+ * [OUTPUT]: 按需锁屏表单与  提供 PiP 轻量屏幕标签和紧凑图标操作按钮、正立全屏、四入口自适应工具栏与放大瞄准/始终可见输入栏、键盘视口隔离、菜单和光标样式。
+ * [POS]: Web 画面模块的样式边界；画面坐标层支持横向旋转，键盘和工具栏独立布局。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+.screen-view {
+  position: fixed;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  max-width: none;
+  max-height: none;
+  background: var(--screen-bg);
+  color: var(--fg);
+  overflow: hidden;
+  z-index: 100;
+}
+.screen-view[open] {
+  display: grid;
+}
+.screen-view [hidden] {
+  display: none !important;
+}
+.screen-view button, .screen-view select {
+  min-height: var(--screen-hit);
+  min-width: var(--screen-hit);
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--surface-1);
+  color: var(--fg);
+  font: inherit;
+  padding: var(--s-2) var(--s-3);
+  touch-action: manipulation;
+}
+.screen-view button:active {
+  background: var(--accent-soft);
+}
+.screen-view button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.screen-view button:disabled {
+  opacity: .5;
+}
+.screen-view.pip {
+  right: auto;
+  bottom: auto;
+  border-radius: var(--r-panel);
+  box-shadow: var(--screen-shadow);
+  will-change: transform;
+  touch-action: none;
+}
+.screen-view.fullscreen {
+  top: var(--screen-top, 0px);
+  left: var(--screen-left, 0px);
+  width: var(--screen-width, 100vw);
+  height: var(--screen-height, 100dvh);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  box-sizing: border-box;
+}
+.screen-viewport {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+.pip .screen-viewport {
+  position: absolute;
+  inset: 0;
+}
+.screen-surface {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 0;
+}
+.screen-viewport.rotated .screen-surface {
+  inset: auto;
+  left: 0;
+  top: 0;
+  width: var(--surface-width);
+  height: var(--surface-height);
+  transform: translateX(var(--surface-height)) rotate(90deg);
+}
+#screen-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  transform-origin: 0 0;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.screen-toolbar {
+  display: none;
+}
+.fullscreen .screen-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s-1);
+  padding: var(--s-2);
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+.screen-toolbar button {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  min-width: 0;
+  padding: 4px;
+  gap: var(--s-1);
+  border: 0;
+  background: transparent;
+  font-size: var(--text-xs);
+}
+.screen-toolbar span { white-space: nowrap; }
+.screen-toolbar svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.screen-toolbar [aria-pressed="true"], .screen-toolbar .kb-active, .screen-toolbar [aria-expanded="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.screen-pip-tools {
+  position: absolute;
+  right: var(--s-3);
+  top: var(--s-3);
+  display: flex;
+  gap: var(--s-1);
+  z-index: 5;
+  opacity: .85;
+}
+.screen-pip-tools button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--screen-scrim);
+  color: var(--screen-ink);
+}
+.screen-pip-tools svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.fullscreen .screen-pip-tools, .fullscreen .screen-resize {
+  display: none;
+}
+.screen-resize {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+  width: var(--screen-handle);
+  height: var(--screen-handle);
+}
+.screen-resize.nw, .screen-resize.n, .screen-resize.ne { top: 0; }
+.screen-resize.sw, .screen-resize.s, .screen-resize.se { bottom: 0; }
+.screen-resize.nw, .screen-resize.w, .screen-resize.sw { left: 0; }
+.screen-resize.ne, .screen-resize.e, .screen-resize.se { right: 0; }
+.screen-resize.n, .screen-resize.s { left: var(--screen-handle); right: var(--screen-handle); width: auto; }
+.screen-resize.e, .screen-resize.w { top: var(--screen-handle); bottom: var(--screen-handle); height: auto; }
+.screen-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--s-4);
+  color: var(--screen-ink);
+}
+.screen-notice {
+  position: absolute;
+  left: var(--s-3);
+  top: calc(env(safe-area-inset-top) + var(--s-3));
+  max-width: calc(100% - var(--screen-rail) - var(--s-6));
+  padding: var(--s-2) var(--s-3);
+  background: var(--screen-scrim);
+  color: var(--screen-ink);
+  border-radius: var(--r-field);
+  font-size: var(--text-xs);
+  pointer-events: none;
+}
+.screen-menu, .screen-context {
+  position: absolute;
+  z-index: 8;
+  right: var(--s-3);
+  bottom: calc(var(--screen-rail) + env(safe-area-inset-bottom) + var(--s-3));
+  width: min(var(--screen-menu-width), calc(100% - var(--s-6)));
+  max-height: calc(100% - var(--screen-rail) - var(--s-6));
+  overflow: auto;
+  padding: var(--s-4);
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-panel);
+  box-shadow: var(--screen-shadow);
+}
+.screen-menu label {
+  display: grid;
+  gap: var(--s-2);
+  margin-block: var(--s-3);
+}
+.screen-menu-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-2);
+}
+.screen-menu p {
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  line-height: 1.6;
+}
+.screen-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+.screen-compose {
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding: 6px 8px;
+  min-height: 0;
+  overflow: auto;
+  max-height: min(50dvh, calc(var(--screen-height, 100dvh) * .6));
+}
+.screen-section-head {
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+  justify-content: space-between;
+}
+.screen-compose-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+#screen-compose-editor { flex: 1; min-width: 0; }
+.screen-compose-bar button {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 10px;
+  border-radius: 50%;
+}
+.screen-compose-bar button svg { width: 22px; height: 22px; display: block; fill: none; stroke: currentColor; stroke-width: 1.75; }
+.screen-compose .kb-proxy {
+  display: block;
+  width: 100%;
+  height: 44px;
+  min-height: 44px;
+  max-height: 88px;
+  overflow-y: auto;
+  padding: 10px;
+  margin: 0;
+  box-sizing: border-box;
+  resize: none;
+  font-size: 16px;
+  line-height: 22px;
+  color: var(--fg);
+  background: var(--field);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-field);
+}
+#screen-input-status {
+  margin-top: 4px;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+#screen-send {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.screen-cursor, .screen-touch {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+.screen-cursor svg {
+  width: 16px;
+  height: 24px;
+  fill: var(--screen-ink);
+  stroke: var(--screen-line);
+  stroke-width: 1;
+}
+.screen-touch {
+  width: var(--s-6);
+  height: var(--s-6);
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--accent-soft);
+}
+@media (orientation: landscape) {
+  .screen-view.fullscreen {
+    grid-template-columns: minmax(0, 1fr) var(--screen-rail);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .fullscreen .screen-toolbar {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(4, minmax(var(--screen-hit), 1fr));
+    border-top: 0;
+    border-left: 1px solid var(--border);
+  }
+  .screen-compose { grid-column: 1; grid-row: 2; }
+  .screen-menu, .screen-context {
+    right: calc(var(--screen-rail) + var(--s-3));
+    bottom: var(--s-3);
+    max-height: calc(100% - var(--s-6));
+  }
+}
+
+html.screen-fullscreen-open, body.screen-fullscreen-open {
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--screen-bg);
+}
+body.screen-fullscreen-open {
+  position: fixed;
+  inset: 0;
+}
+body.screen-fullscreen-open > main { visibility: hidden; }
+.screen-touch { margin-left: calc(var(--s-6) / -2); margin-top: calc(var(--s-6) / -2); }
+
+.fullscreen.compact-height { --screen-rail: 112px; }
+.fullscreen.compact-height .screen-toolbar {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(var(--screen-hit), 1fr));
+}
+
+/* ---------- 小窗屏幕直选：与全屏共用切换状态 ---------- */
+.screen-pip-displays {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 10px;
+  z-index: 5;
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+}
+.screen-pip-displays button {
+  flex: 0 0 auto;
+  min-height: 26px;
+  height: 26px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  font-size: 11px;
+  background: var(--screen-scrim);
+  color: var(--screen-ink);
+}
+.screen-pip-displays button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.fullscreen .screen-pip-displays { display: none; }
+
+.fullscreen:has(#screen-compose:not([hidden])) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+.fullscreen:has(#screen-compose:not([hidden])) .screen-toolbar { display: none; }
+.fullscreen:has(#screen-compose:not([hidden])) .screen-compose { grid-column: 1; grid-row: 2; }
+
+/* 放大镜只放大真实画面，十字中心对应唯一的远端落点。 */
+.screen-aim {
+  position: absolute; width: 120px; height: 120px; z-index: 7;
+  pointer-events: none; outline: 2px solid var(--accent); border-radius: 16px;
+  background-color: var(--screen-bg); background-repeat: no-repeat;
+  box-shadow: 0 4px 20px #0006; box-sizing: content-box;
+}
+.screen-aim::before, .screen-aim::after {
+  content: ''; position: absolute; left: 50%; top: 50%; background: var(--accent);
+  transform: translate(-50%, -50%); box-shadow: 0 0 1px white;
+}
+.screen-aim::before { width: 18px; height: 1px; }
+.screen-aim::after { height: 18px; width: 1px; }
+#screen-mode svg { display: none; }
+
+/* 锁屏凭据与普通输入栏隔离；不随桌面画面旋转。 */
+#unlock-form:not([hidden]) { position:absolute; z-index:30; left:50%; top:50%; transform:translate(-50%,-50%); width:min(320px,85%); padding:20px; border-radius:14px; background:#fff; color:#222; display:grid; gap:12px; }
+#unlock-form input { width:100%; box-sizing:border-box; min-height:44px; font-size:16px; }
+#unlock-form button { min-height:44px; }
+#unlock-note { margin:0; font-size:13px; }

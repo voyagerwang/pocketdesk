@@ -10,7 +10,7 @@ INSTALL_APP="$INSTALL_DIR/PocketDesk.app"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
 mkdir -p "$BUILD_APP/Contents/MacOS" "$BUILD_APP/Contents/Resources" "$INSTALL_DIR"
-swiftc "$ROOT_DIR"/Sources/*.swift -o "$BUILD_APP/Contents/MacOS/VoiceDeck" -framework AppKit -framework Network -framework CoreImage
+swiftc "$ROOT_DIR"/Sources/*.swift -o "$BUILD_APP/Contents/MacOS/VoiceDeck" -framework AppKit -framework Network -framework CoreImage -framework Carbon -Xlinker -sectcreate -Xlinker __CGPreLoginApp -Xlinker __cgpreloginapp -Xlinker /dev/null
 cp "$ROOT_DIR/Resources/Info.plist" "$BUILD_APP/Contents/Info.plist"
 cp "$ROOT_DIR/Resources/AppIcon.icns" "$BUILD_APP/Contents/Resources/AppIcon.icns"
 ditto "$ROOT_DIR/Web" "$BUILD_APP/Contents/Resources/Web"

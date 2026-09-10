@@ -1,7 +1,8 @@
 /**
  * [INPUT]: 依赖 Foundation 的 Date/DateFormatter/NSLock、AppKit 的 NSWorkspace、CoreGraphics 的 CGWindowList。
- * [OUTPUT]: 对外提供 ExecutionOutcome（结果分级）、ExecutionFeedback（执行回执）、ExecutionRecord（日志条目）、
+ * [OUTPUT]: 对外提供 ExecutionOutcome（含手机暂存的结果分级）、ExecutionFeedback（执行回执）、ExecutionRecord（日志条目）、
  *           ExecutionLog（线程安全环形日志）、EnvironmentGate（执行前门禁）。
+ * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的可观测性层；InputExecutor 产出回执、Server 写进响应体与 /api/status、控制台据此展示「最近动作」。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -13,6 +14,7 @@ import Foundation
 // CGEvent 是单向投递：post 成功只代表进了 HID 事件流，目标应用是否消费无从得知（微信不响应合成 Cmd+W
 // 却照样返回成功，就是这条鸿沟）。故只有能观察到预期状态变化时才允许标 delivered，其余按键注入一律 sent。
 enum ExecutionOutcome: String {
+    case buffered   // 草稿仅在手机暂存，未向电脑注入。
     case delivered  // 已确认生效：执行前后观察到预期状态变化（窗口关了 / 前台换了 / 进程退了）
     case sent       // 已发出但无法确认：普通按键注入的天花板，不代表生效
     case blocked    // 前置条件不满足，压根没执行（已锁屏、未授权）
@@ -21,6 +23,7 @@ enum ExecutionOutcome: String {
     // 控制台与手机端共用的短标签。
     var badge: String {
         switch self {
+        case .buffered: return "手机暂存"
         case .delivered: return "已生效"
         case .sent: return "已发出"
         case .blocked: return "未执行"
@@ -86,13 +89,11 @@ final class ExecutionLog {
 }
 
 // 执行前门禁：先问环境同不同意，不同意就别浪费一次注入，也别给用户一个假装成功的回执。
-// 注意"宁松不宁紧"：用过的两种锁屏判据（CGWindowList layer≥1000 的 loginwindow、CGSessionScreenIsLocked）
-// 在 macOS 15 实测都不准——loginwindow 高 layer 窗口常驻存在会让前者永远命中；后者即便屏幕明显未锁也报 1。
-// 误拦比漏报更糟：操作全部废掉，用户连"没反应"的日志都看不到。锁屏场景改由事后验证（无状态变化 → sent）
-// + 日志中「前台是 loginwindow」的提示承担，不在入口拦截。
+// 使用本机锁屏验证确认的 CGSSessionScreenIsLocked；未知会话拒绝普通输入。
 enum EnvironmentGate {
     // 辅助功能授权是公共 API（AXIsProcessTrusted），可信。没有它连 CGEvent 都发不出去。
     static func blockReason() -> String? {
+        if LockScreenInput.state != "unlocked" { return "电脑已锁屏，请使用专用解锁入口。" }
         if !AXIsProcessTrusted() { return "尚未授予「辅助功能」权限，无法向电脑注入操作。请在控制台完成授权。" }
         return nil
     }

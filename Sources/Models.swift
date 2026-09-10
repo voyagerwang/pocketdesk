@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 Codable 与 CoreGraphics 的 CGEventFlags/CGKeyCode。
- * [OUTPUT]: 对外提供传输与配置层的全部值类型：SendCommand/PendingImage/ActivateCommand/IconUpload
+ * [OUTPUT]: 对外提供传输与配置层的全部值类型：SendCommand/LiveInputCommand/LiveInputReceipt（草稿 ID、整值/选区/暂存模式、显式核验重试、提交动作确认）/PendingImage/ActivateCommand/IconUpload
  *           请求体、ShortcutConfig/TargetConfig 配置实体（TargetConfig 含按应用专属快捷键、默认打开面板、叠加全局组开关）、
  *           ShortcutKeys 语义串解析器（resolve 解析、canonicalize 别名归一、legacyHotkey 旧格式迁移）、
  *           ShortcutError/InputError 错误类型。
@@ -19,24 +19,37 @@ struct SendCommand: Decodable {
     let usePendingImage: Bool?
 }
 
-// 实时同频输入：手机端把输入框的**当前全文**发来，服务端按差异增量对齐电脑端输入框。
-// 传全文而不是"刚才敲了哪个键"——手机输入法的组合态（拼音候选、听写）只在 compositionend
-// 之后才交付文字，逐键转发既拿不到也容易乱序；全文交由服务端求差，乱序与丢包都能自愈
-// （下一次同步会把整段差异补齐）。
+// 全文快照：草稿 ID 在首页和全屏之间保持一致，提交完成后才创建下一轮。
 struct LiveInputCommand: Decodable {
+    let draftId: String?
+    let expectedMode: String? // 已确认 replace/selection 后不能在会话丢失时降级并重发全文。
+    let session: String?
+    let context: String?
     let text: String
-    // 目标应用；nil = 投当前前台（手机端未选目标时的默认）。
     let targetId: String?
-    // true = 对齐后补一次 Return：内容已在框里，发送就等价于按回车。
     let submit: Bool?
-    // true = 只把基线改写成 text，不注入任何按键。用于"电脑端输入框已被别处清空/改写"
-    // 这类两端已经不一致、但不应再敲键的场合。
-    let reset: Bool?
+    let usePendingImage: Bool?
+    let imageBatchId: String?
+    let imageIds: [String]?
+    let reset: Bool? // 仅用于拒绝旧式基线重置，不再接受未经核验的远端文本。
+    let retry: Bool? // 用户再次发送时请求核对原会话；不允许直接重置或重放全文。
+}
+
+struct LiveInputReceipt {
+    let feedback: ExecutionFeedback
+    let mode: String
+    let committed: Bool // 仅表示提交动作执行过，不表示第三方服务收到了消息。
+    var dictionary: [String: Any] {
+        ["ok": true, "outcome": feedback.outcome.rawValue, "detail": feedback.detail,
+         "mode": mode, "committed": committed]
+    }
 }
 
 // 手机选图后立即预上传的请求体。
 struct PendingImage: Decodable {
     let data: String
+    let batchId: String?
+    let imageId: String?
 }
 
 struct ActivateCommand: Decodable {

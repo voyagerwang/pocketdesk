@@ -1,0 +1,463 @@
+/*
+ * [INPUT]: 消费 style.css 的基础令牌与首页设置、历史、多图预览、快捷键节点。
+ * [OUTPUT]: 提供首页辅助控件、横向可滚动的定尺寸多图缩略条及米白主题覆盖。
+ * [POS]: Web 首页基础样式的后置补充；全屏布局另由 screen.css 提供。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+/* ---------- 设置齿轮与历史发送（置于文件末尾以覆盖基础规则） ---------- */
+
+/* 设置面板默认收起：点触控板右上角小图标展开。 */
+.pad-tuning {
+  display: none;
+}
+
+.pad-card.show-tuning .pad-tuning {
+  display: grid;
+}
+
+/* 设置入口：触控板左上角，墨点角标——线条 + 墨点即图标，不套盒子。
+   静息淡墨，激活（面板展开）落墨成赭红。左上角与右缘刻度尺对角呼应，
+   也避开标题与滚动刻度的空间。 */
+.pad-gear {
+  position: absolute;
+  top: var(--s-1);
+  left: var(--s-1);
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-field);
+  background: transparent;
+  color: var(--fg-muted);
+  opacity: var(--ink-dwell);
+  transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.pad-gear:active {
+  opacity: var(--ink-active);
+}
+
+/* 收起的精简条不放设置入口：展开触控板后才出现。 */
+main:not(.pad-mode) .pad-gear {
+  display: none;
+}
+
+.pad-gear svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.pad-card.show-tuning .pad-gear {
+  color: var(--accent);
+  opacity: var(--ink-active);
+}
+
+/* 历史发送：面板在发送按钮上方展开，点条目回填输入框。 */
+.send-row {
+  display: flex;
+  gap: var(--s-2);
+}
+
+.send-row #send {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-md);
+  letter-spacing: 0;
+}
+
+.send-row .hist-btn {
+  flex-basis: var(--control-size);
+  min-height: var(--control-size);
+}
+
+/* 历史/图片按钮：与设置角标同一墨点血缘——无框、淡墨静息、交互落墨。
+   图标下缘一枚小墨点作"印"，激活时墨点染赭并放大，与量尺刻度呼应。 */
+.hist-btn {
+  flex: 0 0 52px;
+  display: grid;
+  place-items: center;
+  position: relative;
+  border: 0;
+  border-radius: var(--r-field);
+  background: transparent;
+  color: var(--fg-muted);
+  opacity: var(--ink-dwell);
+  transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.hist-btn:active {
+  opacity: var(--ink-active);
+}
+
+.hist-btn svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 印墨点：图标下方居中，直径 3px 的墨点。 */
+.hist-btn::after {
+  content: "";
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  margin-left: -1.5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+  transition: transform var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+
+/* 历史面板展开：按钮落墨（赭红），印点放大——同刻度尺着墨语言。 */
+.hist-btn[aria-pressed="true"] {
+  color: var(--accent);
+  opacity: var(--ink-active);
+}
+
+.hist-btn[aria-pressed="true"]::after {
+  transform: scale(1.7);
+  opacity: 1;
+}
+
+/* 待发送图片预览：缩略图 + 右上角移除叉。 */
+.image-preview {
+  display: flex;
+  gap: var(--s-2);
+  max-width: 100%;
+  overflow-x: auto;
+  padding: var(--s-2);
+}
+.image-preview[hidden] { display: none; }
+
+.image-preview-item { position: relative; flex: 0 0 auto; }
+.image-preview img {
+  display: block;
+  width: 72px;
+  height: 72px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  object-fit: cover;
+}
+
+.image-remove {
+  position: absolute;
+  top: calc(-1 * var(--s-2));
+  right: calc(-1 * var(--s-2));
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface-1);
+  color: var(--fg-muted);
+}
+
+.image-remove svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.history-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--surface-2);
+  max-height: 200px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* WebKit 细线滚动条：平时一道发丝灰，拖动/触按染墨（赭红），与纸面语言一致。 */
+.history-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.history-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.history-panel::-webkit-scrollbar-thumb {
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+}
+
+.history-panel::-webkit-scrollbar-thumb:active {
+  background: var(--accent);
+}
+
+.hist-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-2) var(--s-3);
+  background: var(--surface-3);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.hist-actions {
+  display: flex;
+  gap: var(--s-3);
+}
+
+.hist-clear {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+/* 清空二次确认态：赭红底白字，一眼知道处在危险操作中。 */
+.hist-clear.armed {
+  padding: 2px var(--s-2);
+  border-radius: var(--r-field);
+  background: var(--danger);
+  color: #fff;
+}
+
+.hist-collapse {
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.hist-item {
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.hist-item:last-child {
+  border-bottom: 0;
+}
+
+.hist-item:active {
+  background: var(--accent-soft);
+}
+
+.hist-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.hist-item small {
+  color: var(--fg-faint);
+  font-size: var(--text-xs);
+}
+
+.hist-item.empty {
+  color: var(--fg-faint);
+  cursor: default;
+}
+
+/* ---------- 快捷键按钮条：图片预览下方，点击向 Mac 前台应用注入组合键 ---------- */
+
+.shortcut-bar {
+  display: flex;
+  gap: var(--s-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.shortcut-bar::-webkit-scrollbar {
+  display: none;
+}
+
+/* 快捷键胶囊：墨点血缘——左侧一枚刻度墨点代替描边盒子，点按落墨。 */
+.shortcut-key {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* 刻度墨点：与量尺同径，静息淡墨。 */
+.shortcut-key::before {
+  content: "";
+  width: calc(var(--ink-dot) * 2);
+  height: calc(var(--ink-dot) * 2);
+  border-radius: 50%;
+  background: var(--fg);
+  opacity: 0.35;
+  transition: background var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+
+.shortcut-key:active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.shortcut-key:active::before {
+  background: var(--accent);
+  opacity: var(--ink-active);
+}
+
+/* ---------- 触控板字标：收起态的入口提示 ---------- */
+
+/* 收起时居左显示"触控板"三字，让用户知道这块可以摸；展开后自动隐藏。 */
+.pad-title {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding-left: var(--s-4);
+  color: var(--fg-muted);
+  font-size: var(--text-md);
+  font-weight: 500;
+  letter-spacing: 0.35em;
+  text-indent: 0.35em;
+  pointer-events: none;
+  transition: opacity var(--dur) var(--ease);
+}
+
+main.pad-mode .pad-title,
+.pad-card.show-tuning .pad-title {
+  opacity: 0;
+}
+
+/* ---------- 主题切换：muji 米白克制主题覆盖（默认 classic 经典蓝，与服务端默认一致） ---------- */
+
+/* muji 主题令牌覆盖：切换到米白纸面克制风，仅覆盖 :root，其余规则通过令牌自动生效。 */
+:root[data-theme="muji"] {
+  /* muji 米白克制风：只覆盖需要变的令牌——颜色去玻璃去发光、方正小圆角、快动效。
+     间距/字号/滑杆几何/墨系等结构令牌全部继承 :root。 */
+  --bg: #f5f3ee;
+  --surface-1: #ffffff;
+  --surface-2: #fbfaf7;
+  --surface-3: #efede7;
+  --field: #ffffff;
+  --border: rgb(26 26 26 / 10%);
+  --border-strong: rgb(26 26 26 / 22%);
+  --fg: #1a1a1a;
+  --fg-muted: #666666;
+  --fg-faint: #999999;
+  --accent: #b74127;
+  --accent-soft: rgb(183 65 39 / 8%);
+  --accent-line: rgb(183 65 39 / 40%);
+  --danger: #b74127;
+  --shadow-tile: none;
+
+  --hairline-top: transparent;
+  --inset-top: transparent;
+  --halo-pad: none;
+  --lift-tile: none;
+  --glow-hint: none;
+  --glow-thumb: none;
+
+  --r-field: 4px;
+  --r-icon: 10px;
+  --r-panel: 6px;
+
+  --dur: 160ms;
+
+  --glass-blur: none;
+}
+
+/* muji 主题下的画布：纯米白纸面，不带任何光晕（classic 默认自带蓝紫光晕）。 */
+:root[data-theme="muji"] body {
+  background: var(--bg);
+}
+
+/* muji 主题关闭玻璃与发光（classic 默认开启）。 */
+:root[data-theme="muji"] .compose,
+:root[data-theme="muji"] .pad-card {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-tile);
+}
+
+:root[data-theme="muji"] #pad {
+  background: var(--halo-pad), var(--surface-2);
+  box-shadow: inset 0 1px 0 var(--inset-top);
+}
+
+:root[data-theme="muji"] #send {
+  box-shadow: inset 0 1px 0 var(--hairline-top);
+}
+
+:root[data-theme="muji"] .target.selected .target-icon {
+  filter: drop-shadow(var(--lift-tile));
+}
+
+:root[data-theme="muji"] .target-icon {
+  border-width: 1.5px;
+}
+
+:root[data-theme="muji"] .pad-hint::before {
+  box-shadow: var(--glow-hint);
+}
+
+:root[data-theme="muji"] .pad-tuning input[type="range"]::-webkit-slider-thumb {
+  border: 0;
+  box-shadow: var(--glow-thumb);
+}
+
+
+/* ---------- 电脑画面：工具入口与专注查看层 ---------- */
+.screen-open {
+  flex: 0 0 var(--control-size);
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--s-1);
+  min-height: var(--control-size);
+  padding: var(--s-1);
+  border: 0;
+  border-radius: var(--r-field);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.screen-open svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.screen-open:active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
