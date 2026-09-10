@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Node 内建断言与文件系统，读取 Web/index.html、Web/settings.js 与 Sources/Server.swift。
- * [OUTPUT]: 验证手机设置只有一个入口、触控板内无齿轮、三个旧控件 ID 与存储键未复制第二份、翻腕默认关闭、新脚本已进入静态白名单。
+ * [OUTPUT]: 验证手机设置只有一个入口、触控板内无齿轮、三个旧控件 ID 与存储键未复制第二份、翻腕默认关闭且只留授权与灵敏度、新脚本已进入静态白名单。
  * [POS]: tests 的静态结构回归；不启动服务、不发网络请求、不注入系统事件。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -52,8 +52,25 @@ assert.ok(/id="wrist-toggle"[^>]*>/.test(html) && !/id="wrist-toggle"[^>]*checke
 assert.ok(!/id="wrist-toggle"[^>]*disabled/.test(html),
   '翻腕开关不应写死 disabled：用户尝试开启后才就地说明原因');
 
+// 翻腕练习已移除：页面不留按钮/读数条/仪表，控制器不再暴露练习通道。
+const motionSend = fs.readFileSync(path.join(root, 'Web/motion-send.js'), 'utf8');
+for (const gone of ['wrist-practice', 'wrist-meter', 'wrist-meter-fill', 'wrist-meter-mark', 'wrist-gauge', 'wrist-angle', 'wrist-meta', 'wrist-status']) {
+  assert.ok(!html.includes(gone), `练习相关节点 ${gone} 应已从页面移除`);
+}
+assert.ok(!fs.readFileSync(path.join(root, 'Web/app-extras.css'), 'utf8').includes('wrist-meter'),
+  '练习仪表样式应一并删除');
+for (const gone of ['startPractice', 'stopPractice', 'isPracticing', 'onSample']) {
+  assert.ok(!motionSend.includes(gone), `motion-send.js 不应再保留练习通道 ${gone}`);
+}
+assert.ok(!settings.includes('Practice'), 'settings.js 不应再持有练习逻辑');
+// 保留项：授权按钮、灵敏度档位与开关仍在，且档位仍带度数（标定信息不随练习一起丢掉）。
+assert.ok(/id="wrist-authorize"/.test(html) && /id="wrist-sensitivity"/.test(html), '授权与灵敏度应保留');
+for (const deg of ['低 30°', '中 22°', '高 15°']) {
+  assert.ok(html.includes(deg), `灵敏度档位应仍带度数：${deg}`);
+}
+
 // 新脚本必须真的能被服务到：白名单与页面引用同时核对。
 assert.ok(server.includes('"settings.js"'), 'Server.swift 静态白名单需包含 settings.js');
 assert.ok(/<script src="\/settings\.js\?v=/.test(html), 'index.html 需带版本号引用 settings.js');
 
-console.log('phone settings: single entry, migrated controls, default-off wrist guard passed');
+console.log('phone settings: single entry, migrated controls, default-off wrist guard, no practice UI passed');

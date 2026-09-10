@@ -16,7 +16,7 @@ multi_image_browser.py: Playwright 模拟接口验证多选删除保序、上传
 
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 
-phone-settings.test.cjs: 静态结构回归，验证首页设置入口唯一、触控板内无齿轮、三个旧控件 ID 与范围未变且未被复制第二份、翻腕开关默认关闭且不写死 disabled、翻腕偏好只存用户意愿、新脚本同时进入页面引用与 Server.swift 静态白名单。
+phone-settings.test.cjs: 静态结构回归，验证首页设置入口唯一、触控板内无齿轮、三个旧控件 ID 与范围未变且未被复制第二份、翻腕开关默认关闭且不写死 disabled、翻腕偏好只存用户意愿、翻腕练习（按钮/读数条/仪表/控制器练习通道）已彻底移除而授权与带度数的灵敏度档位仍在、新脚本同时进入页面引用与 Server.swift 静态白名单。
 
 motion-recognizer.test.cjs: 纯函数识别器单测，覆盖正常翻腕触发与震动/扭转/转屏/短触/静止的拒绝，以及灵敏度预设差异；不依赖浏览器。
 

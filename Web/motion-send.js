@@ -4,7 +4,7 @@
  *           pocketdeskSettingsOpen / pocketdeskMotionEnabled。
  * [OUTPUT]: 注册 window.pocketdeskMotion（控制器）与 window.pocketdeskWristAvailable（能力门禁）。
  *           采集 DeviceMotion/Orientation，喂给识别器；触发候选时经门禁复用 send() 发送。
- * [POS]: 翻腕发送的传感器侧；默认不自动发送，必须用户在设置中开启且已授权；练习模式不发消息。
+ * [POS]: 翻腕发送的传感器侧；默认不自动发送，必须用户在设置中开启且已授权。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 (function () {
@@ -21,10 +21,10 @@
 
   var params = Motion.DEFAULT_PARAMS;
   var granted = false;
-  var active = false, practice = false;
+  var active = false;
   var recognizer = null;
   var lastAccel = 9.8;
-  var onCandidate = null, onSample = null;
+  var onCandidate = null;
   var motionHandler = null, orientHandler = null;
 
   function sensorSupported() {
@@ -83,7 +83,6 @@
       if (!recognizer) return;
       var sample = { t: e.timeStamp || Date.now(), beta: e.beta || 0, gamma: e.gamma || 0, alpha: e.alpha || 0, accel: lastAccel };
       var res = recognizer.push(sample);
-      if (onSample) onSample({ sample: sample, result: res, state: recognizer.state() });
       if (res.fired && onCandidate) onCandidate();
     };
     window.addEventListener('devicemotion', motionHandler, { passive: true });
@@ -113,17 +112,7 @@
   }
   function stopActive() {
     active = false; onCandidate = null;
-    if (!practice) { detach(); recognizer = null; }
-  }
-  function startPractice(cb) {
-    onSample = cb;
-    recognizer = Motion.makeRecognizer(params);
-    attach();
-    practice = true;
-  }
-  function stopPractice() {
-    practice = false; onSample = null;
-    if (!active) { detach(); recognizer = null; }
+    detach(); recognizer = null;
   }
   function setParams(patch) { params = Object.assign({}, params, patch); if (recognizer) recognizer = Motion.makeRecognizer(params); }
   function setPreset(name) { if (PRESETS[name]) setParams(PRESETS[name]); }
@@ -134,13 +123,10 @@
     requestPermission: requestPermission,
     startActive: startActive,
     stopActive: stopActive,
-    startPractice: startPractice,
-    stopPractice: stopPractice,
     setParams: setParams,
     setPreset: setPreset,
     getParams: getParams,
     isActive: function () { return active; },
-    isPracticing: function () { return practice; },
     needsPermission: needsPermission,
     PRESETS: PRESETS,
   };
