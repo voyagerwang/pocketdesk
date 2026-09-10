@@ -2,8 +2,10 @@
  * [INPUT]: 依赖 app.js 的草稿/目标/历史与多图处理门闩、ComposeQueue、原生 IME、全屏输入区。
  * [OUTPUT]: 提供可见输入栏、手机全文同步与图文提交；发送等待图片处理、补传完整批次并冻结附件编辑，失败保留草稿及附件；用户显式切换目标时保留内容并开启隔离的新草稿轮次。
  * [POS]: Web 输入编排层；每次提交等待自己的完成结果，不用同步成功代替提交成功。
- *        手机侧同时兜住安卓 Chrome 的两处“点输入框不弹键盘”：键盘被收起后残留焦点的
- *        再聚焦，以及点在内边距/空白处时的补聚焦；均只作用于粗指针设备。
+ *        发送入口只注册为 window.pocketdeskComposeSend；window.pocketdeskSend 归 pad.js
+ *        （画面/指针指令），两者名字不可互换。
+ *        安卓 Chrome 专属补丁（键盘残留焦点的再聚焦、内边距补聚焦、IME 卡死自愈）一律由
+ *        androidInputPatch 收口：iOS 上同样的 blur→focus 会让听写把同一段字再落一遍。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 /* ---------- 草稿快照：通用应用持续实时同步，特殊远控才暂存 ---------- */
@@ -122,6 +124,11 @@ function flushLive(text, submit = false, withImage = false, retry = false, recon
   return pushLive(text, submit, withImage, retry, reconcileOnFailure);
 }
 
+// 以下两处补丁（编辑会话卡死自愈、点输入框不弹键盘的补聚焦）都是**安卓 Chrome / Gboard 专属**的。
+// iOS 必须排除：iPhone 上对正在输入的输入框做 blur→focus，听写或输入法会把同一段内容再提交
+// 一遍，用户看到的就是“同一段字被输入了两遍”。平台判定在这里收口，别让两边走岔。
+const androidInputPatch = /Android/i.test(navigator.userAgent);
+
 // 输入法卡死防御（修 Gboard 等第三方键盘“上滑清空”后输入框点不进、只能刷新页面）：
 // 该手势是一次超大的 deleteSurroundingText，Android WebView 的编辑会话常被它搞死——
 // 之后敲字不出 input、点也点不进输入框，只剩刷新整页一条路。
@@ -190,7 +197,8 @@ function wireComposeIME(el, mirrorTo, recover = recoverIME) {
     } else scheduleLive(el.value.length < was);
     // 「上滑清空」指纹：一次 input 就从非空一步归零（退格是一格一格删，不会一步清空）。
     // 命中即重建——**不论是否处于组合态**，这正是以前漏掉 Gboard 的原因。
-    if (was > 0 && el.value === '') {
+    // iOS 不重建：全选删除同样会命中这个指纹，而重建时抢回焦点会让听写把这段再落一遍。
+    if (androidInputPatch && was > 0 && el.value === '') {
       recover(el);
     }
   });
@@ -203,7 +211,9 @@ function wireComposeIME(el, mirrorTo, recover = recoverIME) {
     imePrevLen.set(el, el.value.length);
     clearTimeout(editProbe);
     editProbe = setTimeout(() => {
-      if (el.isConnected && document.activeElement === el && !el.readOnly) recover(el);
+      // iOS 不做这个探针：听写/输入法本来就可能隔一会儿才落字，误判成“编辑被吃掉”后
+      // 重建元素并抢回焦点，会把已经落下的那段再提交一次（重复输入）。
+      if (androidInputPatch && el.isConnected && document.activeElement === el && !el.readOnly) recover(el);
     }, 700);
   });
   el.addEventListener('input', () => clearTimeout(editProbe));
@@ -225,21 +235,19 @@ wireHomeCompose(textEl);
 // （不动内容与光标），随后这一次原生点按就是真正的焦点变化，键盘随之回来。
 // 键盘正开着时绝不动焦点：用户点正文是去挪光标的。
 // 键盘弹起时 Chrome 只收“视觉视口”，window.innerHeight 不变；落差 >120px 即视为键盘已展开。
-const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches === true;
-
 function keyboardExpanded() {
   const vv = window.visualViewport;
   return Boolean(vv) && vv.height < window.innerHeight - 120;
 }
 
 function releaseStaleFocus() {
-  if (!coarsePointer || submittingDraft) return;
+  if (!androidInputPatch || submittingDraft || liveComposing) return;
   if (document.activeElement === textEl && !keyboardExpanded()) textEl.blur();
 }
 
 // 手指落在卡片内边距/空白处时原生不聚焦，这里补一次；点按钮、滑杆不抢焦点。
 document.querySelector('.compose')?.addEventListener('click', event => {
-  if (submittingDraft) return;
+  if (!androidInputPatch || submittingDraft || liveComposing) return;
   if (document.activeElement === textEl) return;
   if (event.target.closest('button, select, a, label, input')) return;
   textEl.focus({ preventScroll: true });
@@ -417,7 +425,10 @@ window.pocketdeskHideKeyboard = hideKeyboard;
 window.pocketdeskKeyboardActive = () => fullComposeOpen();
 
 // 体感发送门禁与触发入口（motion-send.js 委托至此，不重复实现发送逻辑）。
-window.pocketdeskSend = send;
+// 名字必须独立：window.pocketdeskSend 属于 pad.js 的 queuePad（画面/指针指令通道），
+// screen.js 的每一处点按、滚动、cursor-subscribe 都走它。本文件在 pad.js 之后加载，
+// 一旦占用这个名字就会把画面指令全部转成“发送草稿”——表现为没开翻腕也自动发送。
+window.pocketdeskComposeSend = send;
 window.pocketdeskInputSettled = (ms = 700) => Date.now() - lastInputAt >= ms;
 window.pocketdeskHasDraft = () => Boolean(textEl.value || pendingImages.length);
 window.pocketdeskCanMotionSend = () => {

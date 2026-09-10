@@ -102,7 +102,7 @@
     if (window.pocketdeskSettingsOpen && window.pocketdeskSettingsOpen()) return;     // 设置期间不误发
     if (!window.pocketdeskHasDraft || !window.pocketdeskHasDraft()) return;           // 没内容不发
     if (!window.pocketdeskCanMotionSend || !window.pocketdeskCanMotionSend()) return; // 输入中/提交中/组合态不发
-    if (window.pocketdeskSend) window.pocketdeskSend();
+    if (window.pocketdeskComposeSend) window.pocketdeskComposeSend();
   }
 
   function startActive(cb) {
