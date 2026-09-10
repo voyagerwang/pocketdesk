@@ -13,12 +13,20 @@ mkdir -p "$BUILD_APP/Contents/MacOS" "$BUILD_APP/Contents/Resources" "$INSTALL_D
 swiftc "$ROOT_DIR"/Sources/*.swift -o "$BUILD_APP/Contents/MacOS/VoiceDeck" -framework AppKit -framework Network -framework CoreImage -framework Carbon -Xlinker -sectcreate -Xlinker __CGPreLoginApp -Xlinker __cgpreloginapp -Xlinker /dev/null
 cp "$ROOT_DIR/Resources/Info.plist" "$BUILD_APP/Contents/Info.plist"
 cp "$ROOT_DIR/Resources/AppIcon.icns" "$BUILD_APP/Contents/Resources/AppIcon.icns"
-ditto "$ROOT_DIR/Web" "$BUILD_APP/Contents/Resources/Web"
+# 复制目录：优先 ditto（保留扩展属性与资源分支）；受限/沙箱环境下 ditto 会在写自己的
+# .BC.T_* 临时文件时被拒（Operation not permitted），退回 cp -R，否则本地打包永远装不成。
+copy_tree() {
+  local src="$1" dst="$2"
+  if ditto "$src" "$dst" 2>/dev/null; then return 0; fi
+  rm -rf "$dst"
+  cp -R "$src" "$dst"
+}
+copy_tree "$ROOT_DIR/Web" "$BUILD_APP/Contents/Resources/Web"
 # 固定 designated requirement，避免每次本地重编译都因 CDHash 改变而丢失辅助功能授权。
 # 这是本机开发签名策略；正式分发时应替换为 Apple Developer ID 签名。
 codesign --force --sign - --requirements '=designated => identifier "dev.voicedeck.app"' "$BUILD_APP"
 rm -rf "$INSTALL_APP"
-ditto "$BUILD_APP" "$INSTALL_APP"
+copy_tree "$BUILD_APP" "$INSTALL_APP"
 # 清理历史更名遗留的安装目录（Voice Deck / Pocket Deck）。
 if [ "$INSTALL_DIR/Voice Deck.app" != "$INSTALL_APP" ]; then rm -rf "$INSTALL_DIR/Voice Deck.app"; fi
 if [ "$INSTALL_DIR/Pocket Deck.app" != "$INSTALL_APP" ]; then rm -rf "$INSTALL_DIR/Pocket Deck.app"; fi
