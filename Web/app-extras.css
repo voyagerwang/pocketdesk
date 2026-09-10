@@ -679,6 +679,7 @@ main.pad-mode .pad-title {
 
 /* 实时倾角条：练习时显示手机前倾幅度，绿色表示已达成“抬起”相位。 */
 .wrist-meter {
+  position: relative;
   margin-top: var(--s-2);
   height: 8px;
   border-radius: var(--r-pill);
@@ -694,4 +695,42 @@ main.pad-mode .pad-title {
 }
 .wrist-meter-fill.is-lift {
   background: var(--accent);
+}
+
+/* 刻度上的阈值标记：条子越过这条线就是“会发送”的角度，标定时有绝对参照。 */
+.wrist-meter-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--fg);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* 练习读数：大字实时倾角 + 小字阈值/最大角，测完能直接说出“差几度”。 */
+.wrist-gauge {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-top: var(--s-2);
+}
+
+.wrist-angle {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.wrist-angle.is-lift { color: var(--accent); }
+
+.wrist-meta {
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }

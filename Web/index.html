@@ -21,7 +21,7 @@
       })();
     </script>
     <link rel="stylesheet" href="/style.css?v=3.0.13" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
-    <link rel="stylesheet" href="/app-extras.css?v=3.0.2">
+    <link rel="stylesheet" href="/app-extras.css?v=3.0.3">
     <link rel="stylesheet" href="/screen.css?v=3.1.0">
   </head>
   <body data-page-node-id="2eqrPm23J7ToUXDDq0CibO">
@@ -153,21 +153,25 @@
             <div class="sheet-row">
               <span>灵敏度</span>
               <select id="wrist-sensitivity">
-                <option value="low">低（需明显前倾）</option>
-                <option value="medium" selected>中</option>
-                <option value="high">高（轻动作即可）</option>
+                <option value="low">低 30°</option>
+                <option value="medium" selected>中 22°</option>
+                <option value="high">高 15°</option>
               </select>
             </div>
             <button id="wrist-practice" type="button" class="sheet-btn" aria-pressed="false">练习（不发消息）</button>
-            <div class="wrist-meter" aria-hidden="true"><div id="wrist-meter-fill" class="wrist-meter-fill"></div></div>
-            <p id="wrist-status" class="sheet-hint" aria-live="polite">练习时这里显示实时倾角与检测。</p>
+            <div class="wrist-gauge" aria-hidden="true">
+              <span id="wrist-angle" class="wrist-angle">0°</span>
+              <span id="wrist-meta" class="wrist-meta">阈值 22° · 本次最大 —</span>
+            </div>
+            <div class="wrist-meter" aria-hidden="true"><div id="wrist-meter-fill" class="wrist-meter-fill"></div><span id="wrist-meter-mark" class="wrist-meter-mark"></span></div>
+            <p id="wrist-status" class="sheet-hint" aria-live="polite">点「练习」看实时角度与本次最大倾角。</p>
           </section>
         </div>
       </div>
     </dialog>
     <script src="/app.js?v=3.0.23"></script>
     <script src="/pad.js?v=3.0.11"></script>
-    <script src="/settings.js?v=3.0.2"></script>
+    <script src="/settings.js?v=3.0.3"></script>
     <script src="/compose-queue.js?v=3.0.17"></script>
     <script src="/compose.js?v=3.0.23"></script>
     <script src="/screen-geometry.js?v=3.0.2"></script>
