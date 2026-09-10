@@ -1,7 +1,8 @@
 /**
- * [INPUT]: 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 ScreenCapture 的鉴权画面读取、Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
+ * [INPUT]: 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 LiveInputReceipt 的草稿模式回执、InputBinding 的输入上下文、控制租约校验闭包与 ScreenCapture 的鉴权画面读取、Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
  * [OUTPUT]: 对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活/发送/图片预上传/快捷键触发、静态页面服务；非回环写请求强制 Bearer 校验）。
- * [POS]: Sources 的传输层；只翻译协议不做系统调用，与 WSServer（触控板通道）平行为一对传输兄弟。
+ * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
+ * [POS]: Sources 的传输层；只翻译协议不做系统调用，与 WSServer（控制/光标）和 FrameServer（持续画面）并列。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
@@ -9,6 +10,7 @@ import Foundation
 import Network
 
 final class Server {
+    var controlAuthorized: (String) -> Bool = { _ in false }
     private let screenCapture = ScreenCapture()
     private var captureBusy = false
     // 系统对每个安装只弹一次录屏授权窗，重复调用不再弹。记住"已请求过"，
@@ -20,6 +22,8 @@ final class Server {
     private let store: TargetStore
     private let queue = DispatchQueue(label: "dev.voicedeck.server")
     private var listener: NWListener?
+    private var secureListener: NWListener?
+    var secureTransport: SecureTransport?
     private var iconCache: [String: Data] = [:]
     private var phoneLastSeen: TimeInterval = 0
     // 图片走 base64 JSON 体，2MB 远远不够；放宽到 12MB（客户端已把图压到 2048px JPEG）。
@@ -36,7 +40,7 @@ final class Server {
         let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port)!)
         // 在局域网服务浏览器中以独立身份出现，不借用 Workbench 等其他本机服务。
         listener.service = NWListener.Service(name: "PocketDesk", type: "_http._tcp")
-        listener.newConnectionHandler = { [weak self] in self?.accept($0) }
+        listener.newConnectionHandler = { [weak self] in self?.accept($0, secure: false) }
         listener.stateUpdateHandler = { state in
             if case let .failed(error) = state { fputs("服务器失败：\(error)\n", stderr) }
         }
@@ -44,19 +48,25 @@ final class Server {
         listener.start(queue: queue)
     }
 
-    private func accept(_ connection: NWConnection) {
+    func startSecure(_ transport: SecureTransport) throws {
+        let listener = try NWListener(using: transport.parameters(), on: NWEndpoint.Port(rawValue: SecureTransport.port)!)
+        listener.newConnectionHandler = { [weak self] in self?.accept($0, secure: true) }
+        secureTransport = transport; secureListener = listener; listener.start(queue: queue)
+    }
+
+    private func accept(_ connection: NWConnection, secure: Bool) {
         connection.start(queue: queue)
-        receiveRequest(connection, buffer: [])
+        receiveRequest(connection, buffer: [], secure: secure)
     }
 
     // 完整读取请求头与 Content-Length 声明的请求体（图标上传的 base64 体可达数百 KB）。
-    private func receiveRequest(_ connection: NWConnection, buffer: [UInt8]) {
+    private func receiveRequest(_ connection: NWConnection, buffer: [UInt8], secure: Bool) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 262_144) { [weak self] data, _, isComplete, error in
             guard let self, error == nil else { connection.cancel(); return }
             var buffer = buffer
             if let data { buffer.append(contentsOf: data) }
             guard let headerEnd = buffer.firstRange(of: Array("\r\n\r\n".utf8)) else {
-                if isComplete || buffer.count > 65_536 { connection.cancel() } else { self.receiveRequest(connection, buffer: buffer) }
+                if isComplete || buffer.count > 65_536 { connection.cancel() } else { self.receiveRequest(connection, buffer: buffer, secure: secure) }
                 return
             }
             let headerText = String(decoding: buffer[0..<headerEnd.lowerBound], as: UTF8.self)
@@ -64,11 +74,11 @@ final class Server {
             if contentLength > self.maxBodyBytes { self.respond(connection, status: 413, json: ["error": "请求体过大。"]); return }
             let total = headerEnd.upperBound + contentLength
             if buffer.count < total {
-                if isComplete { connection.cancel() } else { self.receiveRequest(connection, buffer: buffer) }
+                if isComplete { connection.cancel() } else { self.receiveRequest(connection, buffer: buffer, secure: secure) }
                 return
             }
             let body = Array(buffer[headerEnd.upperBound..<total])
-            self.route(headerText: headerText, body: body, connection: connection)
+            self.route(headerText: headerText, body: body, connection: connection, secure: secure)
         }
     }
 
@@ -105,7 +115,7 @@ final class Server {
     }
 
 
-    private func route(headerText: String, body: [UInt8], connection: NWConnection) {
+    private func route(headerText: String, body: [UInt8], connection: NWConnection, secure: Bool) {
         let requestLine = headerText.components(separatedBy: "\r\n").first ?? ""
         let parts = requestLine.split(separator: " ")
         let method = parts.first.map(String.init) ?? ""
@@ -117,9 +127,34 @@ final class Server {
         // 写端点鉴权：手机 token 来自扫码 URL；控制台走 localhost 回环豁免（本机即机主）。
         let isWrite = method != "GET"
         let fromLoopback = Self.isLoopback(connection)
-        if (isWrite || path.hasPrefix("/api/screen/")) && !fromLoopback && !Auth.verify(authorizationHeader: authorization) {
+        if (isWrite || path.hasPrefix("/api/screen/") || path == "/api/input-context") && !fromLoopback && !Auth.verify(authorizationHeader: authorization) {
             respond(connection, status: 401, json: ["error": "未授权：请重新扫码连接。"])
             return
+        }
+
+        // 密码端点仅接受真实 TLS 监听器；客户端头部不能冒充 HTTPS。回环也必须认证。
+        if path.hasPrefix("/api/unlock/") {
+            guard secure, Auth.verify(authorizationHeader: authorization) else {
+                respond(connection, status: 403, json: ["error": "解锁需要已配对的 HTTPS 连接。"]); return
+            }
+            let session = Self.headerValue("X-PocketDesk-Session", in: headerText) ?? ""
+            guard controlAuthorized(session) else {
+                respond(connection, status: 409, json: ["error": "请先取得控制权。"]); return
+            }
+            if method == "POST" && path == "/api/unlock/prepare" {
+                let result = LockScreenInput.shared.prepare(session: session)
+                respond(connection, status: result["error"] == nil ? 200 : 409, json: result); return
+            }
+            if method == "POST" && path == "/api/unlock/submit", bodyData.count <= 4096,
+               let object = try? JSONSerialization.jsonObject(with: bodyData) as? [String: String],
+               let password = object["password"], let challenge = object["challenge"] {
+                LockScreenInput.shared.submit(password: password, id: challenge, session: session,
+                    authorized: { [weak self] in self?.controlAuthorized(session) == true }) { result in
+                    self.queue.async { self.respond(connection, status: result["error"] == nil ? 200 : 409, json: result) }
+                }
+                return
+            }
+            respond(connection, status: 400, json: ["error": "无效的解锁请求。"]); return
         }
 
         switch (method, path) {
@@ -130,7 +165,7 @@ final class Server {
         // 锁屏状态刻意单独成端点：它只读会话字典，不碰 ScreenCaptureKit。
         // 锁屏时 ScreenCaptureKit 本身就会失败，把状态塞进同一个响应里等于永远问不出来。
         case ("GET", "/api/screen/state"):
-            respond(connection, status: 200, json: ["locked": Util.isScreenLocked()])
+            respond(connection, status: 200, json: ["locked": LockScreenInput.locked, "state": LockScreenInput.state, "unlockAvailable": secure && AXIsProcessTrusted()])
         // 唤醒显示器（只对"没锁屏、只是屏幕睡了"有效；真锁屏时它只点亮锁屏界面）。
         case ("POST", "/api/screen/wake"):
             Util.wakeDisplay()
@@ -160,7 +195,7 @@ final class Server {
                         let displays = try await screenCapture.displays()
                         queue.async {
                             self.captureBusy = false
-                            self.respond(connection, status: 200, json: ["displays": displays])
+                            self.respond(connection, status: 200, json: ["displays": displays, "streamPort": secure ? SecureTransport.port + 2 : (self.port < 65534 ? self.port + 2 : 46389)])
                         }
                     }
                 } catch {
@@ -195,6 +230,7 @@ final class Server {
                 "lanURL": (stableURL ?? lanIP.map { "http://\($0):\(port)" }) as Any?,
                 "ipURL": lanIP.map { "http://\($0):\(port)" } as Any?,
                 "remoteURL": tailscaleURL ?? "",
+                "secureURL": secureTransport == nil ? "" : (lanIP.map { "https://\($0):\(SecureTransport.port)" } ?? ""),
                 "hostName": Util.stableHost() ?? "",
                 "frontmostId": frontmostId as Any?,
                 "frontmostName": frontmost?.localizedName as Any?,
@@ -230,6 +266,12 @@ final class Server {
                 "focusProbe": InputExecutor.lastFocusProbe,
             ]
             respond(connection, status: 200, json: payload)
+        case ("GET", "/api/input-context"):
+            guard controlAuthorized(Self.headerValue("X-PocketDesk-Session", in: headerText) ?? "") else {
+                respond(connection, status: 409, json: ["error": "控制权已变化，请先接管控制。"]); return
+            }
+            let binding = InputBinding.shared.establish()
+            respond(connection, status: binding["context"] == nil ? 409 : 200, json: binding)
         case ("GET", "/api/focus-probe"):
             // 只读：不注入任何事件，只回答"现在谁拿着键盘焦点"。排查焦点误报用。
             respond(connection, status: 200, json: InputExecutor.probeFrontmostFocus())
@@ -242,6 +284,8 @@ final class Server {
             let lanIP = Util.primaryLANAddress()
             let target: String?
             switch Self.queryValue("type", in: rawPath) {
+            case "secure":
+                target = secureTransport == nil ? nil : lanIP.map { "https://\($0):\(SecureTransport.port)" }
             case "ip":
                 target = lanIP.map { "http://\($0):\(port)" }
             case "tailscale":
@@ -349,15 +393,16 @@ final class Server {
                 }
             }
         case ("POST", "/api/live-input"):
-            // 实时同频：手机端把输入框全文发来，服务端按差异增量对齐电脑端输入框；
-            // submit=true 时对齐后再补一次 Return，等价于「内容已在框里 + 按回车」。
+            // 草稿快照：回执区分直接替换、手机暂存和提交动作，图文在同一事务内处理。
             guard let command = try? JSONDecoder().decode(LiveInputCommand.self, from: bodyData) else {
                 respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
             }
-            executor.mirror(command) { result in
+            executor.mirror(command, authorized: { [weak self] in
+                command.context == nil || self?.controlAuthorized(command.session ?? "") == true
+            }) { result in
                 switch result {
                 case .success(let feedback):
-                    self.respond(connection, status: 200, json: ["ok": true, "outcome": feedback.outcome.rawValue, "detail": feedback.detail])
+                    self.respond(connection, status: 200, json: feedback.dictionary)
                 case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
                 }
             }
@@ -382,11 +427,18 @@ final class Server {
                   let png = Data(base64Encoded: upload.data) else {
                 respond(connection, status: 400, json: ["error": "图片数据无效。"]); return
             }
-            executor.stageImage(png) { result in
+            let finish: (Result<Void, InputError>) -> Void = { result in
                 switch result {
                 case .success: self.respond(connection, status: 200, json: ["ok": true])
                 case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
                 }
+            }
+            if let batchId = upload.batchId, let imageId = upload.imageId {
+                executor.stageImage(batchId: batchId, imageId: imageId, data: png, completion: finish)
+            } else if upload.batchId == nil, upload.imageId == nil {
+                executor.stageImage(png, completion: finish)
+            } else {
+                respond(connection, status: 400, json: ["error": "图片批次信息不完整。"])
             }
         case ("POST", "/api/shortcut-trigger"):
             guard let shortcut = try? JSONDecoder().decode(ShortcutConfig.self, from: bodyData) else {
@@ -405,7 +457,7 @@ final class Server {
             }
         case ("GET", "/"), ("GET", "/index.html"):
             serveFile("index.html", connection: connection)
-        case ("GET", "/screen.js"), ("GET", "/app.js"), ("GET", "/style.css"):
+        case ("GET", let asset) where ["unlock.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "app.js", "style.css", "app-extras.css", "screen.css"].contains(String(asset.dropFirst())):
             serveFile(String(path.dropFirst()), connection: connection)
         default:
             respond(connection, status: 404, json: ["error": "未找到资源。"])

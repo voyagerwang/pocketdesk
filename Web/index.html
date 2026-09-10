@@ -1,11 +1,8 @@
 <!--
-  [INPUT]: 依赖 screen.js 的鉴权截图查看器（PiP 浮窗 + 整层全屏两种形态，非模态浮层），依赖 style.css 的设计令牌与 app.js 的 Dock、触控板手势与 WebSocket 通道。
-  [OUTPUT]: 单页布局：顶部（标题 + 当前应用 + 连接状态）、单行滚动 Dock、可展开触控板卡片（设置默认收起）、
-            按需打开的电脑画面查看器（可拖可缩的 PiP 浮窗，浮层只留切屏键与刷新/关闭两个圆形图标按钮，
-            无状态条；关闭即回主页面）；输入区（输入框下方的历史发送面板：清空带二次确认、收起按钮；图片预览）；
-            目标选中态跟随 Mac 前台应用；主题跟随电脑端（/api/status 下发，Muji ↔ classic；localStorage 只做刷新闪烁缓解，无切换按钮）。
-  [POS]: Web 的唯一页面入口；只收集文本与手势，绝不处理或上传语音。
-  [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ [INPUT]: 依赖 app/pad/compose 的首页、多图批次和输入能力，以及 screen 系列模块的画面工作台。
+ [OUTPUT]: 提供首页 Dock、原生多图文件选择与缩略图容器、触控板、草稿、锁屏密码表单和 PiP/全屏工作台。
+ [POS]: Web 唯一手机入口；只收集文本与手势，听写由手机输入法提供。
+ [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
 <!doctype html>
 <html lang="zh-CN" data-page-node-id="VTBJVFChhQ27I8d5v4uvjR">
@@ -23,7 +20,9 @@
         } catch (e) { /* 无属性 = 经典蓝 */ }
       })();
     </script>
-    <link rel="stylesheet" href="/style.css?v=2.9.23" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
+    <link rel="stylesheet" href="/style.css?v=3.0.10" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
+    <link rel="stylesheet" href="/app-extras.css?v=3.0.0">
+    <link rel="stylesheet" href="/screen.css?v=3.1.0">
   </head>
   <body data-page-node-id="2eqrPm23J7ToUXDDq0CibO">
     <main data-page-node-id="vqfJmN7gi1ptl0qmDEQ4Iv">
@@ -46,7 +45,7 @@
             </svg>
           </button>
           <span class="pad-badge" data-page-node-id="zqwDwvua28BQWIg8Q1oRDZ">拖动中</span>
-          <span class="pad-title" data-page-node-id="FxPaRcuOlIwaIyFSk04wty">触控板</span>
+          <span class="pad-title" data-page-node-id="FxPaRcuOlIwaIyFSk04wty">轻点使用触控板</span>
           <p class="pad-hint" data-page-node-id="yZEiDx9vFDf9Xf2X0mRPTD">单击左键 · 双指单击右键</p>
         </div>
         <div class="pad-tuning" data-page-node-id="ZcHI4QpJsvUZIf5hCssf9r">
@@ -69,10 +68,6 @@
           <div id="history-list" data-page-node-id="JflToNfQz45VYZ5osaAEO1"></div>
         </div>
         <div id="image-preview" class="image-preview" hidden data-page-node-id="Yv01Wj6ITyutHDY731iuHu">
-          <img id="image-thumb" alt="待发送图片" data-page-node-id="EaBonH5GvKe65WVFG9MKBH">
-          <button id="image-remove" class="image-remove" type="button" title="移除图片" aria-label="移除图片" data-page-node-id="N8jRoA4XiGC6DyO3SZFRSX">
-            <svg viewBox="0 0 24 24" aria-hidden="true" data-page-node-id="HdlgeQ7LFPXea6MxdQKl9F"><line x1="6" y1="6" x2="18" y2="18" data-page-node-id="pYp6lz6JrxEzJDnL1omFbJ"/><line x1="18" y1="6" x2="6" y2="18" data-page-node-id="gXSyd2xnb8ANv85jndt6NX"/></svg>
-          </button>
         </div>
         <div id="shortcut-bar" class="shortcut-bar edge-fade scroll-cue" hidden data-page-node-id="TeaIlnxQNQ7RaraSz0Zmay"></div>
         <div class="send-row" data-page-node-id="em7FkzTZWSz9iYE83BULnD">
@@ -85,112 +80,72 @@
           <button id="screen-open" class="screen-open" type="button" aria-pressed="false" title="查看电脑画面" data-page-node-id="n7WGB3CIpFwMMxZX1c8yKE">
             <svg viewBox="0 0 24 24" aria-hidden="true" data-page-node-id="LgtCWtt1S0O2GtHHTNOcmF"><rect x="3" y="4" width="18" height="13" rx="2" data-page-node-id="N8IWiFon4CclsmzvNKXHnZ"/><path d="M8 21h8M12 17v4" data-page-node-id="BXWJc8Gq2yirAo1sKFnQ7n"/></svg>
           </button>
-          <input id="image-file" type="file" accept="image/*" hidden data-page-node-id="eyMy1tCUZvWADnbckpI1fH">
+          <input id="image-file" type="file" accept="image/*" multiple hidden data-page-node-id="eyMy1tCUZvWADnbckpI1fH">
           <button id="send" type="button" data-page-node-id="lFyNzZ6hu8yMEIr9gF4sTE">发送</button>
         </div>
         <p id="message" role="status" aria-live="polite" data-page-node-id="e6wlP1uFgkcWptXxGMIOmZ"></p>
       </section>
     </main>
 
-    <!-- 画面查看器两种形态：可拖可缩的 PiP 浮窗（默认）与整层全屏（点全屏按钮进入）。
-         PiP 浮窗避开连接胶囊与输入区；非模态 dialog，开着时主页触控板仍可操作；转屏交给手机自己转。
-         全屏态：单指=远端单击/双击/移动/拖动，双指=捏合缩放(1x–6x)与平移画面，退出全屏 / 关闭 / 换显示器时归位；
-         全屏还会请求横屏（Android Chrome 能锁，iOS Safari 锁不了方向，只补一句「请把手机横过来」的引导）。 -->
-    <dialog id="screen-view" class="screen-view pip" aria-label="电脑画面" data-page-node-id="oBKsEUqceSoXtW2Ix3yFkj">
-      <div class="screen-resize nw" data-page-node-id="I3HtA1b2c4d5e6f7g8h9i0" aria-hidden="true"></div>
-      <div class="screen-resize n"  data-page-node-id="J4HuB2c3d5e6f7g8h9i0j1" aria-hidden="true"></div>
-      <div class="screen-resize ne" data-page-node-id="K5HvC3d4e6f7g8h9i0j1k2" aria-hidden="true"></div>
-      <div class="screen-resize e"  data-page-node-id="L6HwD4e5f7g8h9i0j1k2l3" aria-hidden="true"></div>
-      <div class="screen-resize se" data-page-node-id="M7HxE5f6g8h9i0j1k2l3m4" aria-hidden="true"></div>
-      <div class="screen-resize s"  data-page-node-id="N8HyF6g7h9i0j1k2l3m4n5" aria-hidden="true"></div>
-      <div class="screen-resize sw" data-page-node-id="O9HzG7h8i0j1k2l3m4n5o6" aria-hidden="true"></div>
-      <div class="screen-resize w"  data-page-node-id="P0I0H8i9j0k1l2m3n4o5p6" aria-hidden="true"></div>
-      <div class="screen-viewport" data-page-node-id="DT8HFKuwU9tZ1JzLIsaNkT">
-        <div id="screen-empty" class="screen-empty" data-page-node-id="tXSuXRFv3ZLPR1U9xQDsPO">
-          <p id="screen-empty-title" data-page-node-id="vS8LGZphFskOPSmGKA70da">正在获取画面…</p>
-          <p id="screen-empty-help" data-page-node-id="2auXDaaOxIjH9fi5rk5x2J">稍等片刻，就能看到电脑当前屏幕。</p>
-          <button id="screen-permission" type="button" hidden data-page-node-id="ygFHA63wx4xGTyEtuJ2G8m">在电脑上请求授权</button>
-        </div>
-        <img id="screen-image" alt="电脑当前画面" hidden data-page-node-id="mdQOYVFRBOmb2tjUlE9tRA">
-        <!-- 鼠标叠加层：位置来自 30Hz 的坐标通道，与 1fps 的画面各走各的路。
-             只指示位置，不假装复刻系统光标形状；pointer-events:none 才不挡住点画面。 -->
-        <div id="screen-cursor" class="screen-cursor" hidden aria-hidden="true" data-page-node-id="qR2sT3uV4wX5yZ6aB7cD8e">
-          <svg viewBox="0 0 12 18" width="12" height="18" aria-hidden="true">
-            <path d="M1 1 L1 14 L4.5 10.5 L7 16.5 L9.2 15.5 L6.7 9.8 L11 9.8 Z" fill="#fff" stroke="#000" stroke-width="1.1" stroke-linejoin="round"></path>
-          </svg>
-        </div>
-        <!-- 本地触点环（§6 层1）：手指接触即时反馈，只代表收到触摸，不代表 Mac 已执行。
-             放在 viewport 内、随 .rotated 一起转，用局部坐标定位，不需单独处理旋转。 -->
+    <!-- 全屏工作台：画面视野、正立操作栏、输入区各占独立区域。 -->
+    <dialog id="screen-view" class="screen-view pip" aria-label="电脑画面">
+      <div class="screen-viewport">
+        <div class="screen-surface">
+        <img id="screen-image" alt="电脑当前画面" hidden draggable="false">
+        <div id="screen-empty" class="screen-empty"><strong>正在连接电脑画面…</strong><p id="screen-empty-help"></p><button id="screen-permission" type="button" hidden>请求录屏授权</button></div>
+        <div id="screen-cursor" class="screen-cursor" hidden aria-hidden="true"><svg viewBox="0 0 12 18"><path d="M1 1L1 14L4.5 10.5L7 16.5L9.2 15.5L6.7 9.8L11 9.8Z"/></svg></div>
+        <div id="screen-aim" class="screen-aim" hidden aria-hidden="true"></div>
         <div id="screen-touch" class="screen-touch" hidden aria-hidden="true"></div>
+        </div>
       </div>
-      <!-- 显示器列表只此一份数据源；浮层切换键与右侧滑动手势都是它的视图，
-           两者都走同一条 change 流程，不另写一套拉流。 -->
-      <select id="screen-display" aria-label="选择显示器" hidden data-page-node-id="zNi6O8ZCcbeudUgV8VzQ2E"></select>
-
-      <!-- 浮层：画面之上没有正文流可放控件，一律浮起来。
-           只留三样真的用得上的：多显示器时的切屏键（左）、全屏 / 刷新 / 关闭 三个图标按钮（右）。
-           浮窗态常态淡出（小小的浮窗不该被按钮吃掉一半），悬停或点一下浮窗再淡入。
-           整块浮窗都能拖（按钮与 8 个缩放 handle 除外），所以没有专门的把手元素。 -->
-      <div class="screen-hud screen-hud-top" data-page-node-id="iE93dIZMIxdV0n1EQ7tFK5">
-        <button id="screen-display-switch" class="hud-chip" type="button" hidden data-page-node-id="HZUPrdxcOlmVoW0TGrAydn"></button>
-        <!-- 全屏右键 / 滚动工具（§3）：仅全屏态显示（.fs-only）。右键作用于最近一次远端光标位置
-             （先点画面把光标移到目标处，再点此）；滚动工具开启后单指拖=滚动、不与"单指控电脑"抢同一根手指。
-             两者点击都有 toast 反馈（见 screen.js showToast），否则手机端无可见反馈会像没反应。 -->
-        <button id="screen-rightclick" class="hud-icon fs-only" type="button" title="右键" aria-label="右键" data-page-node-id="RcP00001">
-          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-            <path d="M9 3 v9 l-2.5 -2.5 M6.5 9.5 L12 15 V4 a1 1 0 0 0 -1 -1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="translate(3 2)"></path>
-          </svg>
-        </button>
-        <button id="screen-scroll" class="hud-icon fs-only" type="button" title="滚动工具" aria-label="滚动工具（开启后单指拖=滚动）" data-page-node-id="ScT00001">
-          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-            <path d="M12 4 v16 M12 4 l-4 4 M12 4 l4 4 M12 20 l-4 -4 M12 20 l4 -4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-          </svg>
-        </button>
-        <span class="hud-spacer" data-page-node-id="Y9FM6SFv1GJio5Ph6qXKnf"></span>
-        <button id="screen-fullscreen" class="hud-icon" type="button" title="全屏" aria-label="全屏" data-page-node-id="aB1cD2eF3gH4iJ5kL6mN7o">
-          <!-- 两个图标各管一个方向，由 .fullscreen 类决定谁显形，JS 不碰 DOM。 -->
-          <svg class="fs-expand" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-            <path d="M9 3 H3 V9 M15 3 H21 V9 M21 15 V21 H15 M9 21 H3 V15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-          </svg>
-          <svg class="fs-collapse" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-            <path d="M3 9 H9 V3 M15 3 V9 H21 M21 15 H15 V21 M9 21 V15 H3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-          </svg>
-        </button>
-        <button id="screen-refresh" class="hud-icon" type="button" title="刷新画面" aria-label="刷新画面" data-page-node-id="zGEoCXDQlWP27L7szltcUK">
-          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-            <path d="M23 4v6h-6M1 20v-6h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-          </svg>
-        </button>
-        <button id="screen-close" class="hud-icon" type="button" title="关闭画面" aria-label="关闭画面" data-page-node-id="e3ep84aA0wFXns6hgT0hHX">
-          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
-            <path d="M18 6 L6 18 M6 6 L18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-          </svg>
-        </button>
-        <!-- 全屏键盘图标（#kb-toggle）：唯一的"点此才弹键盘"入口，与右侧常用按钮（全屏/刷新/关闭）一组；
-             仅全屏态显示（靠 .fs-only）。点画面不再自动弹键盘（见 screen.js / app.js）。再点一下收起。 -->
-        <button id="kb-toggle" class="hud-icon kb-toggle fs-only" type="button" title="键盘" aria-label="唤起键盘" data-page-node-id="KbT00001">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-            <rect x="2" y="6" width="20" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"></rect>
-            <path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-            <path d="M7 14h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-          </svg>
-        </button>
+      <nav id="screen-pip-displays" class="screen-pip-displays" aria-label="小窗显示器切换"></nav>
+      <div id="screen-pip-tools" class="screen-pip-tools">
+        <button id="screen-fullscreen" type="button" aria-label="进入全屏" title="进入全屏"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg></button>
+        <button id="screen-pip-close" type="button" aria-label="关闭画面" title="关闭画面"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
-
-      <!-- 原生键盘唤起代理：一个 1px 的隐形输入框，唯一职责是拿到焦点、弹出原生键盘、接住 IME。
-           浏览器只对真正可聚焦的元素弹键盘，所以这个"看不见的输入框"省不掉。
-           放进 dialog 内部是为了原生全屏（requestFullscreen）时它仍在渲染树里——
-           挂在外面的话，进入原生全屏后整份文档只剩 panel 一个元素，代理直接失焦、键盘弹不出来。
-           刻意钉在左上角：贴底的话浏览器为了把焦点元素露出来会滚动整页，画面就被"顶上去"了。 -->
-      <textarea id="kb-proxy" class="kb-proxy" rows="1" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" spellcheck="false" aria-label="唤起键盘" data-page-node-id="KbP00001"></textarea>
+      <nav class="screen-toolbar" aria-label="全屏操作">
+        <button id="screen-back" type="button"><svg viewBox="0 0 24 24"><path d="M14 5l-7 7 7 7"/></svg><span>返回</span></button>
+        <button id="kb-toggle" type="button" aria-pressed="false"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h1m3 0h1m3 0h1M7 12h1m3 0h1m3 0h1M8 16h8"/></svg><span>键盘</span></button>
+        <button id="screen-switch" type="button" aria-label="切换显示器" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg><span>屏幕 1</span></button>
+        <button id="screen-more" type="button" aria-expanded="false"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg><span>更多</span></button>
+      </nav>
+      <div id="screen-notice" class="screen-notice" role="status" aria-live="polite" hidden></div>
+      <form id="unlock-form" hidden autocomplete="off" aria-label="解锁电脑">
+        <label for="unlock-password">电脑已锁屏</label>
+        <input id="unlock-password" type="password" maxlength="256" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Mac 登录密码" aria-label="Mac 登录密码">
+        <button id="unlock-submit" type="submit">解锁</button>
+        <p id="unlock-note" role="status"></p>
+      </form>
+      <section id="screen-menu" class="screen-menu" aria-label="画面与操作设置" hidden>
+        <div class="screen-section-head"><strong>画面与操作</strong><button id="screen-menu-close" type="button">完成</button></div>
+        <button id="screen-mode" type="button" aria-label="切换触屏与指针"><svg viewBox="0 0 24 24"><path d="M5 3l14 10-7 1-3 7z"/></svg><span>触屏</span></button>
+        <label>显示器<select id="screen-display" aria-label="显示器"></select></label>
+        <label>画面清晰度<select id="screen-quality"><option value="1280">流畅 · 1280</option><option value="1920">清晰 · 1920</option></select></label>
+        <div class="screen-menu-grid"><button id="screen-fit" type="button">适应画面</button><button id="screen-adjust" type="button">调整视野</button><button id="screen-rightclick" type="button">指针处右键</button><button id="screen-refresh" type="button">重新连接画面</button><button id="screen-watch" type="button" aria-pressed="false">仅观看：关</button><button id="screen-takeover" type="button">接管控制</button></div>
+        <p id="screen-help">点按操作 · 单指滑动阅读 · 双指缩放 · 长按显示操作</p>
+        <div id="screen-shortcuts" class="screen-menu-grid" aria-label="常用快捷键"></div>
+        <button id="screen-close" type="button">关闭电脑画面</button>
+      </section>
+      <div id="screen-context" class="screen-context" hidden><button id="screen-context-right" type="button">此处右键</button><button id="screen-context-drag" type="button">从此处拖动</button><button id="screen-context-cancel" type="button">取消</button></div>
+      <section id="screen-compose" class="screen-compose" aria-label="输入到电脑" hidden>
+        <div class="screen-compose-bar">
+          <div id="screen-compose-editor"><textarea id="kb-proxy" class="kb-proxy" rows="1" enterkeyhint="enter" autocomplete="off" autocapitalize="sentences" spellcheck="false" aria-label="输入到电脑" placeholder="输入文字…"></textarea></div>
+          <button id="screen-send" type="button" aria-label="发送文字" title="发送文字" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
+          <button id="screen-keyboard-close" type="button" aria-label="收起键盘" title="收起键盘"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+        </div>
+        <div id="screen-input-status" role="status" hidden></div>
+      </section>
     </dialog>
-
-    <!-- 全屏时点画面（点输入框）唤起的是**手机原生键盘本身**，这里没有、也不该有任何可见面板。
-         原因很实在：竖屏全屏会把整层转 90°（.rotated），右上角的最小化/刷新/关闭转到了手机右侧，
-         任何贴底的网页面板都会压住它们——那几个键是退出全屏的唯一出路，压住等于把人锁死在全屏里。
-         发送键同理不自造：原生键盘右下角就是"发送"（enterkeyhint=send），按它等于回车提交。 -->
-    <script src="/app.js?v=2.9.23"></script>
-    <script src="/screen.js?v=2.9.23"></script>
+    <script src="/app.js?v=3.0.22"></script>
+    <script src="/pad.js?v=3.0.10"></script>
+    <script src="/compose-queue.js?v=3.0.17"></script>
+    <script src="/compose.js?v=3.0.22"></script>
+    <script src="/screen-geometry.js?v=3.0.2"></script>
+    <script src="/screen-gestures.js?v=3.0.12"></script>
+    <script src="/screen-pip.js?v=3.0.0"></script>
+    <script src="/screen-frames.js?v=3.1.0"></script>
+    <script src="/unlock.js?v=1"></script>
+    <script src="/screen.js?v=3.1.0"></script>
+    <script>boot();</script>
   </body>
 </html>

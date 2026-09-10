@@ -1,6 +1,7 @@
 /**
  * [INPUT]: 依赖 CoreGraphics 的 CGEvent/CGDisplay 系列 API；消费 WSServer 转发的手势 JSON。
- * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、有效屏区域钳制、move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置、拒绝执行时经 onError 上报）。
+ * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、有效屏区域钳制、pointer 绝对拖动与 move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置、拒绝执行时经 onError 上报）。
+ * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的指针执行层；仅被 WSServer 消费，与 InputExecutor（键盘）平行为一对执行兄弟。
  *          维护的是**命令期望值**，与 CursorMonitor 的**观测值**严格分离，两者互不写入。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -23,6 +24,7 @@ final class PointerExecutor {
     /// 注意它不是系统真值——真值由 CursorMonitor 独立观测，两者不互相写入。
     private var expected: CGPoint?
     private var dragging = false
+    private var epoch: UInt64 = 0
     private var scrollRemainder = (x: 0.0, y: 0.0)
     private var scrollPhaseActive = false
     private var lastScrollAt: TimeInterval = 0
@@ -34,11 +36,13 @@ final class PointerExecutor {
     // 新的触控板会话（WS 连接建立）时调用：强制抬起可能卡住的左键，避免后续点击失效。
     func resetSession() {
         queue.async {
+            self.epoch &+= 1
             if self.dragging {
                 self.dragging = false
                 self.post(.leftMouseUp, at: self.basePosition())
             }
-            self.scrollPhaseActive = false
+            self.apply(["t": "scrollEnd"])
+            self.scrollRemainder = (0, 0)
         }
     }
 
@@ -108,10 +112,44 @@ final class PointerExecutor {
     }
 
     private func apply(_ command: [String: Any]) {
+        guard LockScreenInput.state == "unlocked" else { return }
         let type = command["t"] as? String ?? ""
         let dx = command["dx"] as? Double ?? 0
         let dy = command["dy"] as? Double ?? 0
+        guard dx.isFinite, dy.isFinite, abs(dx) < 100_000, abs(dy) < 100_000 else { return }
         switch type {
+        case "pointer":
+            let action = command["action"] as? String ?? ""
+            if action == "up" || action == "cancel" {
+                if dragging { dragging = false; post(.leftMouseUp, at: basePosition()) }
+                return
+            }
+            guard let rx = command["rx"] as? Double, let ry = command["ry"] as? Double,
+                  rx.isFinite, ry.isFinite, (0...1).contains(rx), (0...1).contains(ry),
+                  let display = command["display"] as? UInt32, let bounds = displayBounds(display) else {
+                onError?("画面坐标或显示器已失效，请刷新后重试。"); return
+            }
+            let point = CGPoint(x: min(bounds.maxX - 1, bounds.minX + rx * bounds.width),
+                                y: min(bounds.maxY - 1, bounds.minY + ry * bounds.height))
+            expected = point
+            switch action {
+            case "move": post(.mouseMoved, at: point)
+            case "down":
+                if !dragging { dragging = true; post(.leftMouseDown, at: point) }
+            case "drag":
+                guard dragging else { return }
+                post(.leftMouseDragged, at: point)
+            case "click":
+                let right = command["button"] as? String == "right"
+                let button: CGMouseButton = right ? .right : .left
+                let state = Int64(min(2, max(1, command["clickState"] as? Int ?? 1)))
+                post(.mouseMoved, at: point)
+                post(right ? .rightMouseDown : .leftMouseDown, at: point, button: button, clickState: state)
+                usleep(40_000)
+                post(right ? .rightMouseUp : .leftMouseUp, at: point, button: button, clickState: state)
+            default: break
+            }
+
         case "move", "drag":
             let base = basePosition()
             let next = clamped(CGPoint(x: base.x + dx, y: base.y + dy))
@@ -124,8 +162,8 @@ final class PointerExecutor {
             }
         case "tap":
             // 点画面移光标：比例坐标 → 目标显示器绝对坐标。先移动，可选顺带单击。
-            let rx = min(1, max(0, command["rx"] as? Double ?? 0))
-            let ry = min(1, max(0, command["ry"] as? Double ?? 0))
+            guard let rx = command["rx"] as? Double, let ry = command["ry"] as? Double,
+                  rx.isFinite, ry.isFinite, (0...1).contains(rx), (0...1).contains(ry) else { return }
             let displayID = command["display"] as? UInt32 ?? 0
             // 显示器已拔掉或 ID 失效时拒绝执行。以前的写法是静默回退主屏，
             // 那会把这次点击送到完全错误的应用上——宁可不点，也不能乱点。
@@ -171,16 +209,17 @@ final class PointerExecutor {
                 states = (1...count).map { Int64($0) }
             }
             // 按下与抬起间隔 40ms，双击按真实系统的 clickState 1→2 序列注入。
+            let scheduledEpoch = epoch
             for (index, state) in states.enumerated() {
                 let base = Double(index) * 0.12
                 let down: CGEventType = right ? .rightMouseDown : .leftMouseDown
                 let up: CGEventType = right ? .rightMouseUp : .leftMouseUp
                 queue.asyncAfter(deadline: .now() + base) { [weak self] in
-                    guard let self else { return }
+                    guard let self, self.epoch == scheduledEpoch else { return }
                     self.post(down, at: point, button: button, clickState: state)
-                    self.queue.asyncAfter(deadline: .now() + 0.04) {
-                        self.post(up, at: point, button: button, clickState: state)
-                    }
+                    // 同一串行执行片段内配对，接管/reset 不会与旧点击的抬起交错。
+                    usleep(40_000)
+                    self.post(up, at: point, button: button, clickState: state)
                 }
             }
         case "scroll":
@@ -211,6 +250,7 @@ final class PointerExecutor {
             }
         case "zoom":
             let delta = command["delta"] as? Double ?? 0
+            guard delta.isFinite, abs(delta) < 100_000 else { return }
             let wheel = Int32(round(delta * 8))
             guard wheel != 0 else { return }
             if let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
