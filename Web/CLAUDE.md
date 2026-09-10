@@ -53,3 +53,5 @@ unlock.js（手机输密码解锁电脑）已删除：该功能从未通过真�
 手机设置整合（3.0.23）：触控板内齿轮与 `.pad-tuning` 整体迁入 header 唯一入口 + 底部模态面板，旧 `show-tuning` 状态、`#pad-settings` 节点与 `padCard` 引用一并删除，`exitPadMode()` 不再顺手关面板。三个触控板控件的 ID、范围与 `pd-sens`/`pd-scroll`/`pd-ruler` 全部保留，读写仍在 pad.js。翻腕组以默认关闭的开关占位，未接入传感器前不提供可开启的假开关。
 
 翻腕发送落地（3.0.24）：新增 motion-recognizer.js（纯识别器）与 motion-send.js（传感器侧），经 `scripts/setup-secure-channel.sh` 生成的自签 CA 在 :46487 提供 HTTPS，满足手机运动传感器要求的安全上下文。能力门禁 `pocketdeskWristAvailable()` 现返回真实能力（不支持/非 HTTPS/未授权各有对应原因）；用户开启后复用 compose.js 的 `send()`，受 `pocketdeskCanMotionSend` 门禁约束（设定期/无草稿/输入中/提交中/组合态不误发）。设置面板内提供 iOS 授权按钮、灵敏度预设与「练习（不发消息）」实时倾角条。阈值默认保守、需在真机标定，尚未经过 iPhone/vivo 双机正式验证。
+
+翻腕标定读数（3.0.25）：灵敏度三档带度数直接写进下拉选项（随 `PRESETS` 自动同步），刻度条上画出阈值标记线；练习区改为大字实时倾角 + 「阈值 X° · 本次最大 Y°」读数，并区分「已触发 / 未发送：原因 / 等待抬起（需超过 X°）」。停止练习时给出结论（已达阈值可用 / 差几度或改调灵敏度），传感器不可用时直接说明原因而不是留一个永远不动的读数。灵敏度档位写入 `pd-motion-send` 的 `sens` 字段并在重新加载后灌回识别器；`updateWristUI()` 同时按偏好回填开关状态，避免刷新后开关显示与运行态不一致。settings.js 先于 motion-send.js 解析，故档位恢复放在 `DOMContentLoaded`。
