@@ -2,6 +2,8 @@
  * [INPUT]: 依赖 app.js 的草稿/目标/历史与多图处理门闩、ComposeQueue、原生 IME、全屏输入区。
  * [OUTPUT]: 提供可见输入栏、手机全文同步与图文提交；发送等待图片处理、补传完整批次并冻结附件编辑，失败保留草稿及附件；用户显式切换目标时保留内容并开启隔离的新草稿轮次。
  * [POS]: Web 输入编排层；每次提交等待自己的完成结果，不用同步成功代替提交成功。
+ *        手机侧同时兜住安卓 Chrome 的两处“点输入框不弹键盘”：键盘被收起后残留焦点的
+ *        再聚焦，以及点在内边距/空白处时的补聚焦；均只作用于粗指针设备。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 /* ---------- 草稿快照：通用应用持续实时同步，特殊远控才暂存 ---------- */
@@ -147,7 +149,10 @@ function recoverIME(el) {
 
 function wireHomeCompose(el) {
   wireComposeIME(el, false);
-  el.addEventListener('pointerdown', exitPadMode);
+  // 退出触控板模式只在 focus 上做：原先在 pointerdown 里同步摘掉 pad-mode，会让输入框
+  // 在这一次点按**还没结束时就**从 52px 撑回 140px；安卓会因此把这一下判成无效点按，
+  // 焦点拿不到、键盘也不弹。焦点到手后再变布局就与手势无关了。
+  el.addEventListener('pointerdown', releaseStaleFocus);
   el.addEventListener('focus', exitPadMode);
   el.addEventListener('keydown', handleHomeComposeKeydown);
 }
@@ -212,6 +217,33 @@ function wireComposeIME(el, mirrorTo, recover = recoverIME) {
 
 }
 wireHomeCompose(textEl);
+
+/* ---------- 主页输入框：安卓 Chrome 的“点了不弹键盘” ---------- */
+
+// 键盘被系统返回键/返回手势收走后，textarea 往往**仍然是 activeElement**；焦点没有变化，
+// Chrome 就不会再弹一次键盘——这时再点多少下都没反应。在 pointerdown 阶段先交还焦点
+// （不动内容与光标），随后这一次原生点按就是真正的焦点变化，键盘随之回来。
+// 键盘正开着时绝不动焦点：用户点正文是去挪光标的。
+// 键盘弹起时 Chrome 只收“视觉视口”，window.innerHeight 不变；落差 >120px 即视为键盘已展开。
+const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches === true;
+
+function keyboardExpanded() {
+  const vv = window.visualViewport;
+  return Boolean(vv) && vv.height < window.innerHeight - 120;
+}
+
+function releaseStaleFocus() {
+  if (!coarsePointer || submittingDraft) return;
+  if (document.activeElement === textEl && !keyboardExpanded()) textEl.blur();
+}
+
+// 手指落在卡片内边距/空白处时原生不聚焦，这里补一次；点按钮、滑杆不抢焦点。
+document.querySelector('.compose')?.addEventListener('click', event => {
+  if (submittingDraft) return;
+  if (document.activeElement === textEl) return;
+  if (event.target.closest('button, select, a, label, input')) return;
+  textEl.focus({ preventScroll: true });
+});
 // 浏览器在返回页面时可能恢复已有正文而不派发 input；首次目标未就绪由 boot 补齐。
 window.addEventListener('pageshow', () => { if (liveValue()) scheduleLive(); });
 
