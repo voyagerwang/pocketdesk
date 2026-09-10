@@ -169,14 +169,8 @@ rulerEl.addEventListener('change', () => {
   localStorage.setItem('pd-ruler', rulerEl.value);
 });
 
-/* ---------- 设置齿轮：默认收起，点开才显示滑杆 ---------- */
-
-padSettings.addEventListener('pointerdown', event => event.stopPropagation()); // 不触发触控板手势与 Mac 点击
-padSettings.addEventListener('click', event => {
-  event.stopPropagation();
-  const open = padCard.classList.toggle('show-tuning');
-  padSettings.setAttribute('aria-expanded', String(open));
-});
+/* 设置入口不在触控板里了：全局唯一入口在 header，由 settings.js 负责。
+   触控板只保留手势本身，不再兼管面板显隐，避免"删了 DOM 还留着监听"。 */
 
 let padActivationStart = null;
 pad.addEventListener('click', event => {

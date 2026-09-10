@@ -16,7 +16,9 @@ multi_image_browser.py: Playwright 模拟接口验证多选删除保序、上传
 
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 
-unlock.test.cjs: VM 隔离验证密码表单的明文阻断、提交清空、失控取消、关闭清空与拒绝不重试，无桌面副作用。
+phone-settings.test.cjs: 静态结构回归，验证首页设置入口唯一、触控板内无齿轮、三个旧控件 ID 与范围未变且未被复制第二份、翻腕开关默认关闭且不写死 disabled、翻腕偏好只存用户意愿、新脚本同时进入页面引用与 Server.swift 静态白名单。
+
+motion-recognizer.test.cjs: 纯函数识别器单测，覆盖正常翻腕触发与震动/扭转/转屏/短触/静止的拒绝，以及灵敏度预设差异；不依赖浏览器。
 
 输入追加回归：workspace_browser.py 验证暂停后删空携原 ID 核验、删空后继续输入及电脑原文不反填；screen-core.test.js 验证失败回执晚到时保留同草稿删除，跨草稿仍拒绝恢复。
 

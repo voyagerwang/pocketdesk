@@ -118,7 +118,6 @@ final class WSServer {
             guard body["session"] as? String == c.id.uuidString, let seq = body["seq"] as? Int, seq > c.sequence else { return }
             c.sequence = seq
         }
-        if type == "unlock-cancel" { LockScreenInput.shared.cancel(); return }
         if type == "cancel" { pointer.resetSession(); return }
         guard !LockScreenInput.locked else { enqueue(c, ["t": "error", "message": "电脑已锁屏，请使用解锁入口。"]); return }
         guard AXIsProcessTrusted() else { enqueue(c, ["t": "error", "message": "请在电脑上允许辅助功能后操作。"]); return }

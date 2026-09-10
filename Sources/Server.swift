@@ -132,31 +132,6 @@ final class Server {
             return
         }
 
-        // 密码端点仅接受真实 TLS 监听器；客户端头部不能冒充 HTTPS。回环也必须认证。
-        if path.hasPrefix("/api/unlock/") {
-            guard secure, Auth.verify(authorizationHeader: authorization) else {
-                respond(connection, status: 403, json: ["error": "解锁需要已配对的 HTTPS 连接。"]); return
-            }
-            let session = Self.headerValue("X-PocketDesk-Session", in: headerText) ?? ""
-            guard controlAuthorized(session) else {
-                respond(connection, status: 409, json: ["error": "请先取得控制权。"]); return
-            }
-            if method == "POST" && path == "/api/unlock/prepare" {
-                let result = LockScreenInput.shared.prepare(session: session)
-                respond(connection, status: result["error"] == nil ? 200 : 409, json: result); return
-            }
-            if method == "POST" && path == "/api/unlock/submit", bodyData.count <= 4096,
-               let object = try? JSONSerialization.jsonObject(with: bodyData) as? [String: String],
-               let password = object["password"], let challenge = object["challenge"] {
-                LockScreenInput.shared.submit(password: password, id: challenge, session: session,
-                    authorized: { [weak self] in self?.controlAuthorized(session) == true }) { result in
-                    self.queue.async { self.respond(connection, status: result["error"] == nil ? 200 : 409, json: result) }
-                }
-                return
-            }
-            respond(connection, status: 400, json: ["error": "无效的解锁请求。"]); return
-        }
-
         switch (method, path) {
         case ("POST", "/api/screen/permission"):
             permissionRequested = true
@@ -165,7 +140,7 @@ final class Server {
         // 锁屏状态刻意单独成端点：它只读会话字典，不碰 ScreenCaptureKit。
         // 锁屏时 ScreenCaptureKit 本身就会失败，把状态塞进同一个响应里等于永远问不出来。
         case ("GET", "/api/screen/state"):
-            respond(connection, status: 200, json: ["locked": LockScreenInput.locked, "state": LockScreenInput.state, "unlockAvailable": secure && AXIsProcessTrusted()])
+            respond(connection, status: 200, json: ["locked": LockScreenInput.locked, "state": LockScreenInput.state])
         // 唤醒显示器（只对"没锁屏、只是屏幕睡了"有效；真锁屏时它只点亮锁屏界面）。
         case ("POST", "/api/screen/wake"):
             Util.wakeDisplay()
@@ -457,7 +432,7 @@ final class Server {
             }
         case ("GET", "/"), ("GET", "/index.html"):
             serveFile("index.html", connection: connection)
-        case ("GET", let asset) where ["unlock.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "app.js", "style.css", "app-extras.css", "screen.css"].contains(String(asset.dropFirst())):
+        case ("GET", let asset) where ["screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "style.css", "app-extras.css", "screen.css"].contains(String(asset.dropFirst())):
             serveFile(String(path.dropFirst()), connection: connection)
         default:
             respond(connection, status: 404, json: ["error": "未找到资源。"])

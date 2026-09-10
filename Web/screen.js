@@ -200,7 +200,6 @@
   }
   function close() {
     if (!panel.open) return;
-    window.pocketdeskClearUnlock?.();
     ++openEpoch; cancel(); frames.stop(); pip.cancel(); window.pocketdeskHideKeyboard();
     clearTimeout(permissionTimer); panel.close();
     isolateHome(false);
@@ -344,7 +343,6 @@
       const state = await response.json();
       if (!panel.open || epoch !== openEpoch) return;
       const wasLocked = screenLocked; screenLocked = state.locked === true;
-      window.pocketdeskLockState?.(state.state || (screenLocked ? 'locked' : 'unlocked'));
       if (screenLocked) { if (!wasLocked) { cancel(); window.pocketdeskHideKeyboard(); } }
       else if ((wasLocked || (!frames.fresh() && Date.now() - lastRecovery > 8000)) && !frames.abort) {
         lastRecovery = Date.now(); await loadDisplays(epoch);

@@ -4,29 +4,17 @@
  * [POS]: Web 首页基础样式的后置补充；全屏布局另由 screen.css 提供。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-/* ---------- 设置齿轮与历史发送（置于文件末尾以覆盖基础规则） ---------- */
+/* ---------- 手机设置：header 唯一入口 + 底部模态面板（后置规则覆盖基础层） ---------- */
 
-/* 设置面板默认收起：点触控板右上角小图标展开。 */
-.pad-tuning {
-  display: none;
-}
-
-.pad-card.show-tuning .pad-tuning {
-  display: grid;
-}
-
-/* 设置入口：触控板左上角，墨点角标——线条 + 墨点即图标，不套盒子。
-   静息淡墨，激活（面板展开）落墨成赭红。左上角与右缘刻度尺对角呼应，
-   也避开标题与滚动刻度的空间。 */
-.pad-gear {
-  position: absolute;
-  top: var(--s-1);
-  left: var(--s-1);
-  z-index: 2;
+/* 设置入口：线条齿轮 + 中轴墨点，静息淡墨、按下落墨，不套背景胶囊。
+   负外边距把 44×44 的点击区向外扩开，视觉上仍与 header 右侧对齐。 */
+.gear-btn {
+  flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
+  margin: -6px -10px -6px 0;
   padding: 0;
   border: 0;
   border-radius: var(--r-field);
@@ -36,27 +24,210 @@
   transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 
-.pad-gear:active {
+.gear-btn:active {
   opacity: var(--ink-active);
 }
 
-/* 收起的精简条不放设置入口：展开触控板后才出现。 */
-main:not(.pad-mode) .pad-gear {
-  display: none;
-}
-
-.pad-gear svg {
-  width: 17px;
-  height: 17px;
+.gear-btn svg {
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.5;
   stroke-linecap: round;
 }
 
-.pad-card.show-tuning .pad-gear {
-  color: var(--accent);
+/* dialog 铺满视口，只有点击 .phone-sheet 之外才算遮罩关闭；
+   [open] 限定是必须的——否则会盖掉 UA 的 dialog:not([open]) { display: none }。 */
+#phone-settings[open] {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+#phone-settings::backdrop {
+  background: var(--sheet-scrim);
+}
+
+/* 面板本体：手机贴底，大屏限宽居中。标题与关闭固定，只有 .sheet-body 滚动。 */
+.phone-sheet {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 520px;
+  max-height: 88vh;
+  max-height: 88dvh;
+  padding: var(--s-5) var(--s-5) calc(var(--s-5) + env(safe-area-inset-bottom));
+  border-radius: var(--r-panel) var(--r-panel) 0 0;
+  background: var(--bg);
+  box-shadow: var(--screen-shadow);
+}
+
+@media (min-width: 560px) {
+  .phone-sheet {
+    margin-bottom: var(--s-6);
+    border-radius: var(--r-panel);
+  }
+
+  #phone-settings[open] {
+    align-items: center;
+  }
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  font-size: var(--text-lg);
+}
+
+.sheet-close {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: -10px -10px -10px 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-field);
+  background: transparent;
+  color: var(--fg-muted);
+  opacity: var(--ink-dwell);
+}
+
+.sheet-close:active {
   opacity: var(--ink-active);
+}
+
+.sheet-close svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+}
+
+.sheet-note {
+  margin: var(--s-1) 0 var(--s-4);
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+}
+
+.sheet-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 两个简洁分组：不做厚重卡片，也不给每组再套"更多设置"。 */
+.sheet-group + .sheet-group {
+  margin-top: var(--s-6);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--border);
+}
+
+.sheet-group h2 {
+  margin: 0 0 var(--s-3);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* 控件行：标签与控件同排，min-width:0 让滑杆能被压缩。 */
+.sheet-group label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s-2) var(--s-4);
+  min-width: 0;
+  padding: var(--s-1) 0;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.sheet-group select {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--surface-1);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.sheet-group input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  accent-color: var(--accent);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.sheet-group input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--range-track-h);
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+}
+
+.sheet-group input[type="range"]::-webkit-slider-thumb {
+  width: var(--range-thumb);
+  height: var(--range-thumb);
+  margin-top: var(--range-thumb-shift);
+  border: 1px solid var(--accent-line);
+  border-radius: 50%;
+  background: var(--accent);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.sheet-group input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 翻腕开关行：文字在左，开关在右，整行可点。行高兜到 44px，触控区不缩水。 */
+.sheet-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.sheet-row input[type="checkbox"] {
+  width: 44px;
+  height: 26px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.sheet-hint {
+  margin: var(--s-2) 0 0;
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: normal;
+}
+
+/* 不可用原因：用户真的尝试开启后才出现，用琥珀而不是红色——不是故障，是"还没验证"。 */
+.sheet-hint.is-warn {
+  color: var(--warn);
 }
 
 /* 历史发送：面板在发送按钮上方展开，点条目回填输入框。 */
@@ -349,8 +520,8 @@ main:not(.pad-mode) .pad-gear {
   transition: opacity var(--dur) var(--ease);
 }
 
-main.pad-mode .pad-title,
-.pad-card.show-tuning .pad-title {
+/* 设置已迁出触控板，展开态不再需要为滑杆让位——标题只在触控板展开时隐去。 */
+main.pad-mode .pad-title {
   opacity: 0;
 }
 
@@ -426,7 +597,7 @@ main.pad-mode .pad-title,
   box-shadow: var(--glow-hint);
 }
 
-:root[data-theme="muji"] .pad-tuning input[type="range"]::-webkit-slider-thumb {
+:root[data-theme="muji"] .sheet-group input[type="range"]::-webkit-slider-thumb {
   border: 0;
   box-shadow: var(--glow-thumb);
 }
@@ -460,4 +631,67 @@ main.pad-mode .pad-title,
 .screen-open:active {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+/* ---------- 翻腕发送：授权 / 练习 / 灵敏度 ---------- */
+
+/* 设置面板内的操作按钮（与 .sheet-close 同级，但不浮动）。 */
+.sheet-btn {
+  margin-top: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--surface-1);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: center;
+  cursor: pointer;
+}
+.sheet-btn:hover { border-color: var(--accent-line); }
+.sheet-btn:active { background: var(--accent-soft); }
+.sheet-btn[aria-pressed="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 灵敏度下拉与授权按钮同列，保持两列栅格对齐。 */
+.sheet-group .sheet-row:has(select) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s-3);
+  margin-top: var(--s-2);
+}
+.sheet-group .sheet-row select {
+  width: auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0 var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--surface-1);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+/* 实时倾角条：练习时显示手机前倾幅度，绿色表示已达成“抬起”相位。 */
+.wrist-meter {
+  margin-top: var(--s-2);
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  overflow: hidden;
+}
+.wrist-meter-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: var(--fg-muted);
+  transition: width 80ms linear, background 120ms var(--ease);
+}
+.wrist-meter-fill.is-lift {
+  background: var(--accent);
 }

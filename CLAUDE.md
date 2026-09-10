@@ -3,7 +3,7 @@ Swift + Network + Quartz Event Services，搭配零依赖手机 Web 页面；局
 
 <directory>
 Sources/ - HTTP、控制/光标与持续画面三通道；应用配置、焦点/输入上下文、草稿快照、图片批次及系统输入执行（26 个 Swift 文件）
-Web/ - 手机首页、全屏工作台与电脑控制台，零依赖经典脚本按职责拆分（15 个静态文件）
+Web/ - 手机首页、全屏工作台与电脑控制台，零依赖经典脚本按职责拆分（18 个静态文件）
 Resources/ - 独立 macOS App 的 bundle 元数据与应用图标 (plist + icns + iconset)
 scripts/ - 应用安装、图标生成、焦点与锁屏通道探针（7 个脚本）
 SessionProbe/ - 独立用户级会话验证应用，比较预登录标记下的锁屏帧状态与显式测试按键；不是生产解锁服务

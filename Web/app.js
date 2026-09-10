@@ -38,13 +38,13 @@ function authHeaders() {
 }
 
 const mainEl = document.querySelector('main');
-const padCard = document.querySelector('#pad-card');
 const pad = document.querySelector('#pad');
 const padTarget = document.querySelector('#pad-target');
+// 三个触控板参数的真身已迁进 #phone-settings 面板，ID 未变，这里照旧取到同一批元素；
+// 值的读写与持久化仍在 pad.js，面板只负责把它们放到该在的位置。
 const sensEl = document.querySelector('#sens');
 const scrollSpeedEl = document.querySelector('#scroll-speed');
 const rulerEl = document.querySelector('#ruler-mode');
-const padSettings = document.querySelector('#pad-settings');
 
 let targets = [];
 let selected = null;        // null = 尚未选择；boot 后由心跳对齐到 Mac 当前真实前台
@@ -194,11 +194,10 @@ function enterPadMode() {
   textEl.blur(); // 收起手机键盘，把屏幕让给触控板
 }
 
+// 设置已迁到 header 的独立面板，退出触控板不再顺手关它：
+// 面板是模态的，开着的时候触控板本来就收不到点击，这里再关一次只会制造两处状态。
 function exitPadMode() {
   mainEl.classList.remove('pad-mode');
-  // 收起设置面板：滑杆只在触控板展开时有意义，切回输入不残留。
-  padCard.classList.remove('show-tuning');
-  padSettings.setAttribute('aria-expanded', 'false');
 }
 
 

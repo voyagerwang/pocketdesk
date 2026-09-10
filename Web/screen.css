@@ -402,9 +402,3 @@ body.screen-fullscreen-open > main { visibility: hidden; }
 .screen-aim::before { width: 18px; height: 1px; }
 .screen-aim::after { height: 18px; width: 1px; }
 #screen-mode svg { display: none; }
-
-/* 锁屏凭据与普通输入栏隔离；不随桌面画面旋转。 */
-#unlock-form:not([hidden]) { position:absolute; z-index:30; left:50%; top:50%; transform:translate(-50%,-50%); width:min(320px,85%); padding:20px; border-radius:14px; background:#fff; color:#222; display:grid; gap:12px; }
-#unlock-form input { width:100%; box-sizing:border-box; min-height:44px; font-size:16px; }
-#unlock-form button { min-height:44px; }
-#unlock-note { margin:0; font-size:13px; }
