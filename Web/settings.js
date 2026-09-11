@@ -1,7 +1,8 @@
 /**
  * [INPUT]: 消费 index.html 的 #phone-settings 面板与 header 齿轮，以及迁来的 #sens / #scroll-speed / #ruler-mode。
  * [OUTPUT]: 提供唯一手机设置面板的开关、遮罩关闭、焦点恢复与偏好读写；翻腕组保存用户意愿与灵敏度档位，
- *           并就地把可用性原因写回 #wrist-note（不弹独立读数面板）。
+ *           并就地把可用性原因写回 #wrist-note（不弹独立读数面板）；需要用户动手的步骤渲染成
+ *           #wrist-links 里可点击的链接（装证书 / 换安全地址），不让用户手抄地址。
  * [POS]: Web 首页的设置边界；不持有业务草稿，不向 Mac 发送点击、滚动或快捷键。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -13,6 +14,7 @@ const settingsOpenBtn = document.querySelector('#phone-settings-open');
 const settingsCloseBtn = document.querySelector('#phone-settings-close');
 const wristToggle = document.querySelector('#wrist-toggle');
 const wristNote = document.querySelector('#wrist-note');
+const wristLinks = document.querySelector('#wrist-links');
 
 /* ---------- 翻腕偏好：只存用户意愿，不存授权态或运行态 ---------- */
 
@@ -44,6 +46,35 @@ function setWristNote(text, warn = false) {
   wristNote.className = warn ? 'sheet-hint is-warn' : 'sheet-hint';
 }
 
+// 把"要用户自己去做的动作"渲染成真正的链接：换安全地址、装证书都点一下即可，
+// 不该让用户对着一段地址手抄。全部用 createElement + textContent，不拼 innerHTML：
+// 地址来自浏览器自身，即使哪天带上参数也不会变成注入点。
+function setWristLinks(links) {
+  if (!wristLinks) return;
+  wristLinks.textContent = '';
+  const list = links || [];
+  wristLinks.hidden = list.length === 0;
+  for (const item of list) {
+    const anchor = document.createElement('a');
+    anchor.className = 'sheet-btn wrist-link';
+    anchor.href = item.href;
+    anchor.textContent = item.label;
+    if (item.newTab) { anchor.target = '_blank'; anchor.rel = 'noopener'; }
+    wristLinks.appendChild(anchor);
+  }
+}
+
+// 安全上下文缺失时的两步：先装本机 CA（HTTP 就能取），再回安全地址打开同一页。
+// 两步都给成可点链接，用户不需要知道端口号，也不需要复制任何东西。
+function renderWristActions(avail) {
+  if (!avail || !avail.needsSecureContext) { setWristLinks(null); return; }
+  const certPath = window.pocketdeskMotion?.caCertificatePath;
+  const links = [];
+  if (certPath) links.push({ label: '① 安装 PocketDesk 证书', href: certPath });
+  if (avail.secureURL) links.push({ label: '② 在安全地址打开', href: avail.secureURL, newTab: true });
+  setWristLinks(links);
+}
+
 // 能力判定交给 motion-send.js（注册 pocketdeskWristAvailable）。没有该模块时一律不可用：
 // 这是第 9 节第 1 步的真实状态——设置整合先行，体感尚未验证，不能让用户开出一个假开关。
 function wristAvailability() {
@@ -70,6 +101,7 @@ wristToggle.addEventListener('change', () => {
   wristToggle.checked = false;
   writeMotionPref({ enabled: false });
   setWristNote(probe.reason, true);
+  renderWristActions(probe);
 });
 
 /* ---------- 面板生命周期 ---------- */
@@ -140,6 +172,7 @@ function updateWristUI() {
   if (window.pocketdeskMotion?.isActive?.()) setWristNote('监听中：说完话轻翻手腕即可发送。');
   else if (avail.ok) setWristNote('已就绪，开启上方开关即可使用。');
   else if (avail.reason) setWristNote(avail.reason);
+  renderWristActions(avail);
 }
 
 if (wristAuthorize) {

@@ -32,5 +32,5 @@ KeyboardDraftWriter.swift: 通用实时输入；已有正文和插入选区作�
 
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 
-SecureTransport.swift: 从本机私有 PKCS12 读取服务身份，为 HTTP、控制和画面建立 TLS 监听；不修改客户端信任。
+SecureTransport.swift: 从本机私有 DER 证书与私钥在**内存**中装配 TLS 身份（`SecKeyCreateWithData` + `SecIdentityCreate`，全程不进钥匙串，故没有上锁、没有 ACL、没有密码询问），为 HTTP、控制和画面建立 TLS 监听；不修改客户端信任，并对外给出 CA 证书路径供手机下载。
 LockScreenInput.swift: 锁屏专用一次性挑战与物理按键执行；绑定租约和会话代际，取消/解锁失效，不经草稿与日志，不自动重试。

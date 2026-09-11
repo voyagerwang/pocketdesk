@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Node 内建断言与文件系统，读取 Web/index.html、Web/settings.js 与 Sources/Server.swift。
- * [OUTPUT]: 验证手机设置只有一个入口、触控板内无齿轮、三个旧控件 ID 与存储键未复制第二份、翻腕默认关闭且只留授权与灵敏度、新脚本已进入静态白名单。
+ * [OUTPUT]: 验证手机设置只有一个入口、触控板内无齿轮、三个旧控件 ID 与存储键未复制第二份、翻腕默认关闭且只留授权与灵敏度、新脚本已进入静态白名单、需要用户动手的步骤一律是可点链接（控制台地址与手机端证书/安全地址，且地址不再以散文形式出现）。
  * [POS]: tests 的静态结构回归；不启动服务、不发网络请求、不注入系统事件。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -72,5 +72,26 @@ for (const deg of ['低 30°', '中 22°', '高 15°']) {
 // 新脚本必须真的能被服务到：白名单与页面引用同时核对。
 assert.ok(server.includes('"settings.js"'), 'Server.swift 静态白名单需包含 settings.js');
 assert.ok(/<script src="\/settings\.js\?v=/.test(html), 'index.html 需带版本号引用 settings.js');
+
+// 需要用户动手的步骤必须是可点链接：地址不能只以纯文本出现，否则用户只能手抄。
+assert.ok(/id="wrist-links"/.test(html), '翻腕组需要 #wrist-links 容器承载可点动作');
+assert.ok(settings.includes("createElement('a')"), '设置面板应用 createElement 造链接');
+assert.ok(settings.includes('renderWristActions'), '设置面板需把不可用原因渲染成动作');
+assert.ok(!/wristNote\.innerHTML/.test(settings), '不得用 innerHTML 拼地址，避免注入');
+// 地址改为结构化字段 + 可点动作，不再塞进原因散文里。
+assert.ok(motionSend.includes('needsSecureContext') && motionSend.includes('secureURL'),
+  'motion-send 应回结构化原因与安全地址');
+assert.ok(motionSend.includes('caCertificatePath'), 'motion-send 应提供 CA 路径给设置面板');
+assert.ok(!/请在手机浏览器访问 https:\/\//.test(motionSend), '不应再把地址写进散文让用户手抄');
+assert.ok(motionSend.includes("':46487'"), '安全地址必须显式换到 HTTPS 端口 46487');
+// 控制台的地址同样不做成纯文本；证书下载是 HTTP 就能走的入口。
+const consoleHtml = fs.readFileSync(path.join(root, 'Web/console.html'), 'utf8');
+for (const id of ['url', 'ipUrl', 'remoteUrl', 'secureUrl']) {
+  assert.ok(new RegExp(`<a id="${id}"[^>]*class="[^"]*url-link`).test(consoleHtml), `控制台 #${id} 应是链接`);
+}
+assert.ok(/id="caDownload"[^>]*href="\/PocketDesk-CA\.cer"/.test(consoleHtml), '控制台需提供证书下载入口');
+// 服务端必须能经 HTTP 提供 CA：手机在信任证书之前只有 HTTP 可用。
+assert.ok(/case \("GET", "\/PocketDesk-CA\.cer"\)/.test(server), 'Server.swift 需提供 CA 下载路由');
+assert.ok(server.includes('application/x-x509-ca-cert'), 'CA 需用证书 MIME 触发系统安装流程');
 
 console.log('phone settings: single entry, migrated controls, default-off wrist guard, no practice UI passed');

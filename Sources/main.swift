@@ -20,19 +20,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    // 正常退出时带走本进程的临时钥匙串与密码文件，不在用户机器上留残留（强杀时由下次启动的过期清理兜底）。
-    func applicationWillTerminate(_ notification: Notification) {
-        SecureTransport.teardown()
-    }
 }
 
 /// 卡死自愈看门狗。
 ///
-/// Network.framework 的 TLS 握手取私钥**没有超时**：securityd 一旦让这次取用停住（钥匙串被重新上锁后
-/// 需要用户授权、securityd 自己重启等），整条网络工作线程会被永久占死——HTTPS、HTTP、心跳、画面
-/// 一起静默停摆，而进程看起来还好好的、端口也还在监听，用户只会看到"一直连不上/不同步"。
-/// 主线程此时是空闲的，所以由它每 10 秒戳一次自己的 HTTP 端口；连续两次拿不到 200 就重启 App——
-/// 重启会重建一个全新的、已解锁的临时钥匙串，通常半分钟内恢复。
+/// TLS 私钥已在内存中装配（全程不进钥匙串），原先"钥匙串上锁 → 取私钥永久阻塞"的场景不复存在；
+/// 这层保留为兜底：任何让网络工作线程停住的原因都会让 HTTPS、HTTP、心跳、画面一起静默停摆，
+/// 而进程看起来还好好的、端口也还在监听，用户只会看到"一直连不上/不同步"。主线程此时是空闲的，
+/// 所以由它每 10 秒戳一次自己的 HTTP 端口；连续两次拿不到 200 就重启 App。
 final class ServerWatchdog {
     private static var timer: Timer?
     private static var failures = 0
