@@ -642,6 +642,7 @@ async function heartbeatTick() {
     // 连续两拍失败才判定断连，避免单次网络抖动误报；顶部状态立即改口，不再挂假"已就绪"。
     heartbeatFailures++;
     if (heartbeatFailures >= 2) {
+      httpDown = true;
       connectionEl.textContent = '未连接';
       connectionEl.classList.remove('ready', 'warn');
       message('与电脑的连接已断开：请确认同一 Wi-Fi，或重新扫码。', true);
@@ -680,8 +681,9 @@ async function boot() {
     syncShortcuts(status.shortcuts || []);
     renderTargets();
     applyTheme(status.theme);
-    connectionEl.textContent = status.accessibility ? '已就绪' : '需授权';
-    connectionEl.classList.toggle('ready', status.accessibility);
+    httpDown = false;
+    lastAccessibility = status.accessibility;
+    refreshConnectionBadge();
     if (!status.accessibility) message('请先在电脑端控制台完成授权，页面仍可输入。', true);
     // 刷新后立即对齐一次选中态：Mac 前台命中 Dock 目标就选它，否则进入伪目标并记住前台名，
     // 保证底部"发送到 X"与 Dock 高亮始终反映真实状态，而不是上次会话的残留默认值。
@@ -697,9 +699,17 @@ async function boot() {
     }
     markSelected();
     startHeartbeat();
+    // 控制租约走 WS 通道：服务端易主时下行 control/auth_ok，此时立即刷新徽标，
+    // 不要等到下一拍（≤5s）HTTP 心跳才发现「已就绪」是假的。
+    if (typeof window.pocketdeskOnWSMessage === 'function') {
+      window.pocketdeskOnWSMessage(message => {
+        if (message && (message.t === 'control' || message.t === 'auth_ok')) refreshConnectionBadge();
+      });
+    }
     // 浏览器恢复的正文可能早于目标就绪；就绪后补齐，不等下一次手敲。
     if (textEl.value) scheduleLive();
   } catch {
+    httpDown = true;
     connectionEl.textContent = '未连接';
     message('无法连接本机服务。确认手机与 Mac 在同一网络。', true);
   }
