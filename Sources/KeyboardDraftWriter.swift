@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 InputFocus 的真实焦点、DraftSnapshot、AppKit AX；按键和文本事件由 InputExecutor 注入。
  * [OUTPUT]: 提供 KeyboardDraftWriter；追加实时输入、选区修订及不含正文的失败诊断，失败后只依据原控件快照或未落键证据恢复。
  * [POS]: Sources 的通用编辑器兼容通道；可读 AX 时校验原文和选区，未知编辑器沿用绑定和有序键流，不伪造读回。
- * [PROTOCOL]: update 的删除路径对 Electron/受控输入框自适应降级（AX 选区越界或“假成功”时改走逐字 Backspace，不依赖选区、每次独立删光标前一字）；落键读回与 confirmedText 均以“电脑实际内容 == 手机目标”为权威成功判据，断掉 desired 坐标错位（输入框已有内容/删除场景）导致的冻结链；变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: update 的删除路径对 Electron/受控输入框自适应降级（AX 选区越界或“假成功”时改走逐字 Backspace，不依赖选区、每次独立删光标前一字）；落键读回与 confirmedText 均以“电脑实际内容 == 手机目标”为权威成功判据，断掉 desired 坐标错位（输入框已有内容/删除场景）导致的冻结链；clearAll 同样在 AX 全选“假成功”时退回逐字 Backspace（光标须在文末），不依赖可能假成功的删除；变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 
@@ -138,8 +138,12 @@ final class KeyboardDraftWriter {
         if count == 0 { uncertainWrite = false; diagnostic = ""; return true }
         uncertainWrite = true
         diagnostic = "清空：修订选区未能建立"
+        // 受控输入框（Electron/React）下 AX "全选"常"报告成功却不落 DOM"，选区并未真生效。
+        // 故先确认选区落到位；没落到位就退回逐字 Backspace（退格由 keycode 驱动、不依赖选区，
+        // 光标在文末时对受控组件可靠），不再依赖可能假成功的删除。
+        // 光标不在文末（有选中或停在中间）时无法确定删的是哪段，宁可失败也不赌。
+        let canAssumeEnd = current.location == count && current.length == 0
         if selectRange?(CFRange(location: 0, length: count)) == true {
-            // 只读等待选区落地；不重放、不追加。
             let desired = DraftSnapshot(text: current.text, location: 0, length: count)
             var landed = false
             for _ in 0..<8 {
@@ -148,16 +152,19 @@ final class KeyboardDraftWriter {
                 diagnostic = Self.describe("清空选区读回", expected: desired, actual: readSnapshot())
                 usleep(10_000)
             }
-            guard landed else { return false }
+            if !landed {
+                guard canAssumeEnd, count <= 8_000 else {
+                    diagnostic = "清空：选区未生效且光标不在文末，无法确定删除范围"
+                    return false
+                }
+                for _ in 0..<count { guard valid(), key(51, []) else { return false }; usleep(20_000) }
+            }
         } else {
-            // 选区设不了：只有"光标停在文末且无选中"才敢播退格流，否则无从确定删的是什么。
-            guard current.length == 0, current.location == count, count <= 8_000 else {
+            guard canAssumeEnd, count <= 8_000 else {
                 diagnostic = "清空：无法确定删除范围（控件不支持设置选区）"
                 return false
             }
-            for _ in 0..<count {
-                guard valid(), key(123, .maskShift) else { return false }
-            }
+            for _ in 0..<count { guard valid(), key(51, []) else { return false }; usleep(20_000) }
         }
         diagnostic = "清空：删除未能发出"
         guard valid(), key(51, []) else { return false }

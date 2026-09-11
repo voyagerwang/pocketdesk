@@ -3,7 +3,7 @@
  * [OUTPUT]: 对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、显式整段清空（幂等、可从冻结态破冰；文档类目标只清手机侧）、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/live-input、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
- * [PROTOCOL]: 删除键经 postDeleteKey 发送（不携带 DEL 字符），避免 Chromium 把 Backspace 当成 Delete 键；变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 删除键经 postDeleteKey 发送（不携带 DEL 字符），避免 Chromium 把 Backspace 当成 Delete 键；clearScopeAllowsComputer 不再按进程白名单一刀切拦掉聊天类应用（飞书/钉钉等同进程文档与消息无法从 bundle 区分），改由 focusedInDocument 按需保护真实文档正文；变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 import CoreGraphics
@@ -273,9 +273,9 @@ final class InputExecutor {
     private static let documentLikeApps: Set<String> = [
         "com.apple.TextEdit", "com.apple.Pages", "com.apple.Notes",
         "com.microsoft.Word", "com.kingsoft.wpsoffice.mac",
-        // 飞书把文档与消息放在同一个进程里，从进程身份分不出当前是哪一种；
-        // 按用户要求（文档类输入除外）一律不动电脑，宁可清不干净也不赌。
-        "com.electron.lark",
+        // 仅收录「整窗即文档」的原生编辑器。飞书/钉钉等把文档与消息放在同一进程、无法从 bundle 区分，
+        // 故不再在此按进程一刀切拦掉：聊天输入框清空是用户主动操作，应两边一起清；
+        // 真正的文档正文保护改由 focusedInDocument（焦点元素所在窗口挂真实文件文档）按需兜底。
     ]
 
     /// 文档证据：焦点元素往上找窗口，窗口带 AXDocument 且指向真实文件即为文档。
