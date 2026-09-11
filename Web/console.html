@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
-  [INPUT]: 依赖 HTTPS 地址/二维码状态与 /api/status、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility。
-  [OUTPUT]: 电脑端控制台：授权引导、局域网与 Tailscale 跨网扫码连接、应用管理（搜索/添加/拖拽排序/删除/自定义图标）、快捷键管理（录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"；主键只认 event.code 物理键位不回退 IME 可污染的 event.key，拦截 isComposing 与纯修饰键；键位标签用 .keycap 样式、label 与键位重复时只显示一个；支持重录/拖拽排序/删除；预设动作由 /api/status.actions 下发，点选即添加、不进录制流程，已添加的置灰判重，预设项不可重录）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
+  [INPUT]: 依赖 /api/status 的二维码地址与手机在线状态、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility。
+  [OUTPUT]: 电脑端控制台：授权引导、扫码连接（卡内只留局域网与跨网二维码 + 标题行右侧的在线状态 pill；Tailscale 与"添加到主屏"等说明文字一律不写，跨网码仅在探测到 Tailscale 时出现）、应用管理（搜索/添加/拖拽排序/删除/自定义图标）、快捷键管理（录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"；主键只认 event.code 物理键位不回退 IME 可污染的 event.key，拦截 isComposing 与纯修饰键；键位标签用 .keycap 样式、label 与键位重复时只显示一个；支持重录/拖拽排序/删除；预设动作由 /api/status.actions 下发，点选即添加、不进录制流程，已添加的置灰判重，预设项不可重录）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
   [POS]: 电脑端唯一页面入口；目标顺序与快捷键都保存在 Mac 本机（App Support），手机端只渲染。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -40,7 +40,7 @@ button{font:inherit;cursor:pointer}
 .btn.ghost{border-color:transparent;background:transparent;color:var(--muted)}
 .btn:disabled{opacity:.45;cursor:wait}
 #authState{font-size:13px}#authState.ok{color:var(--accent)}#authState.bad{color:var(--danger)}
-#connect{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
+#connect{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;margin-top:16px}
 .qr-item{display:flex;flex-direction:column;gap:8px}
 .qr-item[hidden]{display:none}
 .qr-item b{font-size:12px;font-weight:600}
@@ -53,8 +53,8 @@ button{font:inherit;cursor:pointer}
 a.url-link{text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px;word-break:break-all}
 a.url-link:hover{color:var(--accent);text-decoration-color:currentColor}
 a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
-#phoneState{font-size:13px;color:var(--muted)}
-#phoneState.ok{color:var(--accent)}
+/* 手机在线状态：与标题同排、靠右的状态徽章（复用 .pill 外观），卡片内不再堆说明文字。 */
+#phoneState{margin-left:auto}
 .hint{color:var(--muted);font-size:12px;line-height:1.7}
 #search{width:100%;padding:11px 14px;border:1px solid var(--line-strong);border-radius:4px;background:#fff;color:var(--ink);font:inherit}
 #search:focus{outline:none;border-color:var(--accent)}
@@ -145,8 +145,7 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
   </section>
 
   <section class="card">
-    <h2><span class="step">2</span>手机扫码连接</h2>
-    <p class="sub">同一 Wi-Fi 可扫局域网码；异地使用时，让手机和这台 Mac 都连接 Tailscale，再扫跨网码。</p>
+    <h2><span class="step">2</span>手机扫码连接<span id="phoneState" class="pill">等待手机连接…</span></h2>
     <div id="connect">
       <div class="qr-item">
         <img id="qr" alt="永久地址二维码">
@@ -163,17 +162,8 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
         <b>跨网地址 · Tailscale</b>
         <a id="remoteUrl" class="hint mono url-link" href="#">生成中…</a>
       </div>
-      <div id="secureQrItem" class="qr-item" hidden>
-        <img id="qr-secure" alt="HTTPS 安全连接二维码">
-        <b>安全连接</b>
-        <a id="secureUrl" class="hint mono url-link" href="#"></a>
-        <span class="hint">手机首次使用需安装本机生成的 PocketDesk CA 证书（装一次即长期有效）。</span>
-        <a id="caDownload" class="hint url-link" href="/PocketDesk-CA.cer" download>下载 PocketDesk 证书</a>
-      </div>
       <div class="connect-info">
-        <span id="phoneState">等待连接…</span>
-        <span id="remoteHint" class="hint">跨网连接检测中…</span>
-        <span class="hint">iPhone：Safari 打开后点分享 →"添加到主屏幕"，即可像 App 一样点开。</span>
+        <span id="remoteHint" class="hint"></span>
       </div>
     </div>
   </section>
@@ -198,7 +188,7 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
       <span class="hint" style="flex:0 0 auto">预设动作</span>
       <div class="preset-chips" id="scPresetChips"></div>
     </div>
-    <p class="hint" style="margin:0 0 12px">这些在网页里按下去就会被浏览器或系统本身吃掉（真的锁屏、真的退出浏览器），录制器拿不到，所以点选即添加。系统级的不模拟按键，直接调系统能力：锁屏走关屏（需系统已开启「需要密码」），切换应用按最近使用顺序切。</p>
+    <p class="hint" style="margin:0 0 12px">这些在网页里按下去就会被浏览器或系统本身吃掉（真的锁屏、真的退出浏览器），录制器拿不到，所以点选即添加。系统级的不模拟按键，直接调系统能力：锁屏走关屏（需系统已开启「需要密码」），切换应用按最近使用顺序切。「清空会话」也在这组：它由手机执行，会同时清掉电脑与手机的输入内容；文档类应用（Word、WPS、Pages、TextEdit、飞书）只清手机侧，不动电脑。</p>
     <div id="scList"></div>
   </section>
 
@@ -295,12 +285,6 @@ async function refresh() {
       setLink('url', status.lanURL, '未找到局域网地址，请确认 Wi-Fi 已连接。');
       setLink('ipUrl', status.ipURL, '未找到局域网地址');
     }
-    $('secureQrItem').hidden = !status.secureURL;
-    if (status.secureURL && $('qr-secure').dataset.url !== status.secureURL) {
-      setLink('secureUrl', status.secureURL, '');
-      $('qr-secure').dataset.url = status.secureURL;
-      $('qr-secure').src = '/api/qr?type=secure';
-    }
     if (status.remoteURL) {
       $('remoteQrItem').hidden = false;
       setLink('remoteUrl', status.remoteURL, '');
@@ -312,13 +296,15 @@ async function refresh() {
       }
     } else {
       $('remoteQrItem').hidden = true;
-      $('remoteHint').innerHTML = '未检测到 Tailscale。请先在这台 Mac 和手机安装并登录同一账户，再刷新本页。';
+      // 未就绪不留占位文字：这一行只承载"已就绪"这一条信息，没就绪就什么都不说。
+      $('remoteHint').textContent = '';
     }
+    // 手机在线状态：标题行右侧的状态徽章（与顶部 #conn 同一 pill 范式），只有"已连接"才点亮。
     const seen = status.phoneLastSeen * 1000;
     const phoneState = $('phoneState');
-    if (!seen) { phoneState.textContent = '等待手机连接…'; phoneState.className = ''; }
-    else if (Date.now() - seen < 15000) { phoneState.textContent = '手机已连接'; phoneState.className = 'ok'; }
-    else { phoneState.textContent = `手机最后连接于 ${Math.round((Date.now() - seen) / 60000)} 分钟前`; phoneState.className = ''; }
+    if (!seen) { phoneState.textContent = '等待手机连接…'; phoneState.className = 'pill'; }
+    else if (Date.now() - seen < 15000) { phoneState.textContent = '手机已连接'; phoneState.className = 'pill ready'; }
+    else { phoneState.textContent = `手机最后连接于 ${Math.round((Date.now() - seen) / 60000)} 分钟前`; phoneState.className = 'pill'; }
   } catch { $('conn').textContent = '服务未响应'; }
 }
 
@@ -512,7 +498,7 @@ function renderScopedShortcuts(box, list, scope, targetId) {
     const label = shortcut.label === display ? '' : shortcut.label;
     const row = document.createElement('div'); row.className = 'target-row';
     row.innerHTML = `<span class="drag-handle" aria-hidden="true">⠿</span><b style="flex:0 0 auto;min-width:48px">${esc(label || display)}</b>
-      ${label ? `<span class="keycap">${esc(display)}</span>` : ''}
+      ${label && display ? `<span class="keycap">${esc(display)}</span>` : ''}
       <button class="btn ghost icon-btn danger" data-act="remove-sc" style="margin-left:auto" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
     row.querySelector('[data-act="remove-sc"]').addEventListener('click', async event => {
       if (!armConfirm(event.target.closest('button'))) return;
@@ -758,7 +744,9 @@ function renderPresetActions() {
     chip.className = 'btn ghost';
     chip.disabled = added;
     chip.textContent = added ? `${action.label} · 已添加` : action.label;
-    chip.title = `${action.label} · ${hotkeyDisplay(action.hotkey)}`;
+    // 没有按键的动作（「清空会话」由手机执行）不要在提示里留一个孤零零的分隔符。
+    const keyLabel = hotkeyDisplay(action.hotkey);
+    chip.title = keyLabel ? `${action.label} · ${keyLabel}` : action.label;
     chip.addEventListener('click', async () => {
       shortcuts.push({ id: '', label: action.label, hotkey: action.hotkey, action: action.id });
       await saveShortcuts();
@@ -777,7 +765,7 @@ function renderShortcuts() {
     const preset = Boolean(shortcut.action);
     const row = document.createElement('div'); row.className = 'target-row';
     row.innerHTML = `<span class="drag-handle" aria-hidden="true">⠿</span><b${preset ? '' : ' class="sc-editable" data-act="rerecord" title="点击重新录制按键"'} style="flex:0 0 auto;min-width:48px">${esc(label || display)}</b>
-      ${label ? `<span class="keycap"${preset ? '' : ' data-act="rerecord" title="点击重新录制组合键"'}>${esc(display)}</span>` : ''}
+      ${label && display ? `<span class="keycap"${preset ? '' : ' data-act="rerecord" title="点击重新录制组合键"'}>${esc(display)}</span>` : ''}
       ${preset ? '<span class="pill" style="padding:2px 8px;font-size:11px">预设</span>' : ''}
       <button class="btn ghost icon-btn danger" data-act="remove" style="margin-left:auto" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
     row.addEventListener('click', async event => {

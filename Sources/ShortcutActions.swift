@@ -1,6 +1,8 @@
 /**
  * [INPUT]: 依赖 Foundation；产出的按键串交由 Models 的 ShortcutKeys 解析（同一链路，不另起炉灶）。
- * [OUTPUT]: 对外提供 Platform（按键投递目标平台）与 ShortcutAction（预设动作库：语义 id ↔ 各平台按键串 ↔ 中文名）。
+ * [OUTPUT]: 对外提供 Platform（按键投递目标平台）与 ShortcutAction（预设动作库：语义 id ↔ 各平台按键串 ↔ 中文名 ↔ 投递方式 delivery）。
+ *           delivery 区分 .hotkey/.systemCommand 与 .deviceLocal——后者（draft.clear「清空会话」）由手机本地执行、hotkey 为空串，
+ *           服务端只配合电脑侧清空；误发到 /api/shortcut-trigger 必须明确拒绝，不能退化成"注入空串快捷键"。
  * [POS]: Sources 的动作定义层，纯数据无副作用；InputExecutor 触发时查表展开按键，
  *        Server 在 /api/shortcuts 校验并在 /api/status 下发可选列表给控制台。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -25,6 +27,11 @@ enum ShortcutAction: String, CaseIterable {
     case closeWindow = "window.close"
     case hideApp = "app.hide"
     case switchApp = "app.switch"
+    // 本地动作：不投递任何按键，由手机端执行"清手机草稿 + 请求电脑清空"。
+    // 放进同一张目录是为了复用控制台"点选即添加"与手机端的快捷键列表，不必另造一套 UI；
+    // 但它的执行路径与其余条目完全不同，hotkey 为空、投递通道是 deviceLocal——
+    // 服务端遇到它必须拒绝注入按键（见 InputExecutor.triggerShortcut）。
+    case clearDraft = "draft.clear"
 
     var label: String {
         switch self {
@@ -33,12 +40,14 @@ enum ShortcutAction: String, CaseIterable {
         case .closeWindow: return "关闭窗口"
         case .hideApp: return "隐藏应用"
         case .switchApp: return "切换应用"
+        case .clearDraft: return "清空会话"
         }
     }
 
     // 各平台按键串。与录制得到的 hotkey 同语法，最终都交给 ShortcutKeys.resolve。
     // Windows 的 Win 键在 ShortcutKeys.modifierMap 中归一到 Cmd（GUI 键同义），
     // 因为 Mac 键盘发往 Windows 时 Cmd 位置即对应 Win。
+    // 空串是清空会话的合法值：它没有按键可展示，前端据此只渲染名称、不画键帽。
     func hotkey(_ platform: Platform) -> String {
         switch (self, platform) {
         case (.lockScreen, .macOS): return "Cmd+Ctrl+Q"
@@ -51,6 +60,7 @@ enum ShortcutAction: String, CaseIterable {
         case (.hideApp, .windows): return "Win+Down"   // Windows 无"隐藏"概念，最接近的是最小化当前窗口
         case (.switchApp, .macOS): return "Cmd+Tab"
         case (.switchApp, .windows): return "Alt+Tab"
+        case (.clearDraft, _): return ""
         }
     }
 
@@ -70,6 +80,7 @@ enum ActionDelivery {
     case switchPreviousApp // AppKit 按窗口 z-order 切到上一个应用，不碰系统快捷键
     case axCloseWindow     // 辅助功能按前台窗口的关闭按钮；取不到按钮时回退 keyEvent（Cmd+W）
     case hideFrontApp      // AppKit 隐藏前台应用：不经按键也不经 AX，任何应用都吃
+    case deviceLocal       // 手机端本地动作：服务端不注入任何东西，收到必须拒绝（见 InputExecutor）
 }
 
 extension ShortcutAction {
@@ -80,6 +91,7 @@ extension ShortcutAction {
         case .closeWindow: return .axCloseWindow
         case .hideApp: return .hideFrontApp
         case .quitApp: return .keyEvent
+        case .clearDraft: return .deviceLocal
         }
     }
 

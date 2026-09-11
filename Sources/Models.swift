@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 Codable 与 CoreGraphics 的 CGEventFlags/CGKeyCode。
- * [OUTPUT]: 对外提供传输与配置层的全部值类型：SendCommand/LiveInputCommand/LiveInputReceipt（草稿 ID、整值/选区/暂存模式、显式核验重试、提交动作确认）/PendingImage/ActivateCommand/IconUpload
+ * [OUTPUT]: 对外提供传输与配置层的全部值类型：SendCommand/LiveInputCommand/LiveInputReceipt（草稿 ID、整值/选区/暂存模式、显式核验重试、显式清空意图、提交动作确认）/PendingImage/ActivateCommand/IconUpload
  *           请求体、ShortcutConfig/TargetConfig 配置实体（TargetConfig 含按应用专属快捷键、默认打开面板、叠加全局组开关）、
  *           ShortcutKeys 语义串解析器（resolve 解析、canonicalize 别名归一、legacyHotkey 旧格式迁移）、
  *           ShortcutError/InputError 错误类型。
@@ -33,6 +33,9 @@ struct LiveInputCommand: Decodable {
     let imageIds: [String]?
     let reset: Bool? // 仅用于拒绝旧式基线重置，不再接受未经核验的远端文本。
     let retry: Bool? // 用户再次发送时请求核对原会话；不允许直接重置或重放全文。
+    // 显式清空意图：手机点「清空会话」时带上。与"输入框恰好为空"区分开——空串只是结果，
+    // 清空是一次可以跳过旧基线校验的幂等写入（见 LiveDraft.clear）。
+    let clear: Bool?
     // 只读恢复探测：只核验控制租约/目标应用/原编辑位置/电脑内容，不写入任何字符。
     // 手机端在弹窗关闭、页面回前台、输入框重新聚焦时发它，据此决定能否自动续接。
     let probe: Bool?

@@ -1,6 +1,8 @@
 /**
- * [INPUT]: 消费首页 DOM、HTTP 配置/状态与逐图上传接口、浏览器文件读取/图片解码/Canvas 压缩和本地存储。
+ * [INPUT]: 消费首页 DOM、HTTP 配置/状态与逐图上传接口、浏览器文件读取/图片解码和本地存储；合规 JPEG 保留原始字节，其他图片经 Canvas 转换。
  * [OUTPUT]: 提供配对鉴权、目标选择（显式点击委托输入层开启隔离的新草稿轮次）、历史/快捷键，以及最多 8 张图片的原生多选追加、横向预览、逐张删除、批次幂等上传和处理完成门闩。
+ *           快捷键按钮条对 action 为 draft.clear 的项走本地分支：调 window.pocketdeskClearDraft()，不投递按键；
+ *           该全局缺失时如实报错，不做静默 no-op。
  * [POS]: Web 首页编排与共享状态；输入委托 compose.js，控制连接委托 pad.js，全屏委托 screen.js。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -10,6 +12,36 @@ let textEl = document.querySelector('#text'); // IME 恢复时由 compose.js 替
 const sendEl = document.querySelector('#send');
 const messageEl = document.querySelector('#message');
 const connectionEl = document.querySelector('#connection');
+
+// 徽标语义：能连上 + 电脑端辅助功能已授权 + 本机持有控制租约，三者皆备才「已就绪」。
+// 前两项走 HTTP /api/status，第三项走 WS 控制通道（pad.js 暴露的 pocketdeskControlState）。
+// 三者任一不满足就如实降级，不再挂假「已就绪」（对照 app.js 心跳注释同一条原则）。
+let lastAccessibility = true;   // 最近一次 /api/status 的 accessibility，心跳/boot 写入
+let httpDown = false;           // HTTP 连续失败（未连接），优先于一切状态
+
+function refreshConnectionBadge() {
+  if (httpDown) {
+    connectionEl.textContent = '未连接';
+    connectionEl.classList.remove('ready', 'warn');
+    return;
+  }
+  // 控制态由 WS 通道实时维护：viewer = 控制权已旁落，需先接管。
+  const ctrl = typeof window.pocketdeskControlState === 'function' ? window.pocketdeskControlState() : 'ready';
+  if (lastAccessibility === false) {
+    connectionEl.textContent = '需授权';
+    connectionEl.classList.remove('ready', 'warn');
+    return;
+  }
+  if (ctrl === 'viewer') {
+    connectionEl.textContent = '需接管';
+    connectionEl.classList.remove('ready');
+    connectionEl.classList.add('warn');
+    return;
+  }
+  connectionEl.textContent = '已就绪';
+  connectionEl.classList.add('ready');
+  connectionEl.classList.remove('warn');
+}
 
 // 全屏可见编辑框（index.html 的 #kb-proxy，在 #screen-view 内部，
 // 这样进入原生全屏后它仍被渲染、还能拿到焦点；它没有任何可见形态）。
@@ -381,18 +413,32 @@ async function uploadPendingImages() {
   }
 }
 
-// 大图压到 2048px JPEG（质量 0.85）：聊天场景够清晰，base64 体可控制在数 MB 内。
+// 合规 JPEG 直接保留：避免手机 Canvas 重绘黑图，也不压窄长截图文字。
+// 其他格式或超限 JPEG 仍压到最长边 2048px（质量 0.85）。
 function compressImage(file) { return new Promise((resolve, reject) => {
   const reader = new FileReader(); reader.onerror = () => reject(new Error('图片读取失败。'));
   reader.onload = () => {
     const image = new Image();
     image.onload = () => {
-      const scale = Math.min(1, 2048 / Math.max(image.width, image.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(image.width * scale);
-      canvas.height = Math.round(image.height * scale);
-      canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', 0.85));
+      // 小于 8MiB 的 JPEG 保留原图，避免手机 Canvas 重绘黑图和长图文字缩损。
+      if (file.type === 'image/jpeg' && file.size < 8 * 1024 * 1024) {
+        resolve(String(reader.result));
+        return;
+      }
+      try {
+        const scale = Math.min(1, 2048 / Math.max(image.width, image.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('图片处理失败，请重新选择。');
+        context.fillStyle = '#fff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const result = canvas.toDataURL('image/jpeg', 0.85);
+        if (!result.startsWith('data:image/jpeg;base64,')) throw new Error('图片处理失败，请重新选择。');
+        resolve(result);
+      } catch (error) { reject(error); }
     };
     image.onerror = () => reject(new Error('所选图片已损坏。'));
     image.src = String(reader.result);
@@ -437,6 +483,19 @@ function renderShortcuts() {
     button.addEventListener('click', async () => {
       button.disabled = true;
       try {
+        // 「清空会话」是本地动作：清手机草稿 + 请求电脑清空，不投递任何按键。
+        // 服务端把它的 delivery 标成 deviceLocal，误发到 shortcut-trigger 会被明确拒绝。
+        if (shortcut.action === 'draft.clear') {
+          // 本地动作缺失只可能是页面装了半截（compose.js 未加载）。静默 no-op 会被当成
+          // "点了没反应"，所以这里如实报错；执行结果由 clearDraft 自己提示（含文档类豁免）。
+          if (typeof window.pocketdeskClearDraft !== 'function') {
+            message('手机页面未加载完整，请刷新后重试。', true);
+            haptic([28, 50, 28]);
+            return;
+          }
+          await window.pocketdeskClearDraft();
+          return;
+        }
         // 有手机草稿时，普通回车属于本轮提交：先冲刷全文，确认后统一清空。
         // 空草稿及带修饰键的回车仍是普通桌面快捷键。
         if (!shortcut.action && /^(return|enter)$/i.test(shortcut.hotkey.trim())
@@ -543,8 +602,9 @@ async function heartbeatTick() {
       heartbeatFailures = 0;
       message('已重新连接到电脑。');
     }
-    connectionEl.textContent = current.accessibility ? '已就绪' : '需授权';
-    connectionEl.classList.toggle('ready', current.accessibility);
+    httpDown = false;
+    lastAccessibility = current.accessibility;
+    refreshConnectionBadge();
     // 目标列表跟随服务端：控制台改了 openPanel/showGlobal/专属快捷键时，手机下一拍同步。
     if (JSON.stringify(current.targets || []) !== JSON.stringify(targets)) {
       targets = current.targets || [];
@@ -583,7 +643,7 @@ async function heartbeatTick() {
     heartbeatFailures++;
     if (heartbeatFailures >= 2) {
       connectionEl.textContent = '未连接';
-      connectionEl.classList.remove('ready');
+      connectionEl.classList.remove('ready', 'warn');
       message('与电脑的连接已断开：请确认同一 Wi-Fi，或重新扫码。', true);
     }
   }

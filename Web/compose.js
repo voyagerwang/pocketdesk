@@ -1,6 +1,9 @@
 /**
  * [INPUT]: 依赖 app.js 的草稿/目标/历史与多图处理门闩、ComposeQueue、原生 IME、全屏输入区。
  * [OUTPUT]: 提供可见输入栏、手机全文同步与图文提交；发送等待图片处理、补传完整批次并冻结附件编辑，失败保留草稿及附件；用户显式切换目标时保留内容并开启隔离的新草稿轮次。
+ *           另提供 clearDraft（注册为 window.pocketdeskClearDraft）：发带 clear:true 的幂等请求，
+ *           **先让电脑侧确认删净、成功后才清手机**——反过来的话一次没生效的删除就吃掉了用户草稿；
+ *           文档类目标的豁免原因由服务端原样带回提示。
  *           收到可恢复中断（interrupted）时进入冻结态，只发只读探测（probe）等待原绑定重新成立，
  *           recoverable 后按公共前缀只补差量，needs-user-focus 就地提示“点一下电脑输入框”，**绝不重放正文**。
  * [POS]: Web 输入编排层；每次提交等待自己的完成结果，不用同步成功代替提交成功。
@@ -649,6 +652,40 @@ async function send() {
     imagePreview.querySelectorAll('button').forEach(button => { button.disabled = false; });
   }
 }
+
+// 「清空会话」：两边一起清。顺序是刻意的——**先让电脑侧确认删干净，成功后才清手机**。
+// 反过来的话，一次没生效的删除就把用户的草稿吃掉了（项目红线：失败必须保留草稿）。
+// 文档类目标由服务端豁免（整段删除会毁掉正文），那时只清手机侧，并把原因原样带回来。
+async function clearDraft() {
+  if (submittingDraft) { message('正在提交，请稍后再清空。', true); return false; }
+  if (!selected || sendEl.disabled) { message('请先在上方 Dock 选择一个目标应用。', true); return false; }
+  clearTimeout(liveTimer);
+  try {
+    const session = window.pocketdeskControlInfo?.().session || '';
+    const response = await fetch('/api/live-input', {
+      method: 'POST', headers: authHeaders(),
+      // clear 是显式意图，不能靠"text 恰好为空"表达：空串只是结果，清空是一次幂等写入。
+      body: JSON.stringify({ draftId: liveDraftId, text: '', clear: true, targetId: liveTarget ?? selected,
+                             context: inputContext?.context, session }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      message(result.error || '未能确认电脑已清空；手机草稿已保留。', true);
+      haptic([28, 50, 28]);
+      return false;
+    }
+    // 电脑侧有了结论才动手机：换新草稿身份、清附件与输入框，冻结态一并解除。
+    clearCompose();
+    message(result.note || '已清空。');
+    haptic([12]);
+    return true;
+  } catch {
+    message('无法连接本机服务；手机草稿已保留。', true);
+    haptic([28, 50, 28]);
+    return false;
+  }
+}
+window.pocketdeskClearDraft = clearDraft;
 
 sendEl.addEventListener('click', send);
 function handleHomeComposeKeydown(event) {

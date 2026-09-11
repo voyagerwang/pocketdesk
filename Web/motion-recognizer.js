@@ -1,6 +1,7 @@
 /**
  * [INPUT]: 纯函数识别器，不依赖任何浏览器 API；样本为 { t(ms), beta, gamma, alpha, accel(m/s²) }。
- * [OUTPUT]: makeRecognizer(params) 返回 { push(sample), reset(reason), state() }，push 返回 { fired, phase, events }。
+ * [OUTPUT]: makeRecognizer(params) 返回 { push(sample), reset(reason), state() }，push 返回 { fired, phase, events }；
+ *           isUsableSample(sample) 判定传感器是否真的在出数（供免证书方案的“数据层”门禁使用）。
  * [POS]: 翻腕手势识别核心；仅对“前倾并停住片刻”发出候选，对震动/扭转/转屏/数据缺口一律拒绝。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  *
@@ -24,6 +25,21 @@
     gapMaxMs: 220,      // 数据缺口 → 复位
     cooldownMs: 600,    // 触发后冷却，避免持续倾斜重复发
   };
+
+  // 有效样本判定：motion-send 用它证明"传感器真的在出数"，而不是"接口存在"。
+  // 三个要点，少一个就会把能用的手机判成不能用：
+  //   1) null / undefined / NaN 是没数据（无陀螺仪的安卓 WebView 会全轴给 null）；
+  //   2) 0 是**合法读数**——手机平放桌面时 rotationRate 与相对倾角就是 0，静止不能算失败；
+  //   3) 只要求任一轴有效：设备可能只提供 devicemotion 或只提供 deviceorientation。
+  function isUsableSample(sample) {
+    if (!sample || typeof sample !== 'object') return false;
+    var axes = ['beta', 'gamma', 'alpha', 'accel'];
+    for (var i = 0; i < axes.length; i++) {
+      var value = sample[axes[i]];
+      if (typeof value === 'number' && isFinite(value)) return true;
+    }
+    return false;
+  }
 
   function makeRecognizer(params) {
     var p = Object.assign({}, DEFAULT_PARAMS, params || {});
@@ -105,7 +121,7 @@
     };
   }
 
-  var api = { makeRecognizer: makeRecognizer, DEFAULT_PARAMS: DEFAULT_PARAMS };
+  var api = { makeRecognizer: makeRecognizer, DEFAULT_PARAMS: DEFAULT_PARAMS, isUsableSample: isUsableSample };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.MotionRecognizer = api;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

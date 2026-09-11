@@ -96,6 +96,60 @@ final class KeyboardDraftWriter {
         return true
     }
 
+    /// 整段清空（手机把草稿删空 = 两边一起清）。
+    /// 与 `update` 的两点关键差别，都是为"清空之后再不同步"这个死法准备的：
+    /// 1) **不校验创建时的基线**。基线是捕获那一刻按 `prefix/suffix` 算出来的，快捷键通道
+    ///    （全选/删除）或应用自身重建编辑器都会让它永久分叉；拿它当门槛就永远过不去。
+    ///    清空是幂等的——删光的结果与当前内容无关，所以放宽这条没有重复输入的风险。
+    /// 2) **用当前实际内容算选区**，不拿旧的 prefix/suffix 反推"本轮那一段"。
+    /// 纸面放宽不换取凭空认账：只有读回为空才算成功，否则一律返回 false 交给上层冻结。
+    func clearAll() -> Bool {
+        guard valid() else { diagnostic = "清空前：输入绑定或控制租约失效"; return false }
+        guard let readSnapshot, let current = readSnapshot() else {
+            diagnostic = "清空前：原控件快照不可读"
+            return false
+        }
+        let count = current.text.utf16.count
+        // 已经是空的：幂等认账，也覆盖"外部（快捷键/应用自己）已经替我们删好了"。
+        if count == 0 { uncertainWrite = false; diagnostic = ""; return true }
+        uncertainWrite = true
+        diagnostic = "清空：修订选区未能建立"
+        if selectRange?(CFRange(location: 0, length: count)) == true {
+            // 只读等待选区落地；不重放、不追加。
+            let desired = DraftSnapshot(text: current.text, location: 0, length: count)
+            var landed = false
+            for _ in 0..<8 {
+                guard valid() else { diagnostic = "清空：输入绑定或控制租约失效"; return false }
+                if let actual = readSnapshot(), actual == desired { landed = true; break }
+                diagnostic = Self.describe("清空选区读回", expected: desired, actual: readSnapshot())
+                usleep(10_000)
+            }
+            guard landed else { return false }
+        } else {
+            // 选区设不了：只有"光标停在文末且无选中"才敢播退格流，否则无从确定删的是什么。
+            guard current.length == 0, current.location == count, count <= 8_000 else {
+                diagnostic = "清空：无法确定删除范围（控件不支持设置选区）"
+                return false
+            }
+            for _ in 0..<count {
+                guard valid(), key(123, .maskShift) else { return false }
+            }
+        }
+        diagnostic = "清空：删除未能发出"
+        guard valid(), key(51, []) else { return false }
+        let empty = DraftSnapshot(text: "", location: 0, length: 0)
+        for _ in 0..<12 {
+            guard valid() else { diagnostic = "清空后：输入绑定或控制租约失效"; return false }
+            if let actual = readSnapshot(), actual.text.isEmpty {
+                uncertainWrite = false; diagnostic = ""
+                return true
+            }
+            diagnostic = Self.describe("清空后读回", expected: empty, actual: readSnapshot())
+            usleep(15_000)
+        }
+        return false
+    }
+
     // 不重新捕获另一个输入框；只核对本轮原控件，已落入的文字绝不再追加。
     func confirmedText(previous: String, attempted: String) -> String? {
         guard valid() else { return nil }

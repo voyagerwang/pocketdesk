@@ -113,6 +113,30 @@ final class LiveDraft {
         text = value
     }
 
+    /// 显式清空（手机点「清空会话」= 两边一起清）。
+    /// 与 `update("")` 的分水岭：空串写入是**幂等**的——删光的结果与当前内容无关，不存在重复输入，
+    /// 所以允许从"基线已分叉"的暂停态破冰。那正是"清空之后再不同步"的唯一出路：基线一旦被
+    /// 快捷键通道或应用自身重建编辑器打乱，`update` 就永远过不去，而清空本不需要基线。
+    /// 纸面放宽不换取凭空认账：`performClear` 必须自己证明"删干净了"才能推进状态。
+    /// 唯一的例外是**结果未知的停止**（图片已粘贴、提交未确认）——那类不能靠清空消除，
+    /// 否则会把可能已经生效的内容抹掉。
+    func clear(performClear: () -> Bool) throws {
+        guard !committed else { throw failure("本轮已经提交，请开始新的草稿。", .committed) }
+        guard !stopped || resumable else {
+            throw failure(lastMessage.isEmpty ? "上次结果未确认，请核对电脑内容。" : lastMessage, state)
+        }
+        attempted = ""
+        guard performClear() else {
+            throw stop("没能确认电脑输入框已清空；手机草稿已保留，电脑内容未被改动。", .interrupted, resumable: true)
+        }
+        text = ""
+        writeUncertain = false
+        // 清空落地即重新证明了"这个输入位置可写"：解除冻结，后续输入接着同一轮继续。
+        stopped = false
+        state = .active
+        lastMessage = ""
+    }
+
     /// 只读状态判定：不注入任何键盘/鼠标事件，只回答"现在处于哪一态"。
     func classify() -> DraftState {
         if committed { return .committed }

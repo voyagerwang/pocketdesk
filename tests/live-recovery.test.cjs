@@ -99,35 +99,29 @@ assert.ok(!/CGEvent\(mouseEventSource|\.post\(tap:/.test(locateBody),
 assert.ok(/pointer\.locate\(to: point, generation: generation, anchor: anchor\)/.test(locateBody),
   '定位必须经 PointerExecutor.locate 并带上代际与锚点');
 
-/* ---------- 证书四步向导 ---------- */
+/* ---------- 免证书降级：翻腕不得再引导用户装 CA ---------- */
 
-assert.ok(/① 安装 PocketDesk 证书/.test(settings), '向导必须有第①步：可点下载');
-assert.ok(/VPN 与设备管理/.test(settings), '向导必须说明描述文件安装路径（下载≠安装）');
-assert.ok(/证书信任设置/.test(settings) && /PocketDesk Local Device CA/.test(settings),
-  '向导必须说明开启完全信任，且用证书实际名称');
-assert.ok(/④ 检测并打开安全连接/.test(settings), '向导必须有第④步：先检测再跳转');
-assert.ok(/window\.pocketdeskMotion\.probeSecure/.test(settings), '第④步必须用真实 HTTPS 探测');
-assert.ok(!/target = '_blank'[\s\S]{0,120}secureURL/.test(settings), '不再直接引导用户跳进可能不受信任的 HTTPS 页');
-assert.ok(/证书通常只需设置一次/.test(settings), '向导必须说明证书通常只需设置一次');
-assert.ok(/运动与方向权限是另一件事/.test(settings), '证书信任与运动权限必须作为两件事解释');
-
-// 探测器本身：真实握手 + 四种失败分流。
-assert.ok(/probeSecure: probeSecure/.test(motion), 'probeSecure 必须对外暴露');
-for (const code of ['server-unreachable', 'https-not-started', 'host-mismatch', 'not-trusted']) {
-  assert.ok(motion.includes(`'${code}'`), `探测器缺少分流分支 ${code}`);
+// 这条断言的意义是"防止向导复活"：为一个手势功能要求下载/安装/信任 CA 是项目红线。
+// 现在的正确行为是——环境不过关就整组隐藏，用户继续用发送按钮。
+for (const gone of ['① 安装 PocketDesk 证书', '④ 检测并打开安全连接', 'probeSecure',
+                    'caCertificatePath', 'CA_CERT_PATH', 'detectAndOpenSecure']) {
+  assert.ok(!settings.includes(gone) && !motion.includes(gone), `翻腕不得再引导装证书：${gone}`);
 }
-assert.ok(/fetchWithTimeout\('https:\/\/'/.test(motion), '必须真的去握一次 HTTPS，而不是伪造结果');
-
-// 证书下载仍走 HTTP 也能取到的路径（信任之前只有 HTTP）。
-assert.ok(/CA_CERT_PATH = '\/PocketDesk-CA\.cer'/.test(motion), 'CA 下载路径必须保持 HTTP 可达');
+assert.ok(!/https:\/\/' \+ host/.test(motion), '体感模块不得再拼安全地址让用户换入口');
+// 换来的东西：四级状态 + 有效数据探测 + 挂起恢复。
+for (const state of ['unsupported', 'needs-permission', 'unverified', 'running']) {
+  assert.ok(motion.includes(`'${state}'`), `motion-send 缺少状态 ${state}`);
+}
+assert.ok(/function probeData\(/.test(motion), '必须有真实的有效数据探测');
 
 /* ---------- 页面引用（改过的资源必须换版本号，否则手机会用缓存） ---------- */
 
-for (const asset of ['app.js?v=3.0.24', 'settings.js?v=3.0.6', 'compose.js?v=3.0.26',
-                     'motion-send.js?v=3.0.4', 'app-extras.css?v=3.0.6', 'screen.css?v=3.1.1']) {
+for (const asset of ['app.js?v=3.0.24', 'settings.js?v=3.0.7', 'compose.js?v=3.0.26',
+                     'motion-recognizer.js?v=3.1.0', 'motion-send.js?v=3.1.0',
+                     'app-extras.css?v=3.0.7', 'screen.css?v=3.1.1']) {
   assert.ok(html.includes(asset), `index.html 应引用 ${asset}`);
 }
 assert.ok(server.includes('"compose.js"') && server.includes('"settings.js"') && server.includes('"motion-send.js"'),
   'Server.swift 静态白名单必须仍然放行这些脚本');
 
-console.log('live recovery: 冻结/只读探测/有界恢复/不重放正文、定位意图与代际隔离、证书四步向导 全部通过');
+console.log('live recovery: 冻结/只读探测/有界恢复/不重放正文、定位意图与代际隔离、免证书降级 全部通过');

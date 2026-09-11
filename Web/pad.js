@@ -36,7 +36,7 @@ function wsConnect() {
     }
     wsReady = true;
   };
-  ws.onclose = () => { if (ws !== connection) return; wsReady = false; wsAuthorized = false; controlOwner = false; resetPadQueue(); cancelPadGesture(); notifyWS({ t: 'closed' }); scheduleReconnect(); };
+  ws.onclose = () => { if (ws !== connection) return; wsReady = false; wsAuthorized = false; controlOwner = false; resetPadQueue(); cancelPadGesture(); notifyWS({ t: 'closed' }); window.pocketdeskMotionSuspend?.('disconnected'); scheduleReconnect(); };
   ws.onerror = () => { try { connection.close(); } catch { /* 已关闭 */ } };
   // 下行：服务端主动推的光标位置、错误与鉴权回执都从这里分发。
   // 触控板此前是纯上行通道，鼠标叠加层需要它变成双向的。
@@ -47,8 +47,9 @@ function wsConnect() {
     if (message?.t === 'auth_ok') {
       if (controlInfo.session !== message.session) controlSequence = 0;
       wsAuthorized = true; controlOwner = message.controller !== false; controlInfo = message;
+      syncMotionWithControl();
     }
-    if (message?.t === 'control') { controlOwner = message.controller; controlInfo.controller = controlOwner; if (!controlOwner) cancelPadGesture(); }
+    if (message?.t === 'control') { controlOwner = message.controller; controlInfo.controller = controlOwner; if (!controlOwner) cancelPadGesture(); syncMotionWithControl(); }
     notifyWS(message);
   };
 }
@@ -58,6 +59,13 @@ function wsConnect() {
 let wsAuthorized = false;
 let controlOwner = false;
 let controlInfo = {};
+
+// 翻腕识别与操作通道同生共死：失去控制权就停识别，拿回来才让它重新验证有效数据。
+// 直接原因不是省电——离开场景后的迟到候选不能发，恢复后也必须重新证明传感器还在出数。
+function syncMotionWithControl() {
+  if (controlOwner) window.pocketdeskMotionResume?.();
+  else window.pocketdeskMotionSuspend?.('control-lost');
+}
 let controlSequence = 0;
 const wsListeners = new Set();
 

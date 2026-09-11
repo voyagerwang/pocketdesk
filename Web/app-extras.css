@@ -633,46 +633,12 @@ main.pad-mode .pad-title {
   color: var(--accent);
 }
 
-/* ---------- 翻腕发送：授权 / 灵敏度 ---------- */
+/* ---------- 翻腕发送：灵敏度 ---------- */
 
-/* 设置面板内的操作按钮（与 .sheet-close 同级，但不浮动）。 */
-.sheet-btn {
-  margin-top: var(--s-2);
-  padding: var(--s-2) var(--s-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-field);
-  background: var(--surface-1);
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--text-sm);
-  text-align: center;
-  cursor: pointer;
-}
-.sheet-btn:hover { border-color: var(--accent-line); }
-.sheet-btn:active { background: var(--accent-soft); }
+/* 证书向导相关的 .sheet-btn / .wrist-links / .wrist-link / .wrist-step 已随向导一并删除：
+   免证书方案下，非安全上下文整组隐藏，面板里不再有任何"下载/安装/去系统设置"的动作块。 */
 
-/* 翻腕组里由设置面板渲染出的动作链接：复用按钮外观，但必须显式去掉下划线并转成块级，
-   否则 anchor 是内联盒——点按区域只有文字那么宽，手机上是很难点中的。 */
-.wrist-links {
-  display: grid;
-  gap: var(--s-2);
-  margin-top: var(--s-2);
-}
-.wrist-link {
-  display: block;
-  margin-top: 0;
-  text-decoration: none;
-}
-/* 证书向导里的系统步骤说明：嵌在 .wrist-links 栅格里的静态文字，不参与点按。 */
-.wrist-step {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  line-height: 1.45;
-}
-.wrist-step.sheet-hint { margin: 0; }
-
-/* 灵敏度下拉与授权按钮同列，保持两列栅格对齐。 */
+/* 灵敏度下拉单独成行，保持两列栅格对齐。 */
 .sheet-group .sheet-row:has(select) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

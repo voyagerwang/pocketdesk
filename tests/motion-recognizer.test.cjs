@@ -3,7 +3,7 @@
  * 运行：node tests/motion-recognizer.test.cjs
  */
 const assert = require('assert');
-const { makeRecognizer, DEFAULT_PARAMS } = require('../Web/motion-recognizer.js');
+const { makeRecognizer, DEFAULT_PARAMS, isUsableSample } = require('../Web/motion-recognizer.js');
 
 let passed = 0;
 function test(name, fn) {
@@ -93,6 +93,23 @@ test('默认参数合理（liftDeg>0, holdMinMs>0）', () => {
   assert.ok(DEFAULT_PARAMS.liftDeg > 0);
   assert.ok(DEFAULT_PARAMS.holdMinMs > 0);
   assert.ok(DEFAULT_PARAMS.accelMax > 9.8); // 必须高于重力，否则静止就拒
+});
+
+// 免证书方案的数据层门禁：能不能用翻腕，取决于"传感器真的在出数"，而不是"接口存在"。
+test('有效样本：静止的合法零值必须算通过', () => {
+  assert.strictEqual(isUsableSample({ beta: 0, gamma: 0, alpha: 0, accel: 9.8 }), true,
+    '手机平放桌面时零值是正常读数，不能判成没数据');
+  assert.strictEqual(isUsableSample({ beta: null, gamma: null, alpha: null, accel: 0 }), true,
+    '只有加速度轴出数也应算有效');
+});
+
+test('无效样本：null / NaN / 空对象一律不算出数', () => {
+  assert.strictEqual(isUsableSample({ beta: null, gamma: null, alpha: null, accel: null }), false,
+    '全轴为 null 说明设备没给传感器数据');
+  assert.strictEqual(isUsableSample({ beta: NaN, gamma: NaN, alpha: NaN, accel: NaN }), false,
+    'NaN 不是有效读数，全轴为 NaN 应判无效');
+  assert.strictEqual(isUsableSample({}), false, '空样本无效');
+  assert.strictEqual(isUsableSample(null), false, 'null 样本无效');
 });
 
 test('灵敏度预设 high 比 low 更易触发（同一样本）', () => {

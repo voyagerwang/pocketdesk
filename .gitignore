@@ -7,3 +7,6 @@ build/
 .agents/
 .impeccable/
 review/
+
+# 本地记忆与运行时状态（含 .workbuddy/memory），不随仓库分发
+.workbuddy/
