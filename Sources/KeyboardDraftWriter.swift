@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 InputFocus 的真实焦点、DraftSnapshot、AppKit AX；按键和文本事件由 InputExecutor 注入。
  * [OUTPUT]: 提供 KeyboardDraftWriter；追加实时输入、选区修订及不含正文的失败诊断，失败后只依据原控件快照或未落键证据恢复。
  * [POS]: Sources 的通用编辑器兼容通道；可读 AX 时校验原文和选区，未知编辑器沿用绑定和有序键流，不伪造读回。
- * [PROTOCOL]: update 的删除路径对 Electron/受控输入框自适应降级（AX 选区“假成功”时改走键盘 Shift+Left）；变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: update 的删除路径对 Electron/受控输入框自适应降级（AX 选区越界或“假成功”时改走逐字 Backspace，不依赖选区、每次独立删光标前一字）；落键读回与 confirmedText 均以“电脑实际内容 == 手机目标”为权威成功判据，断掉 desired 坐标错位（输入框已有内容/删除场景）导致的冻结链；变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 
@@ -62,17 +62,28 @@ final class KeyboardDraftWriter {
             diagnostic = "修订选区未能建立"
             uncertainWrite = true
             lastRemoved = removed
-            // 真实 AX 选区能一次定位，优先用它；但 Electron/受控输入框常“报告成功却不落 DOM”，
-            // 故一旦 waitForSelection 失败就标记本写入器不再信任 AX 选区，后续删除改走键盘 Shift+Left。
+            // 越界检测：建立绑定时的 start（光标位置）与手机端 diff 的 offset 直接相加得到的
+            // location 可能超出电脑端实际文本长度。Chromium 对越界 setRange 常“夹取到边界并假成功”，
+            // 使 waitForSelection 读回位置不符却已干扰选区，最终删不干净。越界即放弃 AX 路径。
+            let textLen = expected?.text.utf16.count ?? Int.max
+            let inBounds = selection.location >= 0 && selection.length >= 0
+                && selection.location + selection.length <= textLen
+            // 真实 AX 选区能一次定位，优先用它；但 Electron/受控输入框常“报告成功却不落 DOM”。
+            // 越界或 waitForSelection 失败则标记本写入器不再信任 AX 选区，后续删除改走键盘退格。
             // 首帧走 AX 快路径，原生应用无感；受控应用首次失败后永久切键盘，避免每次删除卡顿。
-            if axSelectionReliable, selectRange?(selection) == true, waitForSelection(selection) {
+            if axSelectionReliable, inBounds, selectRange?(selection) == true, waitForSelection(selection) {
                 // AX 选区已立住，进入落键阶段。
             } else {
                 axSelectionReliable = false
                 guard matchesExpected() else { return false }
                 guard removed <= 8_000 else { return false }
+                // 受控输入框（Electron/React）下 Shift+Left 逐字扩展选区会被组件重渲染重置，
+                // 实际只选到最后一格 → 删不干净。改用「逐字 Backspace」：Backspace（key 51，无字符）
+                // 不依赖选区，每次独立删光标前一字，对受控组件可靠。同步时光标本就在文末，
+                // 逐字退格即对齐手机末尾删除；每次之间等待组件消化，避免连续退格被吞。
                 for _ in 0..<removed {
-                    guard valid(), key(123, .maskShift) else { return false }
+                    guard valid(), key(51, []) else { return false }
+                    usleep(20_000)
                 }
             }
         }
@@ -90,6 +101,11 @@ final class KeyboardDraftWriter {
             for _ in 0..<12 {
                 guard valid() else { diagnostic = "落键后：输入绑定或控制租约失效"; return false }
                 let actual = readSnapshot()
+                // 权威判据：电脑实际内容已等于手机端目标 new，即视为同步成功。
+                // desired 坐标（prefix+new+suffix）仅在“空框 + 仅追加”时正确；输入框已有内容或发生删除时
+                // 会错位，把本已正确的内容判成失败并冻结草稿（表现即“删不干净→手机再输入不同步→切应用才恢复”）。
+                // 以内容相等为最终裁决，可断掉这条冻结链；只有确实没落到 new 才继续等待/失败。
+                if actual?.text == new { expected = .end(of: new); uncertainWrite = false; diagnostic = ""; return true }
                 if actual == desired { expected = desired; uncertainWrite = false; diagnostic = ""; return true }
                 diagnostic = Self.describe("落键后读回", expected: desired, actual: actual)
                 usleep(15_000)
@@ -166,6 +182,9 @@ final class KeyboardDraftWriter {
         // 曾发出写入但仍读到旧值，不等于没有落字；可能只是目标应用尚未处理。
         if actual == expected && !uncertainWrite { return previous }
         let desired = DraftSnapshot(text: prefix + attempted + suffix, location: start + attempted.utf16.count, length: 0)
+        // 与 update 一致：电脑实际内容已等于手机端目标即认账，避免 desired 坐标错位（输入框已有内容/删除场景）
+        // 把正确的内容误判失败。只有确实没落到 attempted 才拒绝。
+        if actual.text == attempted { expected = .end(of: attempted); first = false; uncertainWrite = false; return attempted }
         guard actual == desired else { return nil }
         expected = desired; first = false; uncertainWrite = false
         return attempted
