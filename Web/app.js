@@ -4,7 +4,7 @@
  *           快捷键按钮条对 action 为 draft.clear 的项走本地分支：调 window.pocketdeskClearDraft()，不投递按键；
  *           该全局缺失时如实报错，不做静默 no-op。
  * [POS]: Web 首页编排与共享状态；输入委托 compose.js，控制连接委托 pad.js，全屏委托 screen.js。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: boot() 对齐前台目标后主动 activateTarget 一次，使手机“默认选中”与实际桌面绑定就绪对齐（与手动点目标等价，不移动鼠标、不重置草稿）；变更时更新此头部，然后检查 CLAUDE.md
  */
 
 const row = document.querySelector('#targets');
@@ -698,6 +698,12 @@ async function boot() {
       frontmostLabel = status.frontmostName;
     }
     markSelected();
+    // 进入即把前台目标唤醒到“已选中且已就绪”：默认高亮的只是 UI 提示，桌面绑定要等首键才建；
+    // 若 Mac 输入框没焦点，首键 establish 失败会冻结草稿、表现为“无反应”。主动唤醒一遍，
+    // 让手机“默认选中”与实际输入就绪对齐（与手动点一下目标等价，不移动鼠标、不重置草稿）。
+    if (selected && targets.some(item => item.id === selected)) {
+      activateTarget(selected).catch(() => {});
+    }
     startHeartbeat();
     // 控制租约走 WS 通道：服务端易主时下行 control/auth_ok，此时立即刷新徽标，
     // 不要等到下一拍（≤5s）HTTP 心跳才发现「已就绪」是假的。

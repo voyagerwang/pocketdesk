@@ -107,10 +107,9 @@
     sensitivity: () => typeof sensitivity === 'number' ? sensitivity : 1,
     doubleClickMs: () => window.pocketdeskControlInfo().doubleClickMs || 350,
     feedback, paint, interact: () => frames.interact(),
-    dismissKeyboard: () => {
-      if (!window.pocketdeskKeyboardActive()) return false;
-      window.pocketdeskHideKeyboard(); return true;
-    },
+    // 键盘开启时点屏：把点击发往 Mac（在会话里定位光标），不再顺手收起手机键盘。
+    // 收键盘用专属关闭按钮 / 返回键，避免“点一下会话就丢键盘”导致没法接着打字。
+    dismissKeyboard: () => false,
     touch: (x, y) => {
       const dot = $('screen-touch'), p = geometry.local(x, y);
       dot.hidden = false; dot.style.left = `${p.x}px`; dot.style.top = `${p.y}px`;
