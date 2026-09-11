@@ -110,12 +110,15 @@ assert.ok(motionSend.includes("suspend('hidden')") && motionSend.includes("suspe
 assert.ok(fs.readFileSync(path.join(root, 'Web/pad.js'), 'utf8').includes('pocketdeskMotionSuspend'),
   '控制通道失去租约时必须停识别');
 
-// 控制台：地址仍是可点链接，安全连接整块保持移除（它就是用户点名要去掉的"大二维码"那张卡）。
+// 控制台：地址仍是可点链接。翻腕发送需要安全上下文，控制台因此提供一个 HTTPS 配对码
+// （内嵌 token，扫码即完成配对 + 拿到安全上下文一步到位）；它复用既有自签证书的一次性站点例外，
+// 不下载/不安装/不信任 CA，符合免证书红线。证书下载入口已彻底移除。
 const consoleHtml = fs.readFileSync(path.join(root, 'Web/console.html'), 'utf8');
-for (const id of ['url', 'ipUrl', 'remoteUrl']) {
+for (const id of ['url', 'ipUrl', 'secureUrl']) {
   assert.ok(new RegExp(`<a id="${id}"[^>]*class="[^"]*url-link`).test(consoleHtml), `控制台 #${id} 应是链接`);
 }
-assert.ok(!/id="secureQrItem"/.test(consoleHtml), '控制台不应再出现安全连接二维码整块');
+assert.ok(/id="secureQrItem"/.test(consoleHtml), '控制台应提供 HTTPS 配对二维码（翻腕发送的安全上下文入口）');
+assert.ok(/id="qr-secure"/.test(consoleHtml), 'HTTPS 配对二维码应有对应 img');
 assert.ok(!/id="caDownload"/.test(consoleHtml), '控制台不再承载证书下载');
 // CA 路由保留：它不是翻腕的入口，而是锁屏 HTTPS 通道（另有自身安全门禁）需要的证书分发。
 // 免证书方案只说"不为翻腕要求装 CA"，没说要拆掉已有信任基础设施。

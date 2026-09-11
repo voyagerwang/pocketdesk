@@ -44,8 +44,8 @@ button{font:inherit;cursor:pointer}
 .qr-item{display:flex;flex-direction:column;gap:8px}
 .qr-item[hidden]{display:none}
 .qr-item b{font-size:12px;font-weight:600}
-#qr,#qr-ip,#qr-remote{width:132px;height:132px;border:1px solid var(--line);border-radius:4px;background:#fff;padding:6px}
-#qr.error,#qr-ip.error,#qr-remote.error{background:var(--panel)}
+#qr,#qr-ip,#qr-secure{width:132px;height:132px;border:1px solid var(--line);border-radius:4px;background:#fff;padding:6px}
+#qr.error,#qr-ip.error,#qr-secure.error{background:var(--panel)}
 .mono{font-family:ui-monospace,Menlo,monospace;color:var(--muted);word-break:break-all;font-size:12px}
 .connect-info{display:flex;flex-direction:column;gap:8px;flex:1;min-width:220px}
 #url{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--ink);word-break:break-all}
@@ -157,14 +157,13 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
         <b>当前网络 IP · 安卓</b>
         <a id="ipUrl" class="hint mono url-link" href="#">生成中…</a>
       </div>
-      <div id="remoteQrItem" class="qr-item" hidden>
-        <img id="qr-remote" alt="Tailscale 跨网二维码">
-        <b>跨网地址 · Tailscale</b>
-        <a id="remoteUrl" class="hint mono url-link" href="#">生成中…</a>
+      <div id="secureQrItem" class="qr-item" hidden>
+        <img id="qr-secure" alt="安全连接二维码（翻腕发送用）">
+        <b>安全连接 · 翻腕发送</b>
+        <a id="secureUrl" class="hint mono url-link" href="#">生成中…</a>
+        <span id="secureHint" class="hint"></span>
       </div>
-      <div class="connect-info">
-        <span id="remoteHint" class="hint"></span>
-      </div>
+      <div class="connect-info"></div>
     </div>
   </section>
 
@@ -285,19 +284,18 @@ async function refresh() {
       setLink('url', status.lanURL, '未找到局域网地址，请确认 Wi-Fi 已连接。');
       setLink('ipUrl', status.ipURL, '未找到局域网地址');
     }
-    if (status.remoteURL) {
-      $('remoteQrItem').hidden = false;
-      setLink('remoteUrl', status.remoteURL, '');
-      $('remoteHint').textContent = '跨网已就绪：手机也需打开 Tailscale，然后扫描跨网码。UU 远程只负责显示和操作画面。';
-      if ($('qr-remote').dataset.url !== status.remoteURL) {
-        $('qr-remote').dataset.url = status.remoteURL;
-        $('qr-remote').classList.remove('error');
-        $('qr-remote').src = '/api/qr?type=tailscale&t=' + Date.now();
+    if (status.secureURL) {
+      $('secureQrItem').hidden = false;
+      setLink('secureUrl', status.secureURL, '');
+      $('secureHint').textContent = '翻腕发送需要安全连接：手机扫码后 Safari 会提示“无法验证服务器”，点“访问此网站”一次即可，无需安装证书或开启完全信任。';
+      if ($('qr-secure').dataset.url !== status.secureURL) {
+        $('qr-secure').dataset.url = status.secureURL;
+        $('qr-secure').classList.remove('error');
+        $('qr-secure').src = '/api/qr?type=secure&t=' + Date.now();
       }
     } else {
-      $('remoteQrItem').hidden = true;
-      // 未就绪不留占位文字：这一行只承载"已就绪"这一条信息，没就绪就什么都不说。
-      $('remoteHint').textContent = '';
+      $('secureQrItem').hidden = true;
+      $('secureHint').textContent = '';
     }
     // 手机在线状态：标题行右侧的状态徽章（与顶部 #conn 同一 pill 范式），只有"已连接"才点亮。
     const seen = status.phoneLastSeen * 1000;
@@ -808,7 +806,7 @@ function renderActivity(log) {
 $('qr').onload = () => { $('qr').dataset.loaded = '1'; };
 $('qr').onerror = () => { $('qr').classList.add('error'); };
 $('qr-ip').onerror = () => { $('qr-ip').classList.add('error'); };
-$('qr-remote').onerror = () => { $('qr-remote').classList.add('error'); };
+$('qr-secure').onerror = () => { $('qr-secure').classList.add('error'); };
 refresh(); setInterval(refresh, 3000);
 </script>
 </body>
