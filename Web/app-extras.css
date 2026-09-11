@@ -651,6 +651,19 @@ main.pad-mode .pad-title {
 .sheet-btn:hover { border-color: var(--accent-line); }
 .sheet-btn:active { background: var(--accent-soft); }
 
+/* 翻腕组里由设置面板渲染出的动作链接：复用按钮外观，但必须显式去掉下划线并转成块级，
+   否则 anchor 是内联盒——点按区域只有文字那么宽，手机上是很难点中的。 */
+.wrist-links {
+  display: grid;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+.wrist-link {
+  display: block;
+  margin-top: 0;
+  text-decoration: none;
+}
+
 /* 灵敏度下拉与授权按钮同列，保持两列栅格对齐。 */
 .sheet-group .sheet-row:has(select) {
   display: grid;

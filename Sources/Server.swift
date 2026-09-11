@@ -182,6 +182,17 @@ final class Server {
                 }
             }
 
+        // 手机在信任证书之前只有 HTTP 可用：这份 CA 必须能从 HTTP 直接取，否则用户只能手工把
+        // 文件从电脑传到手机。只暴露公开的 CA 证书本身，不含任何私钥，因此刻意不做鉴权。
+        case ("GET", "/PocketDesk-CA.cer"):
+            guard let data = try? Data(contentsOf: SecureTransport.caCertificateURL) else {
+                respond(connection, status: 404,
+                        json: ["error": "尚未生成 CA 证书，请先在电脑上运行 scripts/setup-secure-channel.sh。"])
+                return
+            }
+            // iOS/Android 见到这个 MIME 才会走"安装证书/描述文件"流程，而不是当普通文件下载。
+            respond(connection, status: 200, data: data, contentType: "application/x-x509-ca-cert")
+
         case ("GET", "/api/status"):
             let stableURL = Util.stableURL(port)
             let lanIP = Util.primaryLANAddress()

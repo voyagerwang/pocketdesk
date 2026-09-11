@@ -49,6 +49,10 @@ button{font:inherit;cursor:pointer}
 .mono{font-family:ui-monospace,Menlo,monospace;color:var(--muted);word-break:break-all;font-size:12px}
 .connect-info{display:flex;flex-direction:column;gap:8px;flex:1;min-width:220px}
 #url{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--ink);word-break:break-all}
+/* 地址是链接，但要保持"是一行地址"的观感：只用淡下划线示意可点，悬停才变强调色。 */
+a.url-link{text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px;word-break:break-all}
+a.url-link:hover{color:var(--accent);text-decoration-color:currentColor}
+a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
 #phoneState{font-size:13px;color:var(--muted)}
 #phoneState.ok{color:var(--accent)}
 .hint{color:var(--muted);font-size:12px;line-height:1.7}
@@ -147,23 +151,24 @@ button{font:inherit;cursor:pointer}
       <div class="qr-item">
         <img id="qr" alt="永久地址二维码">
         <b>永久地址 · iPhone</b>
-        <span id="url" class="hint mono">生成中…</span>
+        <a id="url" class="hint mono url-link" href="#">生成中…</a>
       </div>
       <div class="qr-item">
         <img id="qr-ip" alt="IP 地址二维码">
         <b>当前网络 IP · 安卓</b>
-        <span id="ipUrl" class="hint mono">生成中…</span>
+        <a id="ipUrl" class="hint mono url-link" href="#">生成中…</a>
       </div>
       <div id="remoteQrItem" class="qr-item" hidden>
         <img id="qr-remote" alt="Tailscale 跨网二维码">
         <b>跨网地址 · Tailscale</b>
-        <span id="remoteUrl" class="hint mono">生成中…</span>
+        <a id="remoteUrl" class="hint mono url-link" href="#">生成中…</a>
       </div>
       <div id="secureQrItem" class="qr-item" hidden>
         <img id="qr-secure" alt="HTTPS 安全连接二维码">
         <b>安全连接</b>
-        <span id="secureUrl" class="hint mono"></span>
-        <span class="hint">手机首次使用需安装本机生成的 PocketDesk CA 证书。</span>
+        <a id="secureUrl" class="hint mono url-link" href="#"></a>
+        <span class="hint">手机首次使用需安装本机生成的 PocketDesk CA 证书（装一次即长期有效）。</span>
+        <a id="caDownload" class="hint url-link" href="/PocketDesk-CA.cer" download>下载 PocketDesk 证书</a>
       </div>
       <div class="connect-info">
         <span id="phoneState">等待连接…</span>
@@ -241,6 +246,15 @@ let lastActivityLog = [];
 
 function esc(text) { const div = document.createElement('div'); div.textContent = text ?? ''; return div.innerHTML; }
 
+// 地址一律做成可点的链接：手抄 IP 和端口既容易错也没有必要。没有地址时退回纯文本提示，
+// 并摘掉 href，免得留下一个点开还在原地的死链。
+function setLink(id, url, emptyText) {
+  const el = $(id);
+  el.textContent = url || emptyText;
+  if (url) el.href = url; else el.removeAttribute('href');
+  el.classList.toggle('is-empty', !url);
+}
+
 async function post(url, body) {
   const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
                                       body: body ? JSON.stringify(body) : '{}'});
@@ -278,18 +292,18 @@ async function refresh() {
     if (!$('qr').src || $('qr').dataset.loaded !== '1') {
       $('qr').src = '/api/qr';
       $('qr-ip').src = '/api/qr?type=ip';
-      $('url').textContent = status.lanURL || '未找到局域网地址，请确认 Wi-Fi 已连接。';
-      $('ipUrl').textContent = status.ipURL || '未找到局域网地址';
+      setLink('url', status.lanURL, '未找到局域网地址，请确认 Wi-Fi 已连接。');
+      setLink('ipUrl', status.ipURL, '未找到局域网地址');
     }
     $('secureQrItem').hidden = !status.secureURL;
     if (status.secureURL && $('qr-secure').dataset.url !== status.secureURL) {
-      $('secureUrl').textContent = status.secureURL;
+      setLink('secureUrl', status.secureURL, '');
       $('qr-secure').dataset.url = status.secureURL;
       $('qr-secure').src = '/api/qr?type=secure';
     }
     if (status.remoteURL) {
       $('remoteQrItem').hidden = false;
-      $('remoteUrl').textContent = status.remoteURL;
+      setLink('remoteUrl', status.remoteURL, '');
       $('remoteHint').textContent = '跨网已就绪：手机也需打开 Tailscale，然后扫描跨网码。UU 远程只负责显示和操作画面。';
       if ($('qr-remote').dataset.url !== status.remoteURL) {
         $('qr-remote').dataset.url = status.remoteURL;

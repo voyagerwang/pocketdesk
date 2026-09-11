@@ -9,6 +9,18 @@ INSTALL_DIR="$HOME/Applications"
 INSTALL_APP="$INSTALL_DIR/PocketDesk.app"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
+# TLS 材料迁移：SecureTransport 现在直接从 DER 装配内存身份（不进钥匙串），需要派生副本。
+# 已有身份只派生、绝不重新签发——重签会让手机已信任的 CA 与已授权的传感器权限全部作废。
+TLS_DIR="$HOME/Library/Application Support/VoiceDeck/tls"
+if [[ -e "$TLS_DIR/server.p12" && ( ! -e "$TLS_DIR/server-key.der" || ! -e "$TLS_DIR/server-cert.der" ) ]]; then
+  echo 'Deriving TLS DER material from the existing identity…'
+  umask 077
+  openssl pkcs12 -in "$TLS_DIR/server.p12" -nocerts -nodes -passin "file:$TLS_DIR/password" 2>/dev/null \
+    | openssl rsa -outform DER -out "$TLS_DIR/server-key.der" 2>/dev/null
+  openssl pkcs12 -in "$TLS_DIR/server.p12" -clcerts -nokeys -passin "file:$TLS_DIR/password" 2>/dev/null \
+    | openssl x509 -outform DER -out "$TLS_DIR/server-cert.der" 2>/dev/null
+fi
+
 mkdir -p "$BUILD_APP/Contents/MacOS" "$BUILD_APP/Contents/Resources" "$INSTALL_DIR"
 swiftc "$ROOT_DIR"/Sources/*.swift -o "$BUILD_APP/Contents/MacOS/VoiceDeck" -framework AppKit -framework Network -framework CoreImage -framework Carbon -Xlinker -sectcreate -Xlinker __CGPreLoginApp -Xlinker __cgpreloginapp -Xlinker /dev/null
 cp "$ROOT_DIR/Resources/Info.plist" "$BUILD_APP/Contents/Info.plist"
