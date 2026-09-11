@@ -27,13 +27,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// TLS 私钥已在内存中装配（全程不进钥匙串），原先"钥匙串上锁 → 取私钥永久阻塞"的场景不复存在；
 /// 这层保留为兜底：任何让网络工作线程停住的原因都会让 HTTPS、HTTP、心跳、画面一起静默停摆，
 /// 而进程看起来还好好的、端口也还在监听，用户只会看到"一直连不上/不同步"。主线程此时是空闲的，
-/// 所以由它每 10 秒戳一次自己的 HTTP 端口；连续两次拿不到 200 就重启 App。
+/// 所以由它周期性地戳自己的 HTTP 端口。
+///
+/// 三条硬约束（缺一条都会把"自愈"变成"制造事故"）：
+/// 1. 只有**连续多次独立探测**都失败才重启——单次超时在局域网抖动、系统负载高时都会出现；
+/// 2. 提交、图片粘贴、草稿写入进行中**绝不重启**：这些事务不可重放，杀进程等于让用户以为发了、其实没发；
+/// 3. 单实例交接：先写交接标记再让新实例等旧进程真的退出，避免两个实例抢端口、或端口空窗。
 final class ServerWatchdog {
     private static var timer: Timer?
     private static var failures = 0
     private static let interval: TimeInterval = 10
     private static let requestTimeout: TimeInterval = 4
-    private static let toleratedFailures = 2
+    /// 3 × 10 秒 = 连续 30 秒健康探测失败才认定公共服务线程失活。
+    private static let toleratedFailures = 3
+    /// 输入静默期：最近一次输入事务结束后还要再等这么久，确保键盘事件、粘贴、Return 都已发完。
+    private static let quietWindow: TimeInterval = 3
+    private static var handoffMarker: URL? {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        return base.appendingPathComponent("VoiceDeck/server-watchdog-handoff.json")
+    }
 
     static func start(port: UInt16) {
         guard let url = URL(string: "http://127.0.0.1:\(port)/api/status") else { return }
@@ -43,24 +55,48 @@ final class ServerWatchdog {
             request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
             URLSession.shared.dataTask(with: request) { _, response, _ in
                 let healthy = (response as? HTTPURLResponse)?.statusCode == 200
-                DispatchQueue.main.async {
-                    guard !healthy else { failures = 0; return }
-                    failures += 1
-                    guard failures >= toleratedFailures else { return }
-                    failures = 0
-                    relaunch()
-                }
+                DispatchQueue.main.async { record(healthy: healthy) }
             }.resume()
         }
     }
 
+    private static func record(healthy: Bool) {
+        guard !healthy else { failures = 0; return }
+        failures += 1
+        guard failures >= toleratedFailures else { return }
+        // 不健康但正在写输入：推迟，并立刻排下一次探测（把计数压回阈值前一格）。
+        guard InputActivity.shared.quiet(for: quietWindow) else { failures = toleratedFailures - 1; return }
+        failures = 0
+        relaunch()
+    }
+
     /// 先让一个新实例起来，再退出自己：直接自杀会让端口在无人接管时一直空着。
+    /// 交接标记里写下自己的 PID，新实例启动时会等它真的消失再绑定端口——否则两个实例会抢端口。
     private static func relaunch() {
+        if let marker = handoffMarker {
+            try? FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let payload = ["pid": Int(getpid()), "at": Date().timeIntervalSince1970] as [String: Any]
+            try? JSONSerialization.data(withJSONObject: payload).write(to: marker, options: .atomic)
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", "sleep 2; exec /usr/bin/open -a \"$0\"", Bundle.main.bundlePath]
         try? process.run()
         exit(0)
+    }
+
+    /// 新实例在绑定端口前调用：若上一次自愈交接还没结束，等旧进程退出（有上限），再开始监听。
+    /// 上限到了也继续启动——宁可冒一次端口冲突，也不要让服务永远起不来。
+    static func awaitHandoff() {
+        guard let marker = handoffMarker, let data = try? Data(contentsOf: marker),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let pid = payload["pid"] as? Int, pid > 0 else { return }
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if kill(pid_t(pid), 0) != 0 { break }   // ESRCH：旧进程已经退出
+            usleep(200_000)
+        }
+        try? FileManager.default.removeItem(at: marker)
     }
 }
 
@@ -74,6 +110,9 @@ let selectedPort = UInt16(ProcessInfo.processInfo.environment["VOICE_DECK_PORT"]
 let targetStore = TargetStore()
 targetStore.loadShortcuts()
 targetStore.loadTheme()
+// 上一次自愈交接若还没收尾，先等旧进程退出再绑定端口：两个实例同时监听只会有一个成功，
+// 而失败的那个会静默地什么也不做。
+ServerWatchdog.awaitHandoff()
 let server = Server(port: selectedPort, webRoot: root.appendingPathComponent("Web"), store: targetStore)
 // 首次启动时让 macOS 显示其官方授权提示；授权决定仍完全由用户控制。
 let promptOptions = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -82,6 +121,8 @@ try server.start()
 // 启动即生成配对 token（懒加载在此刻触发落盘），QR 与写请求校验都依赖它。
 _ = Auth.token
 let pointerExecutor = PointerExecutor()
+// 应用选择后的鼠标就位由 Server 编排，但注入必须走 PointerExecutor（与其它指针命令同一条队列）。
+server.pointerExecutor = pointerExecutor
 let cursorMonitor = CursorMonitor()
 let wsPort: UInt16 = selectedPort < 65534 ? selectedPort + 1 : 46388
 let wsServer = WSServer(port: wsPort, pointer: pointerExecutor, cursor: cursorMonitor)

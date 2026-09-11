@@ -1,9 +1,11 @@
 /**
  * [INPUT]: 消费 index.html 的 #phone-settings 面板与 header 齿轮，以及迁来的 #sens / #scroll-speed / #ruler-mode。
  * [OUTPUT]: 提供唯一手机设置面板的开关、遮罩关闭、焦点恢复与偏好读写；翻腕组保存用户意愿与灵敏度档位，
- *           并就地把可用性原因写回 #wrist-note（不弹独立读数面板）；需要用户动手的步骤渲染成
- *           #wrist-links 里可点击的链接（装证书 / 换安全地址），不让用户手抄地址。
+ *           并就地把可用性原因写回 #wrist-note（不弹独立读数面板）；证书接入渲染成四步向导
+ *           （①可点下载 ②描述文件安装 ③完全信任 ④真实 HTTPS 探测通过后才跳转），
+ *           全部动作都是可点控件，不让用户手抄地址、也不把用户直接丢到"不受信任"页。
  * [POS]: Web 首页的设置边界；不持有业务草稿，不向 Mac 发送点击、滚动或快捷键。
+ *        证书信任与运动权限作为两件不同的事分别解释。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -46,33 +48,71 @@ function setWristNote(text, warn = false) {
   wristNote.className = warn ? 'sheet-hint is-warn' : 'sheet-hint';
 }
 
-// 把"要用户自己去做的动作"渲染成真正的链接：换安全地址、装证书都点一下即可，
+// 把"要用户自己去做的动作"渲染成真正的链接/按钮：装证书、检测并打开安全连接都点一下即可，
 // 不该让用户对着一段地址手抄。全部用 createElement + textContent，不拼 innerHTML：
 // 地址来自浏览器自身，即使哪天带上参数也不会变成注入点。
-function setWristLinks(links) {
-  if (!wristLinks) return;
-  wristLinks.textContent = '';
-  const list = links || [];
-  wristLinks.hidden = list.length === 0;
-  for (const item of list) {
-    const anchor = document.createElement('a');
-    anchor.className = 'sheet-btn wrist-link';
-    anchor.href = item.href;
-    anchor.textContent = item.label;
-    if (item.newTab) { anchor.target = '_blank'; anchor.rel = 'noopener'; }
-    wristLinks.appendChild(anchor);
+function wristActionNode(item) {
+  let node;
+  if (item.kind === 'link') {
+    node = document.createElement('a');
+    node.className = 'sheet-btn wrist-link';
+    node.href = item.href;
+    if (item.newTab) { node.target = '_blank'; node.rel = 'noopener'; }
+  } else if (item.kind === 'action') {
+    node = document.createElement('button');
+    node.type = 'button';
+    node.className = 'sheet-btn wrist-link';
+    if (item.onClick) node.addEventListener('click', item.onClick);
+  } else {
+    node = document.createElement('p');
+    node.className = item.kind === 'hint' ? 'sheet-hint wrist-step' : 'wrist-step';
   }
+  node.textContent = item.label;
+  return node;
 }
 
-// 安全上下文缺失时的两步：先装本机 CA（HTTP 就能取），再回安全地址打开同一页。
-// 两步都给成可点链接，用户不需要知道端口号，也不需要复制任何东西。
+function setWristLinks(items) {
+  if (!wristLinks) return;
+  wristLinks.textContent = '';
+  const list = items || [];
+  wristLinks.hidden = list.length === 0;
+  for (const item of list) wristLinks.appendChild(wristActionNode(item));
+}
+
+// iPhone 的证书接入是四步，其中第 2–4 步都在系统设置里——网页看不到进度，
+// 所以只能把系统步骤写清楚，再用一次**真实 HTTPS 握手**判断到底装好没有（不许伪造"已完成"）。
+// 引导做三件事：不让用户手抄地址、不让下载被误当成安装、不把用户直接丢到 Safari 走不下去的
+// "不受信任"页（第 4 步先探测、成功才跳转）。
+async function detectAndOpenSecure(event) {
+  const button = event.currentTarget;
+  button.disabled = true;
+  setWristNote('正在检测电脑上的 HTTPS 服务…');
+  let result = { ok: false, reason: '检测能力尚未就绪，请下拉刷新页面后重试。' };
+  try {
+    if (window.pocketdeskMotion?.probeSecure) result = await window.pocketdeskMotion.probeSecure();
+  } catch (error) {
+    result = { ok: false, reason: error.message };
+  }
+  button.disabled = false;
+  if (result.ok) {
+    setWristNote('证书已就绪，正在打开安全连接…');
+    window.location.assign(result.url);
+    return;
+  }
+  setWristNote(result.reason, true);
+}
+
+// 安全上下文缺失时的完整向导：①下载证书 → ②安装描述文件 → ③开启完全信任 → ④检测并打开。
 function renderWristActions(avail) {
   if (!avail || !avail.needsSecureContext) { setWristLinks(null); return; }
   const certPath = window.pocketdeskMotion?.caCertificatePath;
-  const links = [];
-  if (certPath) links.push({ label: '① 安装 PocketDesk 证书', href: certPath });
-  if (avail.secureURL) links.push({ label: '② 在安全地址打开', href: avail.secureURL, newTab: true });
-  setWristLinks(links);
+  const items = [];
+  if (certPath) items.push({ kind: 'link', label: '① 安装 PocketDesk 证书', href: certPath });
+  items.push({ kind: 'step', label: '下载完会离开浏览器。到「设置 → 通用 → VPN 与设备管理 → 已下载的描述文件 → PocketDesk → 安装」，点完两遍安装。' });
+  items.push({ kind: 'step', label: '再开完全信任：「设置 → 通用 → 关于本机 → 证书信任设置」，为「PocketDesk Local Device CA」打开开关。这一步不做，HTTPS 依然进不去。' });
+  items.push({ kind: 'action', label: '④ 检测并打开安全连接', onClick: detectAndOpenSecure });
+  items.push({ kind: 'hint', label: '证书通常只需设置一次：只有证书被删除、手机还原网络/全部设置、电脑局域网地址变化或证书过期时才要重做。运动与方向权限是另一件事，进入安全页面后再授权。' });
+  setWristLinks(items);
 }
 
 // 能力判定交给 motion-send.js（注册 pocketdeskWristAvailable）。没有该模块时一律不可用：

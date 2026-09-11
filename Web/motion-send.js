@@ -53,6 +53,45 @@
     return 'https://' + host + ':46487' + window.location.pathname + window.location.search;
   }
 
+  var HTTP_PORT = 46387;
+  var HTTPS_PORT = 46487;
+
+  // 带超时的 fetch：AbortController 缺失时退化为"不超时但仍能拿到结果"，不因缺少能力而崩。
+  function fetchWithTimeout(url, timeoutMs, asJSON) {
+    var controller = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = setTimeout(function () { if (controller) controller.abort(); }, timeoutMs);
+    var options = { cache: 'no-store' };
+    if (controller) options.signal = controller.signal;
+    return fetch(url, options).then(function (response) {
+      clearTimeout(timer);
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return asJSON ? response.json() : true;
+    }, function (error) { clearTimeout(timer); throw error; });
+  }
+
+  // 证书向导的检测器：普通网页读不到"iPhone 是否已安装并完全信任某个根证书"，
+  // 所以只能做一次**真实**的 HTTPS 握手来判定，绝不伪造"已完成"。
+  // 分流：服务不可达 / HTTPS 未启动 / 当前地址不在证书覆盖范围 / 握手失败（多半未安装或未完全信任）。
+  async function probeSecure() {
+    var host = window.location.hostname;
+    if (!host) return { ok: false, code: 'no-host', reason: '读不到当前地址，无法检测；请用手机浏览器重新打开电脑控制台给出的那条链接。' };
+    var status = null;
+    try { status = await fetchWithTimeout('http://' + host + ':' + HTTP_PORT + '/api/status', 4000, true); } catch (e) { status = null; }
+    if (!status) return { ok: false, code: 'server-unreachable', reason: '连电脑都连不上（HTTP 探测也失败）。请确认手机和电脑在同一个 Wi-Fi，且电脑上的 PocketDesk 正在运行。' };
+    if (!status.secureURL) return { ok: false, code: 'https-not-started', reason: '电脑端还没有启动 HTTPS 服务。请在电脑上运行 scripts/setup-secure-channel.sh，然后重启 PocketDesk。' };
+    var reportedHost = '';
+    try { reportedHost = new URL(status.secureURL).hostname; } catch (e) { reportedHost = ''; }
+    if (reportedHost && reportedHost !== host) {
+      return { ok: false, code: 'host-mismatch', reason: '当前地址（' + host + '）不在证书覆盖范围内——电脑的局域网地址已变成 ' + reportedHost + '。请在电脑控制台用新的二维码重新配对。' };
+    }
+    try {
+      await fetchWithTimeout('https://' + host + ':' + HTTPS_PORT + '/api/status', 5000, false);
+    } catch (e) {
+      return { ok: false, code: 'not-trusted', reason: 'HTTPS 握手没有成功——通常是证书还没安装，或者装好后没在「证书信任设置」里打开完全信任。把上面①→③做完再点一次检测。' };
+    }
+    return { ok: true, url: 'https://' + host + ':' + HTTPS_PORT + window.location.pathname + window.location.search };
+  }
+
   // 能力门禁：settings.js 的 wristAvailability() 直接委托它。
   // 顺序很关键：先判安全上下文。多数安卓浏览器其实支持传感器，只是必须 HTTPS；
   // 若先判传感器，会把“没开 HTTPS / 用了受限 WebView”误报成“设备不支持”，误导用户。
@@ -146,6 +185,7 @@
     isActive: function () { return active; },
     needsPermission: needsPermission,
     secureURL: secureURL,
+    probeSecure: probeSecure,
     caCertificatePath: CA_CERT_PATH,
     PRESETS: PRESETS,
   };

@@ -663,6 +663,14 @@ main.pad-mode .pad-title {
   margin-top: 0;
   text-decoration: none;
 }
+/* 证书向导里的系统步骤说明：嵌在 .wrist-links 栅格里的静态文字，不参与点按。 */
+.wrist-step {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+.wrist-step.sheet-hint { margin: 0; }
 
 /* 灵敏度下拉与授权按钮同列，保持两列栅格对齐。 */
 .sheet-group .sheet-row:has(select) {

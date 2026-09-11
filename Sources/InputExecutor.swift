@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard、ApplicationServices 的 AXUIElement、CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的命令词汇、ImageBatchStore 的有界多图资源、ImagePastePolicy 的目标专属时序、ExecutionTrace 的门禁与结果分级、TargetStore/InputFocus/InputBinding/LiveDraft 的目标和草稿事务。
- * [OUTPUT]: 对外提供 InputExecutor：应用激活与焦点校验、草稿快照事务、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
+ * [OUTPUT]: 对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/live-input、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -54,7 +54,15 @@ final class InputExecutor {
         return data
     }
 
-    func activate(_ targetId: String, completion: @escaping (Result<Void, InputError>) -> Void) {
+    /// 激活结果：确认归位后的目标进程与补充说明。
+    /// 定位由**显式入口**（Server，只在手机手动选择应用时）编排并交给 PointerExecutor 执行；
+    /// 执行层自己不碰鼠标，自动跟随/发送文本/快捷键的隐式激活也都拿不到鼠标副作用。
+    struct ActivateOutcome {
+        let pid: pid_t?
+        let note: String
+    }
+
+    func activate(_ targetId: String, completion: @escaping (Result<ActivateOutcome, InputError>) -> Void) {
         queue.async { self.activateTarget(targetId, completion: completion) }
     }
 
@@ -214,29 +222,41 @@ final class InputExecutor {
     private var imageExecutionDrafts = Set<String>()
     private var imageExecutionOrder: [String] = []
 
-    func mirror(_ command: LiveInputCommand, authorized: @escaping () -> Bool = { true }, completion: @escaping (Result<LiveInputReceipt, InputError>) -> Void) {
+    func mirror(_ command: LiveInputCommand, authorized: @escaping () -> Bool = { true }, completion: @escaping (Result<LiveInputReceipt, LiveInputFailure>) -> Void) {
         queue.async {
+            // 提交/图片粘贴/草稿写入期间置位：看门狗据此推迟自愈重启（这些事务不可重放）。
+            InputActivity.shared.begin()
+            defer { InputActivity.shared.end() }
             do { completion(.success(try self.applyDraft(command, authorized: authorized))) }
-            catch {
+            catch let failure as LiveDraftFailure {
+                self.record("live", "草稿输入", .blocked, failure.message)
+                completion(.failure(LiveInputFailure(message: failure.message, state: failure.state.rawValue)))
+            } catch {
                 self.record("live", "草稿输入", .blocked, error.localizedDescription)
-                completion(.failure(.message(error.localizedDescription)))
+                completion(.failure(LiveInputFailure(message: error.localizedDescription,
+                                                    state: DraftState.needsUserFocus.rawValue)))
             }
         }
     }
 
     private func applyDraft(_ command: LiveInputCommand, authorized: @escaping () -> Bool) throws -> LiveInputReceipt {
-        if let reason = EnvironmentGate.blockReason() { throw LiveDraftFailure(message: reason) }
+        if let reason = EnvironmentGate.blockReason() {
+            throw LiveDraftFailure(message: reason, state: .needsUserFocus)
+        }
         guard authorized(), command.text.utf16.count <= 8_000 else {
-            throw LiveDraftFailure(message: "控制权已变化或文本超过 8,000 字符，草稿已保留。")
+            throw LiveDraftFailure(message: "控制权已变化或文本超过 8,000 字符，草稿已保留。", state: .needsUserFocus)
         }
         liveAuthorization = authorized
         guard let id = command.draftId, !id.isEmpty, id.count <= 100 else {
             // 旧手机页面不能再调用逐字退格路径；刷新后使用带草稿身份的新协议。
-            throw LiveDraftFailure(message: "输入方式已升级，请保留草稿并刷新手机页面。")
+            throw LiveDraftFailure(message: "输入方式已升级，请保留草稿并刷新手机页面。", state: .needsUserFocus)
         }
+        // 只读恢复探测：只核验绑定与内容，绝不写入任何字符。手机在弹窗关闭、页面回前台、
+        // 输入框重新聚焦或低频探针时发它，据返回的 state 决定"自动续接 / 继续冻结 / 提示用户点一下"。
+        if command.probe == true { return try probeDraft(id: id, command: command) }
         if let done = completedDrafts[id] {
             guard command.submit == true, done.text == command.text else {
-                throw LiveDraftFailure(message: "本轮已提交，请开始新的草稿。")
+                throw LiveDraftFailure(message: "本轮已提交，请开始新的草稿。", state: .committed)
             }
             return done.receipt
         }
@@ -247,7 +267,9 @@ final class InputExecutor {
         let target = command.targetId ?? Self.frontmostPseudoId
         guard target == Self.frontmostPseudoId || frontmostMatches(targetId: target),
               let front = Util.frontmostApp() else {
-            throw LiveDraftFailure(message: "目标应用已变化，请切回原输入位置；草稿已保留。")
+            // 目标应用暂时不在前台属于焦点中断：草稿与基线都保留，用户把应用切回来即可自动续接。
+            throw LiveDraftFailure(message: "目标应用已不在前台，草稿已保留；切回它就会自动继续。",
+                                   state: .interrupted)
         }
         let context: String
         var resumeAtCurrentFocus = false
@@ -277,14 +299,16 @@ final class InputExecutor {
             context = established
         }
         guard command.context == nil || command.context == context else {
-            throw LiveDraftFailure(message: "输入位置已变化，请确认电脑输入框。")
+            throw LiveDraftFailure(message: "输入位置已变化，请在电脑上点一下原输入框再继续；手机草稿已保留。",
+                                   state: .needsUserFocus)
         }
         if liveDraft?.id != id || resumeAtCurrentFocus {
             // helper 无故丢失会话时不能把全文再追加一次；用户从暂停态再次提交则已明确
             // 采用当前焦点，resumedText 只建立基线而不重放正文，可以安全重建。
             guard resumeAtCurrentFocus ||
                     (command.expectedMode != "replace" && command.expectedMode != "selection") else {
-                throw LiveDraftFailure(message: "同步会话已失效，请检查电脑已有内容；手机草稿已保留。")
+                throw LiveDraftFailure(message: "同步会话已失效，请检查电脑已有内容；手机草稿已保留。",
+                                       state: .needsUserFocus)
             }
             let writer = KeyboardDraftWriter(pid: front.processIdentifier,
                 valid: { [weak self] in self?.liveAuthorization() == true && InputBinding.shared.validate(context) },
@@ -300,14 +324,21 @@ final class InputExecutor {
                     return updated
                 },
                 reconcileSelection: { writer.confirmedText(previous: $0, attempted: $1) },
+                // 目标应用是否仍在前台：探测据此区分"焦点短暂中断"与"用户已经去了别处"。
+                targetFrontmost: { [weak self] in
+                    target == Self.frontmostPseudoId || self?.frontmostMatches(targetId: target) == true
+                },
                 resumedText: resumeAtCurrentFocus ? command.text : nil)
         }
         guard let draft = liveDraft else { throw LiveDraftFailure(message: "无法建立输入会话。") }
         guard draft.context == context, draft.target == target, InputBinding.shared.validate(context) else {
-            throw draft.stop("输入位置已变化，已停止同步并保留手机草稿。")
+            // 绑定失效：记录绑定层给出的失效原因（不含正文），并交给状态机判定能否自动续接。
+            throw draft.stop("同步位置暂时失效，草稿已冻结；回到原输入框会自动继续（\(InputBinding.shared.lastInvalidReason)）。",
+                             .interrupted, resumable: true)
         }
         if command.retry == true && !resumeAtCurrentFocus { try draft.recover() }
         try draft.update(command.text)
+        InputBinding.shared.recordConfirmed(context, text: draft.text)
         guard command.submit == true else {
             let feedback: ExecutionFeedback
             switch draft.mode {
@@ -315,7 +346,8 @@ final class InputExecutor {
             case .selection: feedback = .sent("实时输入已发出。")
             case .deferred: feedback = .init(outcome: .buffered, detail: "此远控通道仅支持发送时输入。")
             }
-            return LiveInputReceipt(feedback: feedback, mode: draft.mode.rawValue, committed: false)
+            return LiveInputReceipt(feedback: feedback, mode: draft.mode.rawValue, committed: false,
+                                    state: DraftState.active.rawValue, note: "")
         }
         let images: [Data]
         do { images = try resolveImages(batchId: command.imageBatchId, imageIds: command.imageIds) }
@@ -334,7 +366,10 @@ final class InputExecutor {
             throw LiveDraftFailure(message: "先输入一点内容或选择一张图片。")
         }
         let valid = { authorized() && InputBinding.shared.validate(context) }
-        guard valid() else { throw draft.stop("输入位置或控制权已变化，草稿已保留。") }
+        guard valid() else {
+            throw draft.stop("草稿文字已经输入，但输入位置或控制权已变化；请检查电脑内容，勿重复发送。",
+                             .needsUserFocus)
+        }
         // Chrome 飞书多图的点击锚点必须在任何提交期外部写入之前确认。预检失败时既不粘
         // deferred 正文，也不登记图片执行防重放，用户修正鼠标位置后仍可安全重试。
         let pasteTiming = ImagePastePolicy.timing(bundleIdentifier: front.bundleIdentifier, imageCount: pictures.count)
@@ -387,13 +422,38 @@ final class InputExecutor {
         guard postKey(36) else { throw draft.stop("提交动作失败；请检查电脑内容，勿重复发送。") }
         if let batchId = command.imageBatchId, let imageIds = command.imageIds { imageBatches.consume(batchId: batchId, imageIds: imageIds) }
         draft.finish()
-        let receipt = LiveInputReceipt(feedback: .sent("提交动作已发出，请以电脑显示为准。"), mode: draft.mode.rawValue, committed: true)
+        let receipt = LiveInputReceipt(feedback: .sent("提交动作已发出，请以电脑显示为准。"), mode: draft.mode.rawValue,
+                                       committed: true, state: DraftState.committed.rawValue, note: "")
         completedDrafts[id] = (command.text, receipt)
         imageExecutionDrafts.remove(id)
         completedOrder.append(id)
         if completedOrder.count > 32 { completedDrafts.removeValue(forKey: completedOrder.removeFirst()) }
         record("live", "提交草稿", .sent, receipt.feedback.detail, front.localizedName)
         return receipt
+    }
+
+    /// 只读恢复探测：不写入任何字符，只回答"现在能不能续接"。
+    ///
+    /// 契约（与 docs/wrist-send-reliability-and-pointer-plan.md 的 B 节一致）：
+    /// - 没有对应草稿时，若该草稿已提交则报 committed，否则报 needs-user-focus；
+    /// - 有草稿时交给 LiveDraft 核验（目标应用是否回到前台、原编辑元素是否仍在、电脑内容是否等于最后确认状态）；
+    /// - 返回 recoverable 时 LiveDraft 已按只读方式重新对齐基线，调用方随后只发送差量，**绝不重放全文**。
+    private func probeDraft(id: String, command: LiveInputCommand) throws -> LiveInputReceipt {
+        guard let draft = liveDraft, draft.id == id else {
+            if let done = completedDrafts[id] {
+                return LiveInputReceipt(feedback: .init(outcome: .buffered, detail: "本轮已提交，请开始新的草稿。"),
+                                        mode: done.receipt.mode, committed: true,
+                                        state: DraftState.committed.rawValue, note: "本轮已提交，请开始新的草稿。")
+            }
+            let note = "请在电脑上点一下原输入框即可继续；手机文字已保留。"
+            return LiveInputReceipt(feedback: .init(outcome: .buffered, detail: note), mode: "unknown",
+                                    committed: false, state: DraftState.needsUserFocus.rawValue, note: note)
+        }
+        draft.noteProbe(command.text)
+        let result = draft.probe()
+        return LiveInputReceipt(feedback: .init(outcome: .buffered, detail: result.note),
+                                mode: draft.mode.rawValue, committed: false,
+                                state: result.state.rawValue, note: result.note)
     }
 
     private func isUUFrontmost() -> Bool {
@@ -417,6 +477,8 @@ final class InputExecutor {
     // UU 通道注入序列：文字+图片都进剪贴板（图片优先，纯文字给纯文本），
     // Cmd+V 由 UU 的剪贴板同步带跨机器，粘进远程电脑的输入框后 Return 提交。
     private func performUURemotePaste(text: String, imageData: [Data]) {
+        InputActivity.shared.begin()
+        defer { InputActivity.shared.end() }
         let pasteboard = NSPasteboard.general
         if !text.isEmpty {
             pasteboard.clearContents()
@@ -434,6 +496,8 @@ final class InputExecutor {
     // 等文字落入编辑器后再粘贴图片；等待缩略图挂载后统一按 Return。
     // 图片发送后留在剪贴板上（与手动复制粘贴语义一致，不额外清空）。
     private func performPaste(imageData: [Data], text: String, bundleIdentifier: String?) {
+        InputActivity.shared.begin()
+        defer { InputActivity.shared.end() }
         if !text.isEmpty {
             postUnicode(text)
             usleep(200_000) // 让编辑器处理文字，再开始附件粘贴或提交
@@ -471,7 +535,7 @@ final class InputExecutor {
     // 激活分三段：发起 → 校验 → 抢救。之所以不能"发起完就回成功"，是因为 PocketDesk 自己从不是前台应用，
     // 请求递出去之后系统同不同意（窗口在别的桌面空间、被最小化、被远控软件按住焦点）它一概不知。
     // 回执只能由系统说了算：问 AX 现在谁拿着焦点。
-    private func activateTarget(_ targetId: String, completion: @escaping (Result<Void, InputError>) -> Void) {
+    private func activateTarget(_ targetId: String, completion: @escaping (Result<ActivateOutcome, InputError>) -> Void) {
         guard let config = store.resolve(targetId) else {
             completion(.failure(.message("未知的目标应用。"))); return
         }
@@ -507,10 +571,12 @@ final class InputExecutor {
 
     /// 校验激活是否真的生效：轮询等待，中途抢救一次，到期仍不生效就如实报错。
     /// 宁可让用户看到"它没起来，你去电脑上点一下"，也不返回一个假 ok——假 ok 只会让人反复点手机。
-    private func verifyActivation(targetId: String, name: String, attempt: Int, completion: @escaping (Result<Void, InputError>) -> Void) {
+    private func verifyActivation(targetId: String, name: String, attempt: Int, completion: @escaping (Result<ActivateOutcome, InputError>) -> Void) {
         let label = "唤醒 \(name)"
         // 没有辅助功能授权时无从判定，退回旧行为（相信系统调用），绝不因为判不了就报失败。
-        guard AXIsProcessTrusted() else { completion(.success(())); return }
+        guard AXIsProcessTrusted() else {
+            completion(.success(ActivateOutcome(pid: self.runningApp(targetId: targetId)?.processIdentifier, note: ""))); return
+        }
         // 实测：目标窗口在另一块显示器 / 另一个桌面空间时，激活到焦点落定可能要 2~3 秒
         //（显示器或空间切换本身有开销）。只等几百毫秒会把"慢"误判成"失败"——
         // 用户看到报错，可几秒后画面其实已经切过去了。故轮询到 3.5 秒再下结论。
@@ -526,7 +592,9 @@ final class InputExecutor {
                 self.record("activate", label, visible ? .delivered : .sent,
                             visible ? "已置于前台。"
                                     : "已激活，但当前桌面看不到它的窗口——可能在另一个桌面空间或另一块显示器。", name)
-                completion(.success(())); return
+                completion(.success(ActivateOutcome(pid: pid > 0 ? pid : nil,
+                                                    note: visible ? "" : "窗口可能在另一个桌面空间或另一块显示器。")))
+                return
             }
             guard attempt < maxAttempts else {
                 let front = Util.frontmostApp()
@@ -540,11 +608,12 @@ final class InputExecutor {
                 }
                 let pid = self.runningApp(targetId: targetId)?.processIdentifier ?? -1
                 // 多显示器下最常见的一种"唤醒没反应"：应用其实起来了，只是窗口在旁边那块屏，
-                // 用户盯着主屏自然什么都没看见。与其让他去猜，不如直说窗口在哪儿。
+                // 用户盯着主屏自然什么都没看见。**这不是激活失败**——窗口是合法可见的，
+                // 报成失败会让定位也跟着跳过。改成成功 + 明确说明，定位可在那块屏上就位。
                 if Self.hasWindowOutsideMainScreen(pid: pid) {
-                    self.record("activate", label, .sent, "已激活，但窗口不在主屏（在另一块显示器上）。", name)
-                    completion(.failure(.message(
-                        "\(name) 已经起来了，可它的窗口在另一块显示器上——请看看旁边那块屏；想在主屏操作，把它拖过来再唤醒。")))
+                    self.record("activate", label, .sent, "已激活，窗口在另一块显示器上（合法副屏窗口，不是失败）。", name)
+                    completion(.success(ActivateOutcome(pid: pid > 0 ? pid : nil,
+                                                        note: "\(name) 的窗口在另一块显示器上，已按那块屏就位。")))
                     return
                 }
                 self.record("activate", label, .failed, "未能置于前台，当前前台是 \(frontName)。", frontName)
@@ -652,6 +721,9 @@ final class InputExecutor {
     // 却旧实现照样回 ok，正是这里要补上的诚实）。
     func triggerShortcut(_ shortcut: ShortcutConfig, completion: @escaping (Result<ExecutionFeedback, ShortcutError>) -> Void) {
         queue.async {
+            // 快捷键注入同样是不可重放的输入事务：期间看门狗不得重启。
+            InputActivity.shared.begin()
+            defer { InputActivity.shared.end() }
             if let reason = EnvironmentGate.blockReason() {
                 self.record("shortcut", shortcut.label, .blocked, reason)
                 completion(.failure(.message(reason))); return

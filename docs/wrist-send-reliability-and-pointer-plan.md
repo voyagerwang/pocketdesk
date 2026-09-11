@@ -40,7 +40,7 @@ iOS 的“运动与方向访问”是另一项系统权限：只允许由用户�
 
 ### A2. iPhone 证书首次接入必须是可恢复的四步向导
 
-**当前状态（2026-09-11）**：第 1 步已落地——手机端一检测到明文地址就渲染可点的「① 安装 PocketDesk 证书」（`/PocketDesk-CA.cer`，刻意放在 HTTP 也能取到的路径）与「② 在安全地址打开」（`target="_blank"`，同主机换协议与端口、路径原样保留）；控制台第 2 步的四处地址也由纯文本改成可点链接并新增证书下载入口。用户不再需要手抄任何地址。**第 2–4 步（描述文件安装引导、完全信任引导、HTTPS 健康探测通过后再跳转）尚未实现**；目前 ② 会直接把用户带到可能仍显示"不受信任"的 HTTPS 页。
+**当前状态（2026-09-11，已实现）**：第 1 步——手机端一检测到明文地址就渲染可点的「① 安装 PocketDesk 证书」（`/PocketDesk-CA.cer`，刻意放在 HTTP 也能取到的路径）与「② 在安全地址打开」（`target="_blank"`，同主机换协议与端口、路径原样保留）；控制台第 2 步的四处地址也由纯文本改成可点链接并新增证书下载入口。第 2–4 步已落地——HTTP 页面在下载后展示固定的「描述文件安装」与「完全信任」两步说明（`设置 → 通用 → VPN 与设备管理 → 已下载的描述文件 → 安装`、`设置 → 通用 → 关于本机 → 证书信任设置 → 开启完全信任`，明确"下载≠安装"），最后一步 `detectAndOpenSecure` 调 `motion-send.js` 的 `probeSecure()` **真握一次 HTTPS**，按四路分流（server-unreachable / https-not-started / host-mismatch / not-trusted）返回人话原因，**只有握手成功才 `location.assign`**，失败留在原页不把用户丢进无法继续的"Safari 不受信任"拦截。运动与方向权限作为另一件事在向导外、由用户一次点按触发，说明常显不循环请求。
 
 当前“①安装证书 → ②打开安全地址”不完整：iPhone 手动下载根证书后不会自动信任网页，用户直接进入 HTTPS 必然只看到“不受信任”，而 Safari 页面无法越过这个系统拦截。
 
@@ -83,5 +83,63 @@ Apple 官方路径与限制：https://support.apple.com/zh-cn/102390 。真机�
 ## 文档与交付
 
 实现期间遵守 L3 → L2 → L1 回环。完成后在本文件记录：最终根因、实际改动、自动化结果、真机结果、未决限制和提交号。保留当前未提交工作，不自动推送远端；不要顺带增加设置项、练习按钮或技术状态常驻 UI。
+
+## 验收记录（2026-09-11 实现完成）
+
+### 最终根因
+
+1. **钥匙串弹窗**：由提交 `fe48806`、`4ba2cac` 在更早一轮彻底修复——`SecureTransport` 改为从 `server-cert.der`/`server-key.der` 在内存中装配 identity，不再导入任何钥匙串，从源头消除上锁/ACL/随机密码询问。本轮在此之上完成**看门狗安全化**：`ServerWatchdog` 仅在连续 3 次独立健康探测失败、且 `InputActivity` 进程级活动闸安静 3 秒后才重启；重启走单实例 handoff 交接标记，不会产生双服务，也不会在用户正在输入/粘贴/提交时打断。
+2. **第二轮或弹窗后停止同步**：真正阻断恢复的不是状态机缺失，而是 Web 端恢复链**自我掐断**。原 `scheduleProbe` 在 `liveProbing===true` 期间直接 `return`，导致第一次只读探针落地后恢复链断裂——症状正是"弹窗关掉后只能切应用才能恢复"。同轮补建立可证明安全的 `DraftState` 五态机（`active`/`interrupted`/`recoverable`/`needsUserFocus`/`committed`），禁止盲目重发全文。
+3. **手动选择后鼠标就位**：只在手动选择路径上带定位意图（`activateTarget(selected, true)` 显式传 `true`），指针只移动不点击；几何与窗口解析独立成纯模块，只读探测不写字符、不移动鼠标。
+
+### 实际改动
+
+**Sources（新增 3 个、改 9 个）**
+- 新增 `InputActivity.swift`（进程级活动闸，NSCountingLock + 时间戳）、`PointerGeometry.swift`（纯几何落点）、`TargetWindowLocator.swift`（AX + WindowServer 窗口解析）。
+- `main.swift`：`ServerWatchdog` 3 次失败 + `InputActivity` 安静 3s + handoff 单实例交接。
+- `LiveDraft.swift`：五态机 + `probe` 只读分支（只比对、只发公共前缀差量）。
+- `InputBinding.swift`：只读快照 `recordConfirmed`/`lastInvalidReason`。
+- `InputExecutor.swift`：探针分支、`ActivateOutcome`、`recordConfirmed`。
+- `Models.swift`：`probe`/`state`/`locate`/`generation` 模型。
+- `PointerExecutor.swift`：`locate` 只移动（同串行队列、代际门禁、anchored 用户活动门禁）。
+- `Server.swift`：`/api/live-input` 只读分支 + `/api/activate` 定位代际与光标已落位（`isCursorSettled`）控制租约；非回环且未 controlAuthorized 时 409。
+- `KeyboardDraftWriter.swift`：公共前缀差量（恢复复用）。`ShortcutActions.swift`、`SecureTransport.swift`（前轮）相应协同。
+
+**Web（改 6 个）**
+- `index.html`：新增 `#live-flag`、`#screen-input-status` 状态落点。
+- `app.js`：`selectGeneration` 选择代际（迟到 A/B 回执整条丢弃）+ 定位意图仅手动选择显式传 `true`。
+- `settings.js`：四步向导 + `setWristLinks` 接受 `{kind: link|action|step|hint}` 结构化条目。
+- `compose.js`：跨弹窗安全恢复段；修 `scheduleProbe` 在探测中 self-break（`recoveryPending`/`recoveryPendingDelay` 续期机制）、`RECOVERY_MAX_ATTEMPTS` 8→20（≈30s 覆盖"电脑侧弹窗自己关掉"）、`stopRecovery` 清空 pending；冻结期 `pocketdeskCanMotionSend()` 返回 false。
+- `motion-send.js`：`probeSecure()` 真握手四路分流。
+- `screen.css`：`#live-flag` 样式。
+
+**tests（新增 5 个）**
+- `tests/draft-state.test.swift`、`tests/input-activity.test.swift`、`tests/pointer-geometry.test.swift`（`swiftc -parse-as-library` 隔离单测）。
+- `tests/live-recovery.test.cjs`（静态契约：锁定 `scheduleProbe` 探测中必须登记 pending、`probeLive` 收尾必须补排、`stopRecovery` 清空、两状态元素必须存在）。
+- `tests/live-recovery.runtime.py`（浏览器运行时回归，17 项断言，桌面零写入）。
+
+### 自动化结果
+
+- Swift 构建无 error；4 个 JS 文件 `node --check` 通过。
+- `live-recovery.test.cjs` 通过；`live-recovery.runtime.py` 17/17 通过（覆盖 A 打断→冻结→只读探针自我续期→`recoverable` 才恢复，冻结期零写入；B 连续轮次换新草稿身份继续实时同步）。
+- `recovery.py` 11/11、`rounds.py` 11/11（连续轮次无漏字/重复）。
+- 部署 `install-app.sh` RC=0，签名正常，进程 RUNNING，HTTPS/HTTP/API 均 200；新前端资源在线（curl 命中 `liveProbing`/`selectGeneration`/`probeSecure`/`detectAndOpenSecure` 及 `compose.js?v=3.0.26`、`screen.css?v=3.1.1`）。
+- API 实测：`probe:true` 无草稿 → `needs-user-focus` 不写入；`/api/activate` 定位代际与 `cursorSettled` 逻辑正确（WorkBuddy 光标已在窗口内→`unchanged`）。
+- 只读定位探针（不移动鼠标）：WorkBuddy 窗口 (135,91 1200x801) → landing (735,492) `cursorSettled=true`；Finder 被遮挡 → `SKIP occluded`。证明几何 + 窗口解析链路正确。
+- 浏览器冒烟：HTTP 明文页四步向导渲染正确（证书链接 `PocketDesk-CA.cer`、按钮"④ 检测并打开安全连接"）；`probeSecure()` 真握手返回 `not-trusted` 并留页显示人话；HTTPS 页因 `isSecureContext` 不显示向导（符合设计）。
+
+### 真机结果（待验收）
+
+自动化覆盖了协议/状态机/几何/前端契约，但以下需要真机确认，明确列为**待验收**，不凭模拟器结论代替：
+- **钥匙串/看门狗**：本地运行无密码弹窗（内存装配已生效）；但"系统睡眠唤醒后 securityd 行为、连续 HTTPS 数小时"的真机长稳观察待验收。
+- **连续发送 / 弹窗恢复**：运行时回归 17/17 已覆盖 WorkBuddy 编辑器重建与系统弹窗的等价桩；但**真实 WorkBuddy Electron 提交后编辑器 AX 重建**、**macOS 系统弹窗真实抢焦点后自动续接**待 iPhone/iPad 与用户主机实测验收。
+- **鼠标就位**：只读探针已证明几何与窗口解析正确；**真机鼠标移动**只针对明确测试窗口执行，不点击/不输入用户正在工作的内容，待验收。
+- **iPhone 证书四步向导**：浏览器冒烟渲染与真握手逻辑已验证；**iPhone 首次下载 → 描述文件安装 → 完全信任 → 返回检测 → 运动权限**，以及已信任后二次进入不再重复引导，待真机验收。
+- **安卓 vivo/豆包输入法**：连续轮次与弹窗恢复在安卓浏览器桩下通过；真机输入法表现待验收。
+
+### 提交号
+
+- 钥匙串内存装配（前轮）：`fe48806`、`4ba2cac`。
+- 看门狗安全化 + 五态恢复 + 手动选择鼠标就位 + 四步向导 + 全部测试与文档回环：本次统一提交（见仓库最新 commit）。未推送远端。
 
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md

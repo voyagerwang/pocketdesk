@@ -117,25 +117,38 @@ function markSelected() {
 
 /* ---------- 选中与唤醒 ---------- */
 
-async function activateTarget(targetId) {
+// 选择代际：只有最新一次选择的定位才允许生效。快速点 A 再点 B 时，A 的迟到回执
+// 既不能挪动光标（服务端按代际拒绝），也不能改动面板、提示或草稿同步。
+let selectGeneration = 0;
+
+async function activateTarget(targetId, locate = false) {
   lastActivateAt = Date.now();
+  const generation = ++selectGeneration;
   const target = targets.find(item => item.id === targetId);
   message(`正在唤醒 ${target ? target.name : targetId}…`);
   try {
+    const session = window.pocketdeskControlInfo?.().session || '';
     const response = await fetch('/api/activate', {
       method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ targetId }),
+      headers: { ...authHeaders(), 'X-PocketDesk-Session': session },
+      // locate 只在手动选择应用时为 true；定位由服务端在控制租约下执行，前端不自己挪光标。
+      body: JSON.stringify({ targetId, locate, generation }),
     });
     const result = await response.json();
     if (response.status === 401) throw new Error('未配对：请在电脑端控制台重新扫码。');
+    if (response.status === 409) throw new Error(result.error || '控制权已变化，请先接管控制。');
     if (!response.ok) throw new Error(result.error || '无法唤醒应用。');
-    message(`${target ? target.name : targetId} 已置于电脑前台，可开始输入。`);
+    // 迟到的回执：这次选择已经不是最新的了，就此止步，不改动任何界面状态或草稿。
+    if (generation !== selectGeneration) return false;
+    // 激活结果与鼠标结果分开：定位跳过不等于应用没唤醒，这里只用 note 说明"窗口在另一块屏"这类事实。
+    message(`${target ? target.name : targetId} 已置于电脑前台，可开始输入。${result.note ? '（' + result.note + '）' : ''}`);
     // 按应用偏好切面板：触控板型应用直接展开触控板（收起键盘），输入型保持输入区。
     // 只在手动激活时切——前台自动跟随不切，避免被动抢走用户正打字的键盘。
     if (target?.openPanel === 'pad') enterPadMode(); else exitPadMode();
     return true;
   } catch (error) {
+    // 失败也可能来自更早的一轮选择，同样不得覆盖最新一轮的提示。
+    if (generation !== selectGeneration) return false;
     message(error.message, true);
     return false;
   }
@@ -146,7 +159,8 @@ async function selectTarget(button) {
   const rebuiltDraft = beginDraftForExplicitTarget(targetId);
   selected = targetId;
   markSelected();
-  const activated = await activateTarget(selected);
+  // 手动选择才请求鼠标就位：用户随后可直接用手机触控板操作目标窗口。
+  const activated = await activateTarget(selected, true);
   // 切换目标或失败后重选当前目标，代表用户要以此刻输入位置开始新一轮；已有正文
   // 立即触发新绑定，纯图片发送时绑定。健康状态重复点击不重建，避免把全文再次追加。
   if (activated && rebuiltDraft && textEl.value) scheduleLive();

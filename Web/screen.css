@@ -289,6 +289,13 @@
   font-size: var(--text-xs);
   color: var(--fg-muted);
 }
+/* 实时同步状态：与上方打断提示同字号、更淡一档，只做事后确认，不抢视线。 */
+#live-flag {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  opacity: 0.75;
+}
 #screen-send {
   background: var(--accent);
   color: var(--accent-ink);

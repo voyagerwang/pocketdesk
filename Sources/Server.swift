@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 LiveInputReceipt 的草稿模式回执、InputBinding 的输入上下文、控制租约校验闭包与 ScreenCapture 的鉴权画面读取、Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
- * [OUTPUT]: 对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活/发送/图片预上传/快捷键触发、静态页面服务；非回环写请求强制 Bearer 校验）。
+ * [OUTPUT]: 对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活与应用选择后鼠标就位/发送/图片预上传/快捷键触发/草稿实时同步与只读恢复探测、静态页面服务；非回环写请求强制 Bearer 校验）。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的传输层；只翻译协议不做系统调用，与 WSServer（控制/光标）和 FrameServer（持续画面）并列。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -11,6 +11,9 @@ import Network
 
 final class Server {
     var controlAuthorized: (String) -> Bool = { _ in false }
+    /// 指针执行器：应用选择后的鼠标就位必须走它与其它指针命令同一条串行队列，
+    /// 不能在输入层另发 CGEvent。由 main.swift 在既有装配处注入（不新增通用事件总线）。
+    var pointerExecutor: PointerExecutor?
     private let screenCapture = ScreenCapture()
     private var captureBusy = false
     // 系统对每个安装只弹一次录屏授权窗，重复调用不再弹。记住"已请求过"，
@@ -360,10 +363,31 @@ final class Server {
             guard let command = try? JSONDecoder().decode(ActivateCommand.self, from: bodyData) else {
                 respond(connection, status: 400, json: ["error": "请求格式无效。"]); return
             }
+            let locating = command.locate == true
+            let session = Self.headerValue("X-PocketDesk-Session", in: headerText) ?? ""
+            let generation = UInt64(max(0, command.generation ?? 0))
+            // 定位会真实移动用户的鼠标，必须有控制租约：只凭配对 token 不够（旧客户端、
+            // 或另一台持有同一 token 的手机都不该能挪动光标）。执行前在这里校验一次。
+            if locating, !fromLoopback, !controlAuthorized(session) {
+                respond(connection, status: 409, json: ["ok": false, "error": "控制权已变化，请先接管控制再选择应用。"])
+                return
+            }
+            // 锚点 = 请求发出时的鼠标位置。用户在等待激活期间动过鼠标/触控板就取消本次定位。
+            let anchor = locating ? CGEvent(source: nil)?.location : nil
             executor.activate(command.targetId) { result in
                 switch result {
-                case .success: self.respond(connection, status: 200, json: ["ok": true])
-                case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
+                case .success(let outcome):
+                    guard locating else {
+                        self.respond(connection, status: 200, json: ["ok": true]); return
+                    }
+                    // 激活结果与鼠标结果分开回报：定位失败/跳过不能伪装成应用激活失败，反之亦然。
+                    self.performLocate(pid: outcome.pid, generation: generation, anchor: anchor) { payload in
+                        var body = payload
+                        if !outcome.note.isEmpty { body["note"] = outcome.note }
+                        self.respond(connection, status: 200, json: body)
+                    }
+                case .failure(.message(let message)):
+                    self.respond(connection, status: 422, json: ["error": message])
                 }
             }
         case ("POST", "/api/send"):
@@ -387,9 +411,13 @@ final class Server {
                 command.context == nil || self?.controlAuthorized(command.session ?? "") == true
             }) { result in
                 switch result {
-                case .success(let feedback):
-                    self.respond(connection, status: 200, json: feedback.dictionary)
-                case .failure(.message(let message)): self.respond(connection, status: 422, json: ["error": message])
+                case .success(let receipt):
+                    self.respond(connection, status: 200, json: receipt.dictionary)
+                case .failure(let failure):
+                    // 结构化失败：state 是给前端做决策用的（冻结 / 提示用户点一下 / 已提交），
+                    // error 是人话，只在提示层展示。
+                    self.respond(connection, status: 422,
+                                 json: ["ok": false, "error": failure.message, "state": failure.state])
                 }
             }
         case ("POST", "/api/shortcuts"):
@@ -475,6 +503,42 @@ final class Server {
         }
         iconCache["id:" + targetId] = png
         respond(connection, status: 200, data: png, contentType: "image/png", cacheControl: "public, max-age=86400")
+    }
+
+    /// 应用选择后的鼠标就位：**只移动**，不点击、不改文本选区、不猜输入框位置。
+    /// 几何在 PointerGeometry（纯函数）里算，注入只经 PointerExecutor（与其它指针命令同一条队列），
+    /// 回执区分 moved / unchanged / skipped（附原因）——不能用命令预期伪造手机光标。
+    private func performLocate(pid: pid_t?, generation: UInt64, anchor: CGPoint?, completion: @escaping ([String: Any]) -> Void) {
+        guard let pid, pid > 0 else {
+            completion(["ok": true, "locate": "skipped", "locateReason": "no-target-process"]); return
+        }
+        guard let resolution = TargetWindowLocator.resolve(pid: pid) else {
+            completion(["ok": true, "locate": "skipped", "locateReason": "no-window"]); return
+        }
+        let screens = PointerGeometry.activeDisplayRects()
+        // 光标已经在目标窗口的可见区域内且未被遮挡：保持原位，不做任何注入。
+        if let current = CGEvent(source: nil)?.location,
+           PointerGeometry.isCursorSettled(at: current, window: resolution.rect, screens: screens, occluders: resolution.occluders) {
+            completion(["ok": true, "locate": "unchanged"]); return
+        }
+        switch PointerGeometry.landing(window: resolution.rect, screens: screens, occluders: resolution.occluders) {
+        case .failure(let reason):
+            completion(["ok": true, "locate": "skipped", "locateReason": reason.rawValue])
+        case .success(let point):
+            guard let pointer = pointerExecutor else {
+                completion(["ok": true, "locate": "skipped", "locateReason": "pointer-unavailable"]); return
+            }
+            pointer.locate(to: point, generation: generation, anchor: anchor) { outcome in
+                switch outcome {
+                case .moved(let landed):
+                    completion(["ok": true, "locate": "moved", "x": Double(landed.x), "y": Double(landed.y)])
+                case .unchanged:
+                    completion(["ok": true, "locate": "unchanged"])
+                case .skipped(let reason):
+                    completion(["ok": true, "locate": "skipped", "locateReason": reason])
+                }
+            }
+        }
     }
 
     private func respond(_ connection: NWConnection, status: Int, json: Any) {

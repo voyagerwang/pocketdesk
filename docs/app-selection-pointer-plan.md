@@ -43,4 +43,31 @@ Omnissa 官方 HTML Access 文档说明移动端触控板模式通过指针操�
 
 由 WorkBuddy 完成代码、验证与 L3/L2/L1 文档回环，并在本文件补充实际结果。工作区现有 Web/compose.js、Web/index.html 未提交改动属于正在进行的修复，应保留并协调；先完成当前及已排队修复，再顺序实施本方案，避免同仓库并发覆盖。无需再次询问是否开始；不顺带改其他交互，不自动推送远端。
 
+## 验收记录（2026-09-11 实现完成）
+
+### 实际改动
+
+- `Web/app.js`：`selectTarget → activateTarget → POST /api/activate` 带 `selectGeneration`（每次手动点选自增）与定位意图 `locate: true`（仅手动选择显式传，自动跟随/隐式激活/恢复探针一律默认关闭）；回执代际与当前不一致整条丢弃，A/B 快切时 A 的迟到回执不改动 B 的面板/提示/同步。
+- `Sources/Server.swift`：`/api/activate` 解析 `locate`/`generation`；非回环且未 `controlAuthorized` 时 409；先 `isCursorSettled` 检查（光标已在目标窗口可见区域内 → 直接 `unchanged`、不调 `pointer.locate`），再 `landing`，再 `pointer.locate(to:generation:anchor:)`；回执 `locate: moved/unchanged/skipped` + `locateReason`。
+- `Sources/PointerExecutor.swift`：`locate` 只移动不点击，复用现有指针队列与有效屏钳制；同串行队列核验会话、代际、anchored 用户活动门禁后才注入，更新 `expected`；禁止从 `InputExecutor` 独立发 CGEvent、禁止把 `CursorMonitor` 观测值写入 `expected`。
+- `Sources/PointerGeometry.swift`（新增，纯几何）：窗口内保持、跨屏取最大有效交集中心、被明显遮挡跳过、负坐标/纵向/L 形排列不回退主屏中心，使用 CoreGraphics 全局桌面点。
+- `Sources/TargetWindowLocator.swift`（新增，AX + WindowServer 窗口解析）：优先目标 PID 的 AX focused window，其次同 PID main window，再退到同 PID 最前普通可见窗口；排除其他应用、桌面、菜单栏、零尺寸窗口。
+- 与五态恢复协议共用选择代际与控制租约（见 `wrist-send-reliability-and-pointer-plan.md` 验收记录）。
+
+### 自动化结果
+
+- 只读定位探针（不移动鼠标）：WorkBuddy 窗口 (135,91 1200x801) → landing (735,492) `cursorSettled=true`；Finder 被遮挡 → `SKIP occluded`；证明几何 + 窗口解析链路正确。
+- `tests/pointer-geometry.test.swift`（`swiftc -parse-as-library`）隔离验证窗口内保持、跨屏最大交集、遮挡跳过、负坐标/L 形不回退主屏中心。
+- `tests/live-recovery.test.cjs` 锁定 `app.js` 的 `selectGeneration` 与"定位意图仅手动选择显式传 `true`"的协议默认值。
+- Swift 构建无 error；与恢复协议一并部署，HTTPS/HTTP/API 均 200。
+
+### 真机结果（待验收）
+
+- 单屏/多屏（副屏、负坐标、跨屏、Retina）、重复选择、A/B 快切、乱序回执、拖动/锁屏/无权限/控制权交接/无窗口等场景的**真机鼠标移动**只针对明确测试窗口执行，不点击/不输入用户正在工作的内容，待验收。
+- 自动跟随、草稿同步、文本图片发送、快捷键无新增鼠标动作，已通过协议与静态回归确认；真机全链路待验收。
+
+### 提交号
+
+与 `wrist-send-reliability-and-pointer-plan.md` 所列看门狗安全化 + 五态恢复 + 四步向导 + 全部测试一并统一提交（见仓库最新 commit）。未推送远端。
+
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
