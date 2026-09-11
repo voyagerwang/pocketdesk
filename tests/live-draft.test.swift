@@ -1,6 +1,7 @@
 /**
- * [INPUT]: 依赖 LiveDraft 的纯状态机与隔离 DraftEditor，不读取真实桌面。
- * [OUTPUT]: 验证整值/选区替换、Unicode、冲突停止、显式重试核验与当前焦点续发均不重复写入、未知结果拒绝恢复、提交封闭；手机已有全文与连续删空保留电脑前后文。
+ * [INPUT]: 依赖 LiveDraft 的纯状态机、隔离 DraftEditor 与内存输入框替身 FakeField，不读取真实桌面。
+ * [OUTPUT]: 验证整值/选区替换、Unicode、冲突停止、显式重试核验与当前焦点续发均不重复写入、未知结果拒绝恢复、提交封闭；手机已有全文与连续删空保留电脑前后文；
+ *           清空按当前实际内容整段删净且幂等，门禁失效/不可读/不可定位三种"证明不了"如实失败，基线分叉后可破冰续写、失败则保留正文。
  * [POS]: tests 的输入事务回归；真实 AX 控件另行验收。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -19,6 +20,59 @@ final class MemoryEditor: DraftEditor {
         if fail { return false }
         snapshot = .end(of: corrupt ? "unexpected" : text)
         return true
+    }
+}
+
+/// 内存输入框替身：写入落在**光标处**，不是末尾追加。
+/// 「光标处」是刻意保留的——实况里"清空后每次还剩第一个字"就出在旧 `update` 从捕获时的光标位
+/// 起算选区（`start + offset`）；只有让替身允许光标停在中间，那个偏移才会在测试里现形。
+/// 门禁/可读/可选中默认都成立，各自可单独打破以验证"证明不了就如实失败"的分支。
+final class FakeField {
+    var text: String { didSet { caret = min(caret, text.utf16.count) } }
+    var caret: Int
+    var selection: Int
+    /// 发出去的删除键次数（不是删掉的字数）：用来断言整段清空只按一次，而不是播放连按式键流。
+    var deletes = 0
+    var permitting = true
+    var readable = true
+    var selectable = true
+    init(_ text: String = "", caret: Int = 0) {
+        self.text = text; self.caret = caret; self.selection = 0
+    }
+    func writer() -> KeyboardDraftWriter {
+        KeyboardDraftWriter(read: { [self] in
+            readable ? DraftSnapshot(text: text, location: caret, length: selection) : nil
+        }, select: { [self] range in
+            guard selectable else { return false }
+            caret = range.location; selection = range.length
+            return true
+        }, valid: { [self] in permitting }, key: { [self] code, flags in
+            guard permitting else { return false }
+            // 退格：有选区整段删，无选区吃光标前一个字——后者是真实控件的行为，
+            // 替身不这么写就会在"选区没建立起来"时假装什么都没发生。
+            if code == 51 {
+                deletes += 1
+                let before = (text as NSString)
+                let origin = selection > 0 ? caret : max(0, caret - 1)
+                let count = selection > 0 ? selection : (caret > 0 ? 1 : 0)
+                text = before.replacingCharacters(in: NSRange(location: origin, length: count), with: "")
+                caret = origin; selection = 0
+                return true
+            }
+            // Shift+左：光标左移并扩选。clearAll 在"控件不支持设选区"时的退路要用它；
+            // 本替身不实现的部分（其余方向键/修饰键组合）一律 false，宁可失败不假装成功。
+            if code == 123, flags == .maskShift, caret > 0 {
+                caret -= 1; selection += 1
+                return true
+            }
+            return false
+        }, insert: { [self] value in
+            guard permitting else { return false }
+            let current = (text as NSString)
+            text = current.replacingCharacters(in: NSRange(location: caret, length: selection), with: value)
+            caret += value.utf16.count; selection = 0
+            return true
+        })
     }
 }
 
@@ -137,12 +191,64 @@ final class MemoryEditor: DraftEditor {
         rejects { try retryDraft.update("不能覆盖") }
         rejects { try retryDraft.recover() }
 
+        // ---------- 清空：对当前实际内容整段删净 ----------
+        // 「清空」不比旧基线、也不拿捕获时的光标位置推算选区，直接对**当前实际内容**全选。
+        // 实况（WorkBuddy / ChatGPT）失败的根源正是那两处推算：基线被快捷键通道打乱、
+        // 选区按 start 起算导致首位那截删不到——用户看到的就是"清空后每次还剩第一个字"。
+        let clearField = FakeField("现有正文手机草稿", caret: 1)
+        let clearWriter = clearField.writer()
+        assert(clearWriter.clearAll(), "清空必须成功：不比旧基线、按当前实际内容全选")
+        assert(clearField.text.isEmpty, "清空后不得残留任何字（曾经每次剩第一个字）")
+        assert(clearField.deletes == 1, "整段清空只发一次删除，不播放连按式的键流")
+        assert(clearWriter.clearAll() && clearField.deletes == 1, "已空的框幂等认账，不再多按一次删除")
+
+        // 三种"证明不了"的情形都必须如实失败——清空是删除动作，宁可报错也不盲删。
+        let gatedField = FakeField("有内容"); gatedField.permitting = false
+        assert(!gatedField.writer().clearAll(), "门禁失效时不得声称已清空")
+        let blindField = FakeField("有内容"); blindField.readable = false
+        assert(!blindField.writer().clearAll(), "读不到控件时不得盲删")
+        let stuckField = FakeField("有内容"); stuckField.selectable = false
+        assert(!stuckField.writer().clearAll(), "定位不到删除范围时不得乱删")
+
+        // ---------- 清空是冻结态的唯一出路，且不给"结果未知"的停止开后门 ----------
+        let field = FakeField("电脑已有正文")
+        var writerSlot = field.writer()
+        let frozen = LiveDraft(id: "clear", context: "same", target: "workbuddy", editor: nil,
+            selectionWriter: { old, new in writerSlot.update(from: old, to: new) })
+        try frozen.update("手机草稿")
+        assert(field.text == "手机草稿电脑已有正文" && !frozen.stopped, "正常同步插在光标处并保留电脑原文")
+        // 外部（快捷键通道）动过输入框 → 基线分叉 → 常规同步从此写不动，用户输入什么都是白打。
+        field.text = "被外部清过"
+        rejects { try frozen.update("手机草稿改了") }
+        assert(frozen.stopped && field.text == "被外部清过")
+        rejects { try frozen.update("普通输入救不回来") }
+        // 清空能破冰：它本来就不需要基线。删净后**重新捕获**（与 InputExecutor 同构），
+        // 这一轮的基线即"空框 @ 光标 0"，后续输入接着走。
+        try frozen.clear {
+            let ok = field.writer().clearAll()
+            writerSlot = field.writer()
+            return ok
+        }
+        assert(field.text.isEmpty && frozen.text.isEmpty && !frozen.stopped, "清空后解冻且电脑侧为空")
+        try frozen.update("清空后接着输入")
+        assert(field.text == "清空后接着输入", "清空后同一轮必须能继续输入")
+        // 对照：删不干净时如实失败，绝不声称已清空，也绝不因此丢掉正文。
+        let undeletable = FakeField("删不掉"); undeletable.selectable = false
+        rejects { try frozen.clear { undeletable.writer().clearAll() } }
+        assert(frozen.stopped && frozen.text == "清空后接着输入", "清空失败要保留正文并停在冻结态")
+        // 结果未知的停止（图片已粘贴）不开后门：清空会把可能已生效的内容抹掉。
+        let unknownDraft = LiveDraft(id: "unknown", context: "same", target: "workbuddy", editor: nil,
+            selectionWriter: { _,_ in false })
+        _ = unknownDraft.stop("图片可能已粘贴")
+        rejects { try unknownDraft.clear { true } }
+
         // 应用切回后的显式续发沿用暂停前已输入正文，不能重新调用 selectionWriter。
+
         var resumedWrites = 0
         let resumed = LiveDraft(id: "resumed", context: "new-input", target: "chrome", editor: nil,
             selectionWriter: { _,_ in resumedWrites += 1; return true }, resumedText: "手机已输入正文")
         try resumed.update("手机已输入正文")
         assert(resumed.mode == .selection && resumed.text == "手机已输入正文" && resumedWrites == 0)
-        print("live-draft: 通过（全文修订、Unicode、暂存、焦点/内容/选区冲突、失败停止、提交封闭）")
+        print("live-draft: 通过（全文修订、Unicode、暂存、焦点/内容/选区冲突、失败停止、提交封闭、清空破冰与幂等）")
     }
 }

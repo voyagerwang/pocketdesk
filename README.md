@@ -163,11 +163,11 @@ iconutil -c icns Resources/AppIcon.iconset -o Resources/AppIcon.icns
 
 AX 能读到文本和选区时，校验输入框原有前后文和光标；选区可写则直接定位，否则使用 Shift+Left 选择本轮文本。读不到 AX 的应用沿用输入位置绑定和有序键流，无法自动确认同应用内光标被人移动或正文被手动修改，使用中需保持电脑输入位置。回执为 `sent`，不声称内容已读回。TextEdit 空白 `.txt` 仍有整值替换通道；UU 特殊远控通道仍在发送时一次粘贴。
 
-`/api/live-input` 使用 `draftId/text/submit/usePendingImage/expectedMode`，全屏仍携带 `context/session`。回执 `mode=replace|selection|deferred`，`outcome=buffered` 仅用于暂存；`committed=true` 表示提交动作已执行，不代表外部消息送达。近期同 ID 同文提交在当前进程内去重，失败后暂停避免重复输入。详情见 [LIVE_INPUT_REVISION.md](LIVE_INPUT_REVISION.md)。
+`/api/live-input` 使用 `draftId/text/submit/usePendingImage/expectedMode`，全屏仍携带 `context/session`；显式清空另带 `clear: true`（与"text 恰好为空"区分开：空串只是结果，清空是一次可跳过旧基线校验的幂等写入，用于从冻结态破冰）。回执 `mode=replace|selection|deferred`，`outcome=buffered` 仅用于暂存；`committed=true` 表示提交动作已执行，不代表外部消息送达。近期同 ID 同文提交在当前进程内去重，失败后暂停避免重复输入。详情见 [LIVE_INPUT_REVISION.md](LIVE_INPUT_REVISION.md)。
 
 ## 锁屏解锁（本机验证阶段）
 
-运行 `zsh scripts/setup-secure-channel.sh` 生成本机 TLS 身份，重启应用后控制台显示 HTTPS 二维码。手机安装 CA 有两条路：在控制台第 2 步点「下载 PocketDesk 证书」，或直接在手机浏览器打开 `http://<电脑IP>:46387/PocketDesk-CA.cer`（HTTP 即可取，无需先信任证书）；在系统证书设置中安装为 CA（iOS 还需在「证书信任设置」中显式启用），再扫描安全连接码。手机端「手机设置 → 翻腕发送」在检测到明文地址时会直接给出可点击的「① 安装 PocketDesk 证书 / ② 在安全地址打开」，不需要手抄地址。不得跳过浏览器证书警告；IP 更换或证书过期需要重新签发，脚本不会覆盖已有身份。
+运行 `zsh scripts/setup-secure-channel.sh` 生成本机 TLS 身份，重启应用后 `:46487` 提供 HTTPS 页面与 API（控制 WSS `:46488`、画面 `:46489`）。**手机不必为翻腕发送安装或信任任何证书**：非安全上下文下手机设置面板的「翻腕发送」整组隐藏，直接使用发送按钮即可；只有在安全上下文里、且浏览器真的给出有效传感器数据时，这项可选捷径才会出现。需要安全上下文的通道（例如从 HTTPS 入口打开页面、或使用锁屏相关能力）才涉及本机 CA：可在手机浏览器打开 `http://<电脑IP>:46387/PocketDesk-CA.cer`（HTTP 即可取），在系统证书设置中安装为 CA（iOS 还需在「证书信任设置」中显式启用）。控制台不提供证书下载，也不再有安全连接二维码整块。不得跳过浏览器证书警告；IP 更换或证书过期需要重新签发，脚本不会覆盖已有身份。
 
 电脑锁屏后，手机画面中出现独立密码框；输入电脑登录密码并提交。密码不进入普通编辑器、历史、日志或剪贴板，提交立即清空；仅已配对的 HTTPS 控制者可提交，一次性挑战绑定当前会话，断线/接管/退出取消且不自动重试。客户端和服务端处理期间仍存在短暂内存副本，不承诺内存安全擦除。
 

@@ -27,7 +27,8 @@ LICENSE - 本项目 MIT 许可证
 DESIGN.md - 界面视觉约束与品牌图标策略
 CURSOR_VIEW_PROPOSAL.md - 按需查看与鼠标实时反馈的交接方案、技术风险、分阶段实现和验收标准
 GYRO_MOUSE_RESEARCH.md - 手机体感鼠标的成熟交互、传感器与 HTTPS 限制、双击滚动方案及实验验收
-WRIST_SEND_EXECUTION_PLAN.md - 翻腕发送与唯一手机设置入口的执行交接：iPhone 撤销冲突、面板结构、HTTPS/WSS、发送一致性和真机验收（尚未实现）
+WRIST_SEND_EXECUTION_PLAN.md - 翻腕发送与唯一手机设置入口的执行交接：iPhone 撤销冲突、面板结构、发送一致性和真机验收（已实现；其中"手机必须信任 CA"的强制要求已被 docs/wrist-send-no-certificate-plan.md 的免证书降级取代）
+docs/wrist-send-no-certificate-plan.md - 翻腕免手动证书方案：能力降级、四级状态边界与真机验收（阶段 2 已实施，阶段 1/3/4 待真机）
 LIVE_INPUT_PROPOSAL.md - 手机草稿实时同步的原始方案，当前行为以 LIVE_INPUT_REVISION.md 为准
 LIVE_INPUT_REVISION.md - 已确认的语音纠正无回删方案、适配边界和验证记录
 FULLSCREEN_POINTER_PROPOSAL.md - 全屏手机操控优化建议：绝对定位、单/双击协议、手势仲裁、权威光标、画面延迟与 UU 对照验收（方案）
@@ -37,3 +38,4 @@ AGENT_PRODUCT_ARCHITECTURE.md - Agent 整体产品设计：任务与记忆、规
 </config>
 
 锁屏解锁：用户级预登录标记支持当前会话锁屏事件；HTTPS/WSS :46487–46489 与原通道共享控制租约，密码只走 LockScreenInput，不写日志/历史/剪贴板。首次手机信任本机 CA；不覆盖重启后的 FileVault 登录。
+翻腕发送：免手动证书降级——手机不得为它下载、安装或信任 CA；非安全上下文整组隐藏，能力以真实有效传感器数据证明，运动权限并入开启那次点按（详见 docs/wrist-send-no-certificate-plan.md）。

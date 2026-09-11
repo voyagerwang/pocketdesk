@@ -1,10 +1,10 @@
 """
 [INPUT]: 依赖 Playwright、Pillow 与仓库 Web 静态资源；用模拟 HTTP 接口记录逐图上传和草稿提交。
-[OUTPUT]: 验证多选删除保序、上传失败重试、正文/纯图等待压缩、满额删除追加和横向布局。
+[OUTPUT]: 验证长图 JPEG 在 Canvas 不可用时预览/上传保留原始字节、透明图片白底转换，以及多选删除保序、上传失败重试、正文/纯图等待压缩、满额删除追加和横向布局。
 [POS]: tests 的多图浏览器集成回归；不连接真实服务、不注入桌面输入，截图仅写入 /tmp。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
-import io, json, mimetypes
+import base64, io, json, mimetypes
 from pathlib import Path
 from urllib.parse import urlparse
 from PIL import Image
@@ -132,6 +132,22 @@ with sync_playwright() as p:
     page.wait_for_function("!submittingDraft && document.querySelector('#image-preview').hidden")
     assert commits[-1]['draftId']==new_draft and commits[-1]['targetId']=='chrome'
     assert commits[-1]['text']=='切换目标后继续发送' and len(commits[-1]['imageIds'])==2
+    # JPEG 长图不依赖 Canvas，预览与上传必须保留完整原图。
+    page.evaluate("() => { window.savedGetContext = HTMLCanvasElement.prototype.getContext; HTMLCanvasElement.prototype.getContext = () => { throw new Error('模拟手机 Canvas 故障'); }; }")
+    original=io.BytesIO(); Image.new('RGB',(1080,20000),'white').save(original,format='JPEG')
+    jpeg=original.getvalue()
+    page.locator('#image-file').set_input_files({'name':'long.jpg','mimeType':'image/jpeg','buffer':jpeg})
+    page.wait_for_function("pendingImages.length === 1 && pendingImages[0].uploaded")
+    preview=page.locator('#image-preview img').get_attribute('src')
+    assert base64.b64decode(preview.split(',')[1])==jpeg
+    assert base64.b64decode(uploads[-1]['data'])==jpeg
+    page.wait_for_function("document.querySelector('#image-preview img').naturalHeight === 20000")
+    page.evaluate("() => { HTMLCanvasElement.prototype.getContext = window.savedGetContext; clearCompose(); }")
+    transparent=io.BytesIO(); Image.new('RGBA',(100,100),(0,0,0,0)).save(transparent,format='PNG')
+    page.locator('#image-file').set_input_files({'name':'transparent.png','mimeType':'image/png','buffer':transparent.getvalue()})
+    page.wait_for_function("pendingImages.length === 1 && pendingImages[0].uploaded")
+    converted=Image.open(io.BytesIO(base64.b64decode(uploads[-1]['data']))).convert('RGB')
+    assert converted.getpixel((50,50))==(255,255,255)
     assert not errors,errors
     page.screenshot(path='/tmp/pocketdesk-multi-image-review.png',full_page=True)
     print(json.dumps({'result':'passed','commits':len(commits),'uploads':len(uploads),'pageErrors':errors}))

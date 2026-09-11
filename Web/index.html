@@ -21,7 +21,7 @@
       })();
     </script>
     <link rel="stylesheet" href="/style.css?v=3.0.13" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
-    <link rel="stylesheet" href="/app-extras.css?v=3.0.6">
+    <link rel="stylesheet" href="/app-extras.css?v=3.0.7">
     <link rel="stylesheet" href="/screen.css?v=3.1.1">
   </head>
   <body data-page-node-id="2eqrPm23J7ToUXDDq0CibO">
@@ -145,15 +145,15 @@
             <label>滚动<input id="scroll-speed" type="range" min="0.5" max="4" step="0.1" value="1.5"></label>
             <label>刻度<select id="ruler-mode"><option value="double">双排</option><option value="single">单排</option></select></label>
           </section>
-          <section class="sheet-group" aria-label="翻腕发送">
+          <!-- 翻腕组默认隐藏：只有环境层（安全上下文 + 传感器接口）过关才由 settings.js 打开。
+               非安全上下文不展示开关、不提供证书下载或系统配置教程。 -->
+          <section id="wrist-group" class="sheet-group" aria-label="翻腕发送" hidden>
             <h2>翻腕发送</h2>
             <label class="sheet-row">
               <span>翻腕发送</span>
               <input id="wrist-toggle" type="checkbox" role="switch" aria-describedby="wrist-note">
             </label>
             <p id="wrist-note" class="sheet-hint">手机向前轻翻，停住片刻后发送。</p>
-            <div id="wrist-links" class="wrist-links" hidden></div>
-            <button id="wrist-authorize" type="button" class="sheet-btn" hidden>授权运动传感器</button>
             <div class="sheet-row">
               <span>灵敏度</span>
               <select id="wrist-sensitivity">
@@ -167,8 +167,8 @@
       </div>
     </dialog>
     <script src="/app.js?v=3.0.24"></script>
-    <script src="/pad.js?v=3.0.11"></script>
-    <script src="/settings.js?v=3.0.6"></script>
+    <script src="/pad.js?v=3.0.12"></script>
+    <script src="/settings.js?v=3.0.7"></script>
     <script src="/compose-queue.js?v=3.0.17"></script>
     <script src="/compose.js?v=3.0.26"></script>
     <script src="/screen-geometry.js?v=3.0.2"></script>
@@ -176,8 +176,8 @@
     <script src="/screen-pip.js?v=3.0.0"></script>
     <script src="/screen-frames.js?v=3.1.0"></script>
     <script src="/screen.js?v=3.1.0"></script>
-    <script src="/motion-recognizer.js?v=3.0.0"></script>
-    <script src="/motion-send.js?v=3.0.4"></script>
+    <script src="/motion-recognizer.js?v=3.1.0"></script>
+    <script src="/motion-send.js?v=3.1.0"></script>
     <script>boot();</script>
   </body>
 </html>

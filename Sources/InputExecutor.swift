@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard、ApplicationServices 的 AXUIElement、CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的命令词汇、ImageBatchStore 的有界多图资源、ImagePastePolicy 的目标专属时序、ExecutionTrace 的门禁与结果分级、TargetStore/InputFocus/InputBinding/LiveDraft 的目标和草稿事务。
- * [OUTPUT]: 对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
+ * [OUTPUT]: 对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、显式整段清空（幂等、可从冻结态破冰；文档类目标只清手机侧）、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/live-input、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -215,6 +215,9 @@ final class InputExecutor {
 
     /* ---------- 实时草稿：整值或选区替换；UU 特殊通道才暂存 ---------- */
     private var liveDraft: LiveDraft?
+    // 当前轮次的写入器。**必须可替换**：清空之后要重新捕获焦点控件并重建基线——旧元素在
+    // Electron 重建编辑器、或被外部（快捷键/应用自身）清空之后，可能已不再代表那个输入框。
+    private var liveWriter: KeyboardDraftWriter?
     // 草稿跨多次请求；每次执行使用本次租约，不能永久捕获首次请求的旧 session。
     private var liveAuthorization: () -> Bool = { false }
     private var completedDrafts: [String: (text: String, receipt: LiveInputReceipt)] = [:]
@@ -237,6 +240,46 @@ final class InputExecutor {
                                                     state: DraftState.needsUserFocus.rawValue)))
             }
         }
+    }
+
+    /// 建写入器：门禁（控制租约 + 绑定）与三个原语只此一份，"开新轮次"与"清空后重捕获"共用。
+    private func makeLiveWriter(pid: pid_t, context: String) -> KeyboardDraftWriter {
+        KeyboardDraftWriter(pid: pid,
+            valid: { [weak self] in self?.liveAuthorization() == true && InputBinding.shared.validate(context) },
+            key: { [weak self] code, flags in self?.postKey(code, flags: flags, pressMicros: 1_500) == true },
+            insert: { [weak self] text in self?.insertLiveText(text) == true })
+    }
+
+    // 「清空」的作用范围：会话输入框两边一起清，文档类目标只清手机侧。
+    // 整段删除在文档里等于毁掉正文，在会话框里只是删掉草稿——两者风险差着数量级，所以判据取
+    // "能证明是文档"的证据，不按应用印象一刀切。
+    private static let documentLikeApps: Set<String> = [
+        "com.apple.TextEdit", "com.apple.Pages", "com.apple.Notes",
+        "com.microsoft.Word", "com.kingsoft.wpsoffice.mac",
+        // 飞书把文档与消息放在同一个进程里，从进程身份分不出当前是哪一种；
+        // 按用户要求（文档类输入除外）一律不动电脑，宁可清不干净也不赌。
+        "com.electron.lark",
+    ]
+
+    /// 文档证据：焦点元素往上找窗口，窗口带 AXDocument 且指向真实文件即为文档。
+    /// 原生文档编辑器（TextEdit 的 .txt、Pages 文稿）走这条；网页类编辑器通常不暴露该属性。
+    private func focusedInDocument(pid: pid_t) -> Bool {
+        func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
+            var value: CFTypeRef?
+            return AXUIElementCopyAttributeValue(element, name, &value) == .success ? value : nil
+        }
+        guard let focused = InputFocus.focusedElement(pid: pid),
+              let raw = attribute(focused, kAXWindowAttribute as CFString),
+              CFGetTypeID(raw) == AXUIElementGetTypeID(),
+              let document = attribute(raw as! AXUIElement, kAXDocumentAttribute as CFString) as? String,
+              let url = URL(string: document) else { return false }
+        return url.isFileURL
+    }
+
+    private func clearScopeAllowsComputer(front: NSRunningApplication) -> Bool {
+        // 认不出应用身份就不动电脑：清空是删除动作，宁可只清手机也不赌。
+        guard let bundle = front.bundleIdentifier, !Self.documentLikeApps.contains(bundle) else { return false }
+        return !focusedInDocument(pid: front.processIdentifier)
     }
 
     private func applyDraft(_ command: LiveInputCommand, authorized: @escaping () -> Bool) throws -> LiveInputReceipt {
@@ -310,12 +353,11 @@ final class InputExecutor {
                 throw LiveDraftFailure(message: "同步会话已失效，请检查电脑已有内容；手机草稿已保留。",
                                        state: .needsUserFocus)
             }
-            let writer = KeyboardDraftWriter(pid: front.processIdentifier,
-                valid: { [weak self] in self?.liveAuthorization() == true && InputBinding.shared.validate(context) },
-                key: { [weak self] code, flags in self?.postKey(code, flags: flags, pressMicros: 1_500) == true },
-                insert: { [weak self] text in self?.insertLiveText(text) == true })
+            liveWriter = makeLiveWriter(pid: front.processIdentifier, context: context)
             liveDraft = LiveDraft(id: id, context: context, target: target, editor: AXDraftEditor.capture(front),
-                selectionWriter: front.bundleIdentifier == "com.netease.uuremote" ? nil : { old, new in
+                // 闭包经 self.liveWriter 取用"当前"写入器：清空会换掉它，闭包不能抓旧实例不放。
+                selectionWriter: front.bundleIdentifier == "com.netease.uuremote" ? nil : { [weak self] old, new in
+                    guard let writer = self?.liveWriter else { return false }
                     let updated = writer.update(from: old, to: new)
                     if !updated {
                         ExecutionLog.shared.append(kind: "live-diagnostic", label: "草稿停止原因", outcome: .failed,
@@ -323,7 +365,9 @@ final class InputExecutor {
                     }
                     return updated
                 },
-                reconcileSelection: { writer.confirmedText(previous: $0, attempted: $1) },
+                reconcileSelection: { [weak self] previous, attempted in
+                    self?.liveWriter?.confirmedText(previous: previous, attempted: attempted)
+                },
                 // 目标应用是否仍在前台：探测据此区分"焦点短暂中断"与"用户已经去了别处"。
                 targetFrontmost: { [weak self] in
                     target == Self.frontmostPseudoId || self?.frontmostMatches(targetId: target) == true
@@ -335,6 +379,34 @@ final class InputExecutor {
             // 绑定失效：记录绑定层给出的失效原因（不含正文），并交给状态机判定能否自动续接。
             throw draft.stop("同步位置暂时失效，草稿已冻结；回到原输入框会自动继续（\(InputBinding.shared.lastInvalidReason)）。",
                              .interrupted, resumable: true)
+        }
+        // 显式清空：走幂等路径，**不碰旧基线**（见 LiveDraft.clear）。必须排在 retry/recover 之前——
+        // 冻结态的 recover() 要求核对原基线，而清空恰恰发生在基线已经分叉的时候；排在后面就会先被
+        // "还不能核对原输入框"挡掉，那正是用户看到的死循环。
+        if command.clear == true {
+            // 文档类目标只清手机侧：整段删除在文档里等于毁掉正文。
+            let clearsComputer = draft.mode != .deferred && clearScopeAllowsComputer(front: front)
+            try draft.clear {
+                guard clearsComputer else { return true }
+                // 重新捕获当前焦点控件再删：旧元素在 Electron 重建编辑器之后可能已失效，
+                // 继续对着它读回永远对不上——那正是"清空之后再不同步"的死法。
+                let fresh = self.makeLiveWriter(pid: front.processIdentifier, context: context)
+                guard fresh.clearAll() else {
+                    self.record("live-diagnostic", "清空失败原因", .failed, fresh.diagnostic, front.localizedName)
+                    return false
+                }
+                // 删净之后重建基线：这一轮后续的插入要以"空框 @ 光标 0"为起点。
+                self.liveWriter = self.makeLiveWriter(pid: front.processIdentifier, context: context)
+                return true
+            }
+            InputBinding.shared.recordConfirmed(context, text: "")
+            let note = clearsComputer ? "已清空电脑与手机上的输入内容。"
+                                      : "文档类输入：只清空了手机草稿，电脑内容未动。"
+            record("live", "清空会话", clearsComputer ? .delivered : .buffered, note, front.localizedName)
+            let feedback = clearsComputer ? ExecutionFeedback.delivered(note)
+                                          : ExecutionFeedback(outcome: .buffered, detail: note)
+            return LiveInputReceipt(feedback: feedback, mode: draft.mode.rawValue, committed: false,
+                                    state: DraftState.active.rawValue, note: note)
         }
         if command.retry == true && !resumeAtCurrentFocus { try draft.recover() }
         try draft.update(command.text)
@@ -736,6 +808,12 @@ final class InputExecutor {
             // 系统级动作不走按键：锁屏跑系统命令、切换应用用 AppKit，两者都不依赖系统快捷键守护进程。
             if let action = shortcut.action.flatMap(ShortcutAction.find) {
                 switch action.delivery {
+                case .deviceLocal:
+                    // 手机端本地动作（「清空会话」）由手机自己执行，服务端只配合电脑侧的清空。
+                    // 旧页面或误配若把它发到这里，明确拒绝而不是当成空串快捷键注入。
+                    let text = "「\(action.label)」在手机上执行，请刷新手机页面后使用。"
+                    self.record("shortcut", shortcut.label, .blocked, text, frontName)
+                    completion(.failure(.message(text))); return
                 case .systemCommand:
                     guard let command = action.command(.current) else {
                         let text = "「\(action.label)」在当前平台没有可用实现。"
