@@ -4,7 +4,7 @@
  *           不可伪造的绑定身份与只读快照（原 PID、元素/页面范围、最后确认文本边界）、以及最近一次校验失败的原因；
  *           Chromium AX 对象变化时以当前聚焦窗口的 WebArea 重新核验。
  * [POS]: Sources 的全屏输入目标边界；HTTP 建立上下文，InputExecutor 每次写入前验证并据失效原因分级草稿状态。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: validate 在切应用/编辑器重建导致 AX 元素失效时自愈（沿用原令牌更新元素引用，避免可恢复中断误判 needs-user-focus）；变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 
@@ -14,7 +14,7 @@ final class InputBinding {
     private struct Binding {
         let token: String
         let pid: pid_t
-        let element: AXUIElement?
+        var element: AXUIElement?
         let clickScope: AXUIElement?
         var touched: Double
         // 最后确认的电脑文本边界：恢复协议据此判断"电脑内容是否仍等于最后确认状态"。
@@ -69,18 +69,28 @@ final class InputBinding {
 
     func validate(_ token: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard let b = binding, b.token == token else { lastInvalidReason = "绑定令牌已失效（会话已重建）"; return false }
+        guard var b = binding, b.token == token else { lastInvalidReason = "绑定令牌已失效（会话已重建）"; return false }
         guard ProcessInfo.processInfo.systemUptime - b.touched < 600 else { lastInvalidReason = "绑定已过期"; return false }
         guard Util.frontmostApp()?.processIdentifier == b.pid else { lastInvalidReason = "目标应用已不在前台"; return false }
         if let element = b.element {
-            guard let current = focused(b.pid), CFEqual(element, current) else {
-                lastInvalidReason = "原编辑元素已变化（可能被重建）"
-                return false
+            // 正常路径：原 AX 元素对象仍指向同一输入框。
+            if let current = focused(b.pid), CFEqual(element, current) {
+                b.touched = ProcessInfo.processInfo.systemUptime; binding = b; lastInvalidReason = ""; return true
             }
+            // 自愈：切应用/编辑器重建会让同一输入框的 AX 元素对象换新（CFEqual 失败），
+            // 但目标进程仍在前台且当前焦点是可编辑文本元素——这恰恰是原输入位置重新出现。
+            // 仅更新元素引用、沿用原令牌，避免把可恢复的中断误判成 needs-user-focus 永久冻结。
+            if let current = focused(b.pid), KeyboardDraftWriter.read(current) != nil {
+                b.element = current
+                b.touched = ProcessInfo.processInfo.systemUptime
+                binding = b
+                lastInvalidReason = ""
+                return true
+            }
+            lastInvalidReason = "原编辑元素已变化（可能被重建）"
+            return false
         }
-        binding?.touched = ProcessInfo.processInfo.systemUptime
-        lastInvalidReason = ""
-        return true
+        b.touched = ProcessInfo.processInfo.systemUptime; binding = b; lastInvalidReason = ""; return true
     }
 
     // 图片粘贴后 Chromium 可能短暂把焦点暴露为附件/WebArea。中间点击前只允许放宽

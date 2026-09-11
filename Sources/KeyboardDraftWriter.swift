@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 InputFocus 的真实焦点、DraftSnapshot、AppKit AX；按键和文本事件由 InputExecutor 注入。
  * [OUTPUT]: 提供 KeyboardDraftWriter；追加实时输入、选区修订及不含正文的失败诊断，失败后只依据原控件快照或未落键证据恢复。
  * [POS]: Sources 的通用编辑器兼容通道；可读 AX 时校验原文和选区，未知编辑器沿用绑定和有序键流，不伪造读回。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: update 的删除路径对 Electron/受控输入框自适应降级（AX 选区“假成功”时改走键盘 Shift+Left）；变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 
@@ -19,6 +19,8 @@ final class KeyboardDraftWriter {
     private let initialSelection: Int
     private var first = true
     private var uncertainWrite = false
+    private var axSelectionReliable = true
+    private var lastRemoved = 0
     private(set) var diagnostic = ""
 
     convenience init(pid: pid_t, valid: @escaping () -> Bool,
@@ -59,16 +61,19 @@ final class KeyboardDraftWriter {
         if removed > 0 {
             diagnostic = "修订选区未能建立"
             uncertainWrite = true
-            // 真实 AX 选区能一次定位，不用播放选中字的键流；不可写时只选择已有的本轮尾部。
-            if selectRange?(selection) == true {
-                guard waitForSelection(selection) else { return false }
+            lastRemoved = removed
+            // 真实 AX 选区能一次定位，优先用它；但 Electron/受控输入框常“报告成功却不落 DOM”，
+            // 故一旦 waitForSelection 失败就标记本写入器不再信任 AX 选区，后续删除改走键盘 Shift+Left。
+            // 首帧走 AX 快路径，原生应用无感；受控应用首次失败后永久切键盘，避免每次删除卡顿。
+            if axSelectionReliable, selectRange?(selection) == true, waitForSelection(selection) {
+                // AX 选区已立住，进入落键阶段。
             } else {
+                axSelectionReliable = false
                 guard matchesExpected() else { return false }
                 guard removed <= 8_000 else { return false }
                 for _ in 0..<removed {
                     guard valid(), key(123, .maskShift) else { return false }
                 }
-                if readSnapshot != nil && !waitForSelection(selection) { return false }
             }
         }
         diagnostic = "落键前：输入绑定或控制租约失效"
@@ -89,6 +94,9 @@ final class KeyboardDraftWriter {
                 diagnostic = Self.describe("落键后读回", expected: desired, actual: actual)
                 usleep(15_000)
             }
+            // 若本轮确有删除且读回始终对不上，多半是 AX 选区“假成功”没真落 DOM；
+            // 标记后下次（只读探测恢复后）删除改走键盘，避免永久删不全。
+            if lastRemoved > 0 { axSelectionReliable = false }
             return false
         }
         uncertainWrite = false
