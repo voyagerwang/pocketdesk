@@ -19,6 +19,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(consoleURL)
         return true
     }
+
+    // 正常退出时带走本进程的临时钥匙串与密码文件，不在用户机器上留残留（强杀时由下次启动的过期清理兜底）。
+    func applicationWillTerminate(_ notification: Notification) {
+        SecureTransport.teardown()
+    }
+}
+
+/// 卡死自愈看门狗。
+///
+/// Network.framework 的 TLS 握手取私钥**没有超时**：securityd 一旦让这次取用停住（钥匙串被重新上锁后
+/// 需要用户授权、securityd 自己重启等），整条网络工作线程会被永久占死——HTTPS、HTTP、心跳、画面
+/// 一起静默停摆，而进程看起来还好好的、端口也还在监听，用户只会看到"一直连不上/不同步"。
+/// 主线程此时是空闲的，所以由它每 10 秒戳一次自己的 HTTP 端口；连续两次拿不到 200 就重启 App——
+/// 重启会重建一个全新的、已解锁的临时钥匙串，通常半分钟内恢复。
+final class ServerWatchdog {
+    private static var timer: Timer?
+    private static var failures = 0
+    private static let interval: TimeInterval = 10
+    private static let requestTimeout: TimeInterval = 4
+    private static let toleratedFailures = 2
+
+    static func start(port: UInt16) {
+        guard let url = URL(string: "http://127.0.0.1:\(port)/api/status") else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
+            var request = URLRequest(url: url)
+            request.timeoutInterval = requestTimeout
+            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            URLSession.shared.dataTask(with: request) { _, response, _ in
+                let healthy = (response as? HTTPURLResponse)?.statusCode == 200
+                DispatchQueue.main.async {
+                    guard !healthy else { failures = 0; return }
+                    failures += 1
+                    guard failures >= toleratedFailures else { return }
+                    failures = 0
+                    relaunch()
+                }
+            }.resume()
+        }
+    }
+
+    /// 先让一个新实例起来，再退出自己：直接自杀会让端口在无人接管时一直空着。
+    private static func relaunch() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "sleep 2; exec /usr/bin/open -a \"$0\"", Bundle.main.bundlePath]
+        try? process.run()
+        exit(0)
+    }
 }
 
 let executableDirectory = URL(fileURLWithPath: CommandLine.arguments.first ?? FileManager.default.currentDirectoryPath).deletingLastPathComponent()
@@ -54,6 +102,8 @@ if #available(macOS 14.0, *) {
     if let secureTransport { try frames.startSecure(secureTransport) }
     frameService = frames
 }
+// 服务都起来之后再看门：网络工作线程被 securityd 占死时，由主线程把 App 重启回来。
+ServerWatchdog.start(port: selectedPort)
 let consoleURL = URL(string: "http://localhost:\(selectedPort)/console")!
 print("PocketDesk 已启动。控制台：\(consoleURL.absoluteString)（触控板通道 ws:\(wsPort)）")
 // 首次运行或尚未授权时，自动打开电脑端控制台引导流程。
