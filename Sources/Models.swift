@@ -33,16 +33,28 @@ struct LiveInputCommand: Decodable {
     let imageIds: [String]?
     let reset: Bool? // 仅用于拒绝旧式基线重置，不再接受未经核验的远端文本。
     let retry: Bool? // 用户再次发送时请求核对原会话；不允许直接重置或重放全文。
+    // 只读恢复探测：只核验控制租约/目标应用/原编辑位置/电脑内容，不写入任何字符。
+    // 手机端在弹窗关闭、页面回前台、输入框重新聚焦时发它，据此决定能否自动续接。
+    let probe: Bool?
 }
 
 struct LiveInputReceipt {
     let feedback: ExecutionFeedback
     let mode: String
     let committed: Bool // 仅表示提交动作执行过，不表示第三方服务收到了消息。
+    // 结构化状态码，前端据它决定"继续写 / 冻结 / 提示用户点一下"，而不是解析人话文案。
+    let state: String
+    let note: String
     var dictionary: [String: Any] {
         ["ok": true, "outcome": feedback.outcome.rawValue, "detail": feedback.detail,
-         "mode": mode, "committed": committed]
+         "mode": mode, "committed": committed, "state": state, "note": note]
     }
+}
+
+/// 草稿路径的结构化失败：人类文案与状态码分开，Server 原样透传两者。
+struct LiveInputFailure: Error {
+    let message: String
+    let state: String
 }
 
 // 手机选图后立即预上传的请求体。
@@ -54,6 +66,11 @@ struct PendingImage: Decodable {
 
 struct ActivateCommand: Decodable {
     let targetId: String
+    // 显式定位意图：只在手机**手动选择应用**时置位。默认关闭以兼容旧客户端——
+    // 自动跟随、发送文本的隐式激活、恢复探针都不会带它，也就不会有鼠标副作用。
+    let locate: Bool?
+    // 选择代际：只有不早于已执行最大代际的定位才会生效，乱序回执不得抢走最新一次选择。
+    let generation: Int?
 }
 
 struct IconUpload: Decodable {

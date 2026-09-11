@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 CoreGraphics 的 CGEvent/CGDisplay 系列 API；消费 WSServer 转发的手势 JSON。
- * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、有效屏区域钳制、pointer 绝对拖动与 move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置、拒绝执行时经 onError 上报）。
+ * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、有效屏区域钳制、pointer 绝对拖动与 move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置、目标窗口定位（只移动不点击，按代际与用户活动门禁）、拒绝执行时经 onError 上报）。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的指针执行层；仅被 WSServer 消费，与 InputExecutor（键盘）平行为一对执行兄弟。
  *          维护的是**命令期望值**，与 CursorMonitor 的**观测值**严格分离，两者互不写入。
@@ -43,6 +43,41 @@ final class PointerExecutor {
             }
             self.apply(["t": "scrollEnd"])
             self.scrollRemainder = (0, 0)
+        }
+    }
+
+    /// 定位结果：区分"移动了 / 已在位 / 跳过（附原因）"，不能用命令预期伪造手机光标。
+    enum LocateOutcome {
+        case moved(CGPoint)
+        case unchanged(CGPoint)
+        case skipped(String)
+    }
+
+    /// 选择代际：只有不早于已执行最大代际的定位才会生效。
+    /// 快速点 A 再点 B 时，A 的迟到回执不得把光标从 B 抢走。
+    private var locateGeneration: UInt64 = 0
+
+    /// 把光标定位到目标窗口的可见区域。**只移动**：不点击、不改选区、不夺取焦点。
+    /// 与其它指针命令在同一串行队列里核验锁屏、拖动、代际与用户活动之后才注入，并同步更新 expected。
+    /// - anchor: 请求发出时的鼠标位置。等待激活期间用户动过鼠标/触控板 → 放弃本次定位，
+    ///   不能等用户手势结束后再突然把光标挪走。
+    func locate(to point: CGPoint, generation: UInt64, anchor: CGPoint?, completion: @escaping (LocateOutcome) -> Void) {
+        queue.async {
+            guard LockScreenInput.state == "unlocked" else { completion(.skipped("locked")); return }
+            guard !self.dragging else { completion(.skipped("dragging")); return }
+            guard generation >= self.locateGeneration else { completion(.skipped("stale")); return }
+            self.locateGeneration = generation
+            let current = CGEvent(source: nil)?.location
+            if let anchor, let current, hypot(current.x - anchor.x, current.y - anchor.y) > 3 {
+                completion(.skipped("user-active")); return
+            }
+            let target = self.clamped(point)
+            self.expected = target
+            if let current, hypot(current.x - target.x, current.y - target.y) <= 1.5 {
+                completion(.unchanged(target)); return
+            }
+            self.post(.mouseMoved, at: target)
+            completion(.moved(target))
         }
     }
 

@@ -1,6 +1,8 @@
 /**
  * [INPUT]: 依赖 app.js 的草稿/目标/历史与多图处理门闩、ComposeQueue、原生 IME、全屏输入区。
  * [OUTPUT]: 提供可见输入栏、手机全文同步与图文提交；发送等待图片处理、补传完整批次并冻结附件编辑，失败保留草稿及附件；用户显式切换目标时保留内容并开启隔离的新草稿轮次。
+ *           收到可恢复中断（interrupted）时进入冻结态，只发只读探测（probe）等待原绑定重新成立，
+ *           recoverable 后按公共前缀只补差量，needs-user-focus 就地提示“点一下电脑输入框”，**绝不重放正文**。
  * [POS]: Web 输入编排层；每次提交等待自己的完成结果，不用同步成功代替提交成功。
  *        发送入口只注册为 window.pocketdeskComposeSend；window.pocketdeskSend 归 pad.js
  *        （画面/指针指令），两者名字不可互换。
@@ -21,6 +23,22 @@ let liveTarget = null;
 let livePaused = false;
 let liveFailure = '';
 let submittingDraft = false;
+// 服务端只回结构化状态（active/interrupted/recoverable/needs-user-focus/committed），
+// 人话文案留在这一层。冻结态下**绝不重放正文**：恢复只能靠只读探测重新证明"还是原来那个输入位置"。
+let liveState = 'active';
+let liveProbing = false;
+let recoveryTimer = null;
+let recoveryAttempts = 0;
+let recoveryListenersAttached = false;
+// 探测在飞期间又被要求排期（探针自己续期、或又发生一次打断、或用户切回前台）时，
+// 不能丢掉这次请求：记下待排期与延迟，等本次探测收尾后补排。否则恢复链会在
+// 第一次探测结束后自己断掉——表现就是"弹窗关掉了手机也回前台了，但只有切一次应用才能恢复"。
+let recoveryPending = false;
+let recoveryPendingDelay = 0;
+const RECOVERY_INTERVAL = 1500;
+// 低频探测有上限：连续失败这么多次就停下等用户事件（回到前台/重新聚焦），不再无休止轮询。
+// 20 × 1.5s ≈ 30s，覆盖"电脑侧弹窗自己关掉、手机侧什么都没发生"的常见时长，且始终有界。
+const RECOVERY_MAX_ATTEMPTS = 20;
 
 // 最近一次用户输入时间：体感发送门禁用它判断“刚说完/还在输入”时不发。
 let lastInputAt = Date.now();
@@ -33,6 +51,7 @@ let liveTimer = null;
 function beginDraftForExplicitTarget(targetId) {
   if (!targetId || (targetId === selected && !livePaused)) return false;
   clearTimeout(liveTimer);
+  stopRecovery();
   liveQueue.clear('已切换目标，旧目标的未发送同步已取消');
   liveQueue = makeLiveQueue();
   liveDraftId = newDraftId();
@@ -40,6 +59,7 @@ function beginDraftForExplicitTarget(targetId) {
   liveTarget = null;
   livePaused = false;
   liveFailure = '';
+  liveState = 'active';
   inputContext = null;
   contextPromise = null;
   paintLive('off');
@@ -82,9 +102,14 @@ function makeLiveQueue() {
       body: JSON.stringify({ draftId: command.draftId, expectedMode: liveMode, text: command.text, submit: command.submit, retry: command.retry, usePendingImage: command.usePendingImage, imageBatchId: command.imageBatchId, imageIds: command.imageIds, targetId: command.targetId, context: command.context, session: command.session }),
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '同步失败');
+    if (!response.ok) {
+      // 服务端把人类文案与状态码分开回；这里把状态码一并带出去，供冻结/恢复决策使用。
+      const error = new Error(result.error || '同步失败');
+      if (result.state) error.state = result.state;
+      throw error;
+    }
     if (!['replace', 'selection', 'deferred'].includes(result.mode)) throw new Error('电脑端版本较旧，请先更新 PocketDesk');
-    if (command.draftId === liveDraftId) liveMode = result.mode;
+    if (command.draftId === liveDraftId) { liveMode = result.mode; liveState = result.state || 'active'; }
     return result;
   });
 }
@@ -103,11 +128,108 @@ function pushLive(text, submit = false, withImage = false, retry = false, reconc
   }).catch(error => {
     if (command.draftId !== liveDraftId) throw error;
     livePaused = true;
-    liveFailure ||= error.message;
+    liveState = error.state || 'interrupted';
+    liveFailure = error.message;
     clearTimeout(liveTimer);
-    paintLive('error', error.message); throw error;
+    paintLive('error', error.message);
+    startRecovery();
+    throw error;
   });
   return task;
+}
+
+/* ---------- 跨弹窗安全恢复：只读探测，绝不重放正文 ---------- */
+// 触发来源：手机页面回到前台、窗口重新获得焦点、输入框重新聚焦，以及低频有界探针
+// （覆盖"电脑侧弹窗自己关掉了、手机侧什么都没发生"这一种）。
+// 任一事件都只发一个只读 probe 请求；只有服务端能证明"原目标应用与原编辑位置都回来了、
+// 电脑内容仍等于最后确认状态"时才解除冻结，随后按公共前缀只补差量。
+function liveStateNote(state, fallback) {
+  if (state === 'interrupted') return '输入焦点被弹窗或其它窗口打断，已冻结；回到原输入框会自动继续。';
+  if (state === 'needs-user-focus') return '请在电脑上点一下原输入框即可继续；手机文字已保留。';
+  if (state === 'committed') return '本轮已提交，请开始新的草稿。';
+  return fallback || '同步已暂停，草稿已保留。';
+}
+
+function attachRecoveryListeners() {
+  if (recoveryListenersAttached) return;
+  recoveryListenersAttached = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    recoveryAttempts = 0; scheduleProbe(120);
+  });
+  window.addEventListener('focus', () => { recoveryAttempts = 0; scheduleProbe(120); });
+  // focusin 冒泡：首页框与全屏代理都覆盖，且代理被重建（recreateKbProxy）后依然有效。
+  document.addEventListener('focusin', event => {
+    const target = event.target;
+    if (target === textEl || (target && target.id === 'kb-proxy')) { recoveryAttempts = 0; scheduleProbe(120); }
+  }, true);
+}
+
+function startRecovery() {
+  attachRecoveryListeners();
+  recoveryAttempts = 0;
+  scheduleProbe(RECOVERY_INTERVAL);
+}
+
+function stopRecovery() {
+  clearTimeout(recoveryTimer);
+  recoveryTimer = null;
+  recoveryAttempts = 0;
+  liveProbing = false;
+  recoveryPending = false;
+  recoveryPendingDelay = 0;
+}
+
+function scheduleProbe(delay) {
+  if (!livePaused) return;
+  if (recoveryAttempts >= RECOVERY_MAX_ATTEMPTS) return;
+  // probeLive 内部续期时 liveProbing 仍为 true：这时不能直接 return（会把恢复链断掉），
+  // 也不能在这里再挂一个定时器（会和在飞请求叠加）。登记下来，由 probeLive 的
+  // finally 在 liveProbing 落地之后补排。
+  if (liveProbing) { recoveryPending = true; recoveryPendingDelay = delay; return; }
+  clearTimeout(recoveryTimer);
+  recoveryTimer = setTimeout(() => { probeLive(); }, delay);
+}
+
+async function probeLive() {
+  if (!livePaused || liveProbing || submittingDraft || !selected) return;
+  liveProbing = true;
+  recoveryAttempts += 1;
+  try {
+    const session = window.pocketdeskControlInfo?.().session || '';
+    const response = await fetch('/api/live-input', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({
+        draftId: liveDraftId, text: liveValue(), targetId: liveTarget ?? selected,
+        probe: true, context: inputContext?.context, session,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) { scheduleProbe(RECOVERY_INTERVAL); return; }
+    if (result.state === 'recoverable') {
+      livePaused = false; liveFailure = ''; liveState = 'active';
+      stopRecovery();
+      paintLive('on', '已恢复同步');
+      // 恢复后不重放正文：照常走 scheduleLive，服务端按公共前缀只写差量。
+      if (liveValue() !== '') scheduleLive();
+    } else {
+      liveState = result.state || 'interrupted';
+      liveFailure = result.note || liveStateNote(liveState, liveFailure);
+      paintLive('error', liveFailure);
+      scheduleProbe(RECOVERY_INTERVAL);
+    }
+  } catch {
+    scheduleProbe(RECOVERY_INTERVAL);
+  } finally {
+    liveProbing = false;
+    // 收尾后补排：恢复成功时 stopRecovery 已经把 pending 清空，这里不会误续期。
+    if (recoveryPending) {
+      recoveryPending = false;
+      const delay = recoveryPendingDelay || RECOVERY_INTERVAL;
+      recoveryPendingDelay = 0;
+      scheduleProbe(delay);
+    }
+  }
 }
 
 function scheduleLive(reconcileOnFailure = false) {
@@ -346,17 +468,30 @@ window.addEventListener('scroll', refreshKeyboardViewport, { passive: true });
 // blur→focus 同元素在部分 Android WebView 上对 Gboard 无效，必须整个换元素。
 // 所以只要「仍聚焦且本轮没收到过字」或已打上 kbSuspect 标记，就直接 recreateKbProxy()
 // 换新元素——这是唯一能甩掉污点、不必刷新整页的办法。
+const CONTEXT_RETRY_LIMIT = 3;
+const CONTEXT_RETRY_DELAY = 250;
+
+// 绑定输入位置。"WorkBuddy" 这类 Electron 应用提交后会把编辑器对象重建，新窗口刚拿到焦点时
+// AX 可能还只暴露到容器（scope=application）。这里给一个**有上限**的短暂等待，让下一轮首字
+// 能自动绑定上——而不是立刻要求用户去点电脑输入框。等待到上限才提示，绝不无休止轮询。
 function refreshInputContext() {
   const session = window.pocketdeskControlInfo().session;
-  contextPromise = fetch('/api/input-context', { headers: { ...authHeaders(), 'X-PocketDesk-Session': session }, cache: 'no-store' }).then(async response => {
+  const attempt = remaining => fetch('/api/input-context', {
+    headers: { ...authHeaders(), 'X-PocketDesk-Session': session }, cache: 'no-store',
+  }).then(async response => {
     const context = await response.json();
     if (!response.ok || !context.context) throw new Error(context.error || '无法确定输入位置');
+    if (context.scope === 'application' && remaining > 0) {
+      await new Promise(resolve => setTimeout(resolve, CONTEXT_RETRY_DELAY));
+      return attempt(remaining - 1);
+    }
     context.session = session;
     inputContext = context;
     kbProxy.setAttribute('aria-label', '输入到：' + context.name);
     if (context.scope === 'application') paintLive('error', '请先确认电脑上的输入框');
     return context;
   });
+  contextPromise = attempt(CONTEXT_RETRY_LIMIT);
   contextPromise.catch(error => paintLive('error', error.message));
   return contextPromise;
 }
@@ -433,14 +568,18 @@ window.pocketdeskInputSettled = (ms = 700) => Date.now() - lastInputAt >= ms;
 window.pocketdeskHasDraft = () => Boolean(textEl.value || pendingImages.length);
 window.pocketdeskCanMotionSend = () => {
   if (!selected || sendEl.disabled || submittingDraft || liveComposing) return false;
+  // 中断冻结中、恢复探测进行中、上一轮提交收尾中，一律不发：迟到候选不得提交新一轮草稿。
+  if (livePaused || liveProbing) return false;
   if (!(window.pocketdeskInputSettled && window.pocketdeskInputSettled(700))) return false; // 仍在输入/听写中
   return true;
 };
 
 function clearCompose() {
   const keyboardFocused = document.activeElement === kbProxy;
+  stopRecovery();
   liveDraftId = newDraftId(); liveMode = null; liveTarget = null; livePaused = false;
   liveFailure = '';
+  liveState = 'active';
   textEl.value = '';
   kbProxy.value = '';
   // 提交封闭本轮原生编辑会话，旧输入法迟到的候选/input 不能把已发送文字填回来。

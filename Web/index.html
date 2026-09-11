@@ -21,8 +21,8 @@
       })();
     </script>
     <link rel="stylesheet" href="/style.css?v=3.0.13" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
-    <link rel="stylesheet" href="/app-extras.css?v=3.0.5">
-    <link rel="stylesheet" href="/screen.css?v=3.1.0">
+    <link rel="stylesheet" href="/app-extras.css?v=3.0.6">
+    <link rel="stylesheet" href="/screen.css?v=3.1.1">
   </head>
   <body data-page-node-id="2eqrPm23J7ToUXDDq0CibO">
     <main data-page-node-id="vqfJmN7gi1ptl0qmDEQ4Iv">
@@ -122,6 +122,9 @@
           <button id="screen-keyboard-close" type="button" aria-label="收起键盘" title="收起键盘"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
         </div>
         <div id="screen-input-status" role="status" hidden></div>
+        <!-- 实时同步状态：正常时是"已同步/实时输入已发出"，打断后是恢复进度。
+             不设 role=status：每次同步成功都会改写它，做成 ARIA live region 会一直朗读。 -->
+        <div id="live-flag" hidden></div>
       </section>
     </dialog>
     <!-- 手机设置：全站唯一入口（header 齿轮），底部模态；标题与关闭固定，内容可滚动。
@@ -163,18 +166,18 @@
         </div>
       </div>
     </dialog>
-    <script src="/app.js?v=3.0.23"></script>
+    <script src="/app.js?v=3.0.24"></script>
     <script src="/pad.js?v=3.0.11"></script>
-    <script src="/settings.js?v=3.0.5"></script>
+    <script src="/settings.js?v=3.0.6"></script>
     <script src="/compose-queue.js?v=3.0.17"></script>
-    <script src="/compose.js?v=3.0.24"></script>
+    <script src="/compose.js?v=3.0.26"></script>
     <script src="/screen-geometry.js?v=3.0.2"></script>
     <script src="/screen-gestures.js?v=3.0.12"></script>
     <script src="/screen-pip.js?v=3.0.0"></script>
     <script src="/screen-frames.js?v=3.1.0"></script>
     <script src="/screen.js?v=3.1.0"></script>
     <script src="/motion-recognizer.js?v=3.0.0"></script>
-    <script src="/motion-send.js?v=3.0.3"></script>
+    <script src="/motion-send.js?v=3.0.4"></script>
     <script>boot();</script>
   </body>
 </html>
