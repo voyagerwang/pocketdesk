@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 pocketdeskLockState 同步独立解锁表单； 依赖 ScreenFrames/Geometry/Gestures/Pip、共享控制通道与可见输入区。
  * [OUTPUT]: 编排浮窗和正立全屏、默认点击/滚动合一与长按放大瞄准、小窗屏幕直选与全屏显示器快捷轮换、可见键盘视口与首页隔离、画面新鲜度、锁屏/断屏恢复、控制权与光标呈现。
- * [POS]: Web 画面工作台入口；几何、网络与手势分别委托独立模块，退出统一释放资源。
+ * [POS]: Web 画面工作台入口；几何、网络与手势分别委托独立模块，退出统一释放资源。keyboardOpen 把手势的键盘态接到 window.pocketdeskKeyboardActive，使点屏 pointerdown 能打“定位”标记而不影响真收起。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 (() => {
@@ -110,6 +110,8 @@
     // 键盘开启时点屏：把点击发往 Mac（在会话里定位光标），不再顺手收起手机键盘。
     // 收键盘用专属关闭按钮 / 返回键，避免“点一下会话就丢键盘”导致没法接着打字。
     dismissKeyboard: () => false,
+    // 键盘是否仍抬起：决定 pointerdown 是否打“点屏定位”标记（避免焦点转移触发 blur 收键盘）。
+    keyboardOpen: () => window.pocketdeskKeyboardActive?.() ?? false,
     touch: (x, y) => {
       const dot = $('screen-touch'), p = geometry.local(x, y);
       dot.hidden = false; dot.style.left = `${p.x}px`; dot.style.top = `${p.y}px`;

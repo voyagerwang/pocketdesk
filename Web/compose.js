@@ -7,6 +7,7 @@
  *           收到可恢复中断（interrupted）时进入冻结态，只发只读探测（probe）等待原绑定重新成立，
  *           recoverable 后按公共前缀只补差量，needs-user-focus 就地提示“点一下电脑输入框”，**绝不重放正文**。
  * [POS]: Web 输入编排层；每次提交等待自己的完成结果，不用同步成功代替提交成功。
+ *         kb-proxy 的 blur 区分“点屏定位导致的失焦”（window.pocketdeskScreenTapPending 命中即重聚焦、键盘保持）与真收起（返回键/Esc/关闭按钮，照常收起并交还布局权）。
  *        发送入口只注册为 window.pocketdeskComposeSend；window.pocketdeskSend 归 pad.js
  *        （画面/指针指令），两者名字不可互换。
  *        安卓 Chrome 专属补丁（键盘残留焦点的再聚焦、内边距补聚焦、IME 卡死自愈）一律由
@@ -403,6 +404,14 @@ function wireKbProxyExtras(p) {
   // 用户收起原生键盘（返回键 / 键盘收起键）：失焦即复位，并交还布局权。
   p.addEventListener('blur', () => {
     if (kbRecreating) return;            // 重建时旧元素被移除会触发 blur，那是假失焦，跳过
+    // 点屏定位光标会让焦点从代理短暂移走、触发 blur；手势已在 pointerdown 打了时间戳标记。
+    // 这里若发现是“刚点屏造成的失焦”，立即重新聚焦，键盘保持抬起——用户点一下会话仍能在手机上接着打字。
+    // 返回键 / 收键盘键 / Esc / 关闭按钮这类真收起不打标记，照常收起、交还布局权。
+    if ((window.pocketdeskScreenTapPending || 0) && performance.now() - window.pocketdeskScreenTapPending < 400) {
+      window.pocketdeskScreenTapPending = 0;
+      setTimeout(() => { if (document.activeElement !== p) p.focus({ preventScroll: true }); }, 0);
+      return;
+    }
     kbActive = false;
     window.pocketdeskKeyboardClosed?.(); // 让画面按真实视口重新铺一次
     syncKbToggle();

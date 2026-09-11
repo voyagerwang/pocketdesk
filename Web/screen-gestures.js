@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ScreenGeometry 的方向/位移换算、Pointer Events 合并采样与动画帧；由查看器注入可控状态、发令和界面反馈。
- * [OUTPUT]: 提供 ScreenGestures，统一触屏/指针/独立纵向滚动/滚轮/视野调整的点击、跟手滚动/可取消惯性、按住放大瞄准与缩放、拖动与取消。
+ * [OUTPUT]: 提供 ScreenGestures，统一触屏/指针/独立纵向滚动/滚轮/视野调整的点击、跟手滚动/可取消惯性、按住放大瞄准与缩放、拖动与取消；keyboardOpen 钩子在键盘抬起时于 pointerdown 打“点屏定位”标记（window.pocketdeskScreenTapPending），供 kb-proxy 的 blur 区分“点屏失焦”与真收起。
  * [POS]: Web 的全屏手势仲裁器；不持有网络连接，取消路径永远不合成点击。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -36,6 +36,9 @@ class ScreenGestures {
     if (!this.o.active() || e.button > 0) return;
     this.stopMomentum();
     e.preventDefault();
+    // 键盘开着时点屏：先打一个时间戳标记，让 kb-proxy 的 blur 知道“这次失焦是点屏定位光标造成的”，
+    // 从而立即重新聚焦、键盘保持抬起（见 compose.js wireKbProxyExtras 的 blur 处理）。
+    if (this.o.keyboardOpen?.()) window.pocketdeskScreenTapPending = performance.now();
     if (this.o.dismissKeyboard?.() || this.state === 'dismiss') {
       this.state = 'dismiss'; this.points.set(e.pointerId, { x: e.clientX, y: e.clientY });
       this.el.setPointerCapture(e.pointerId); return;
