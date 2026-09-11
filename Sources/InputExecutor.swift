@@ -3,7 +3,7 @@
  * [OUTPUT]: 对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、显式整段清空（幂等、可从冻结态破冰；文档类目标只清手机侧）、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/live-input、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 删除键经 postDeleteKey 发送（不携带 DEL 字符），避免 Chromium 把 Backspace 当成 Delete 键；变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 import CoreGraphics
@@ -246,8 +246,25 @@ final class InputExecutor {
     private func makeLiveWriter(pid: pid_t, context: String) -> KeyboardDraftWriter {
         KeyboardDraftWriter(pid: pid,
             valid: { [weak self] in self?.liveAuthorization() == true && InputBinding.shared.validate(context) },
-            key: { [weak self] code, flags in self?.postKey(code, flags: flags, pressMicros: 1_500) == true },
+            key: { [weak self] code, flags in
+                guard let self else { return false }
+                // 删除键（51）不携带字符：Backspace 由 keycode 驱动；通用 postKey 会为 51 强制写入
+                // DEL 字符，Chromium/Electron 据此把它解析成 Delete 键（向前删），在受控输入框上
+                // 表现为删除方向/范围错乱（删不全）。其余键（回车/方向键）保留 characters 补值。
+                return code == 51 ? self.postDeleteKey(flags: flags) : self.postKey(code, flags: flags, pressMicros: 1_500) == true
+            },
             insert: { [weak self] text in self?.insertLiveText(text) == true })
+    }
+
+    /// 删除键专用发送：不设置 characters。Backspace 语义由 keycode 51 决定；若强行带 DEL 字符，
+    /// Chromium 会按 "Delete" 键处理（向前删而非向后删），在 ChatGPT / WorkBuddy 等 Electron 输入框上造成删不全。
+    private func postDeleteKey(flags: CGEventFlags = []) -> Bool {
+        guard LockScreenInput.state == "unlocked",
+              let down = CGEvent(keyboardEventSource: Self.eventSource, virtualKey: 51, keyDown: true),
+              let up = CGEvent(keyboardEventSource: Self.eventSource, virtualKey: 51, keyDown: false) else { return false }
+        down.flags = flags; up.flags = flags
+        down.post(tap: .cghidEventTap); usleep(25_000); up.post(tap: .cghidEventTap)
+        return true
     }
 
     // 「清空」的作用范围：会话输入框两边一起清，文档类目标只清手机侧。
