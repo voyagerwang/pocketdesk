@@ -594,7 +594,9 @@ let heartbeatFailures = 0;  // 连续失败计数：≥2 判定断连，成功�
 // 手动滑动 Dock、刚手动激活的短时间内不跟随，之后可自由手动切换。
 async function heartbeatTick() {
   try {
-    fetch('/api/pair', { method: 'POST', keepalive: true });
+    fetch('/api/pair', { method: 'POST', keepalive: true,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userAgent: navigator.userAgent || '' }) });
     const current = await fetch('/api/status').then(response => response.json());
     window.pocketdeskAccessibility = current.accessibility;
     // 连接恢复：无论此前断过几次，先把顶部状态拉回真实值。

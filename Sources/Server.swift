@@ -29,6 +29,7 @@ final class Server {
     var secureTransport: SecureTransport?
     private var iconCache: [String: Data] = [:]
     private var phoneLastSeen: TimeInterval = 0
+    private var phonePlatform: String = ""   // 手机上报的平台：Android / iOS（首拍心跳里带 userAgent 推断）
     // 图片走 base64 JSON 体，2MB 远远不够；放宽到 12MB（客户端已把图压到 2048px JPEG）。
     private let maxBodyBytes = 12 * 1024 * 1024
 
@@ -215,6 +216,7 @@ final class Server {
                 "accessibility": AXIsProcessTrusted(),
                 "platform": "macOS",
                 "phoneLastSeen": Int(phoneLastSeen),
+                "phonePlatform": phonePlatform,
                 "theme": store.theme,
                 "lanURL": (stableURL ?? lanIP.map { "http://\($0):\(port)" }) as Any?,
                 "ipURL": lanIP.map { "http://\($0):\(port)" } as Any?,
@@ -288,6 +290,11 @@ final class Server {
             respond(connection, status: 200, data: png, contentType: "image/png")
         case ("POST", "/api/pair"):
             phoneLastSeen = Date().timeIntervalSince1970
+            // 手机首拍心跳带 userAgent：推断平台，供控制台按平台收敛二维码（安卓只留翻外发送的安全码）。
+            if let body = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+               let ua = body["userAgent"] as? String, !ua.isEmpty {
+                phonePlatform = ua.range(of: "Android", options: .caseInsensitive) != nil ? "Android" : "iOS"
+            }
             respond(connection, status: 200, json: ["ok": true])
         case ("POST", "/api/open-accessibility"):
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
