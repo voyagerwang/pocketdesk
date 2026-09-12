@@ -505,7 +505,24 @@ final class Server {
         respond(connection, status: 200, data: png, contentType: "image/png", cacheControl: "public, max-age=86400")
     }
 
-    /// 应用选择后的鼠标就位：**只移动**，不点击、不改文本选区、不猜输入框位置。
+    /// 决定手动选中后该把光标点向哪里来聚焦输入：
+    /// - AX 能检出主输入框（原生 app 可靠）→ 返回该中心点，method="ax"；
+    /// - 检不到（Electron/Chromium 等 AX 不稳定、或后台态不吐树）→ 回退到窗口底部中央，method="heuristic"。
+    /// 聊天 / Agent 工具的撰写框几乎都在窗口底部中央，这个回退对 WorkBuddy / 飞书这类 Electron 应用有效。
+    private static func focusPoint(pid: pid_t, window: CGRect) -> (CGPoint?, String) {
+        if let inputBox = TargetWindowLocator.findInputBoxCenter(pid: pid) {
+            return (inputBox, "ax")
+        }
+        // 窗口底部上方一点（避开最下缘的 resize/状态栏），水平居中——典型的聊天撰写框落点。
+        let y = window.maxY - min(30, max(16, window.height * 0.12))
+        let x = window.midX
+        guard x > window.minX, y > window.minY, y < window.maxY else { return (nil, "none") }
+        return (CGPoint(x: x, y: y), "heuristic")
+    }
+
+    /// 应用选择后的鼠标就位：先**移动到**目标窗口可见区；若 AX 能检出主输入框（聊天 / Agent 工具的撰写框），
+    /// 再**移到输入框并单击聚焦**——这样手动选中聊天/Agent 类工具后可直接开始打字。
+    /// 检不到输入框（非输入类应用、或应用无辅助功能权限）时回退为只移动，行为不变。
     /// 几何在 PointerGeometry（纯函数）里算，注入只经 PointerExecutor（与其它指针命令同一条队列），
     /// 回执区分 moved / unchanged / skipped（附原因）——不能用命令预期伪造手机光标。
     private func performLocate(pid: pid_t?, generation: UInt64, anchor: CGPoint?, completion: @escaping ([String: Any]) -> Void) {
@@ -531,7 +548,13 @@ final class Server {
             pointer.locate(to: point, generation: generation, anchor: anchor) { outcome in
                 switch outcome {
                 case .moved(let landed):
-                    completion(["ok": true, "locate": "moved", "x": Double(landed.x), "y": Double(landed.y)])
+                    // 手动选中聊天 / Agent 工具时，把光标落到输入框并单击聚焦，让用户直接开始打字。
+                    // 优先用 AX 精确找输入框（原生 app 可靠）；Electron 等 AX 不稳定场景下回退到窗口底部中央
+                    // （聊天/Agent 工具的撰写框几乎都在这个位置），保证 WorkBuddy / 飞书这类也能点进输入框。
+                    let (inputPoint, method) = Self.focusPoint(pid: pid, window: resolution.rect)
+                    if let p = inputPoint { pointer.click(at: p) }
+                    completion(["ok": true, "locate": "moved", "x": Double(landed.x), "y": Double(landed.y),
+                                "clickedInput": inputPoint != nil, "inputMethod": method])
                 case .unchanged:
                     completion(["ok": true, "locate": "unchanged"])
                 case .skipped(let reason):

@@ -17,7 +17,7 @@ final class TargetStore {
         .init(id: "feishu", name: "飞书", bundleID: "com.electron.lark", path: "/Applications/Feishu.app"),
         .init(id: "chrome", name: "Chrome", bundleID: "com.google.Chrome", path: "/Applications/Google Chrome.app"),
         .init(id: "zcode", name: "ZCode", bundleID: "dev.zcode.app", path: "/Applications/ZCode.app"),
-        .init(id: "workbody", name: "Workbody", bundleID: nil, path: "/Applications/Workbody.app"),
+        .init(id: "workbuddy", name: "WorkBuddy", bundleID: "com.tencent.workbuddy.mac", path: "/Applications/WorkBuddy.app"),
         .init(id: "wechat", name: "微信", bundleID: "com.tencent.xinWeChat", path: "/Applications/WeChat.app"),
         .init(id: "uu", name: "UU远程", bundleID: "com.netease.uuremote", path: "/Applications/UURemote.app"),
     ]

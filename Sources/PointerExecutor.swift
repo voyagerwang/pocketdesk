@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 CoreGraphics 的 CGEvent/CGDisplay 系列 API；消费 WSServer 转发的手势 JSON。
- * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、有效屏区域钳制、pointer 绝对拖动与 move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置、目标窗口定位（只移动不点击，按代际与用户活动门禁）、拒绝执行时经 onError 上报）。
+ * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、有效屏区域钳制、pointer 绝对拖动与 move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置、目标窗口定位（移动到窗口可见区；手动选中且 AX 能检出主输入框时顺带单击聚焦，按代际与用户活动门禁）、拒绝执行时经 onError 上报）。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的指针执行层；仅被 WSServer 消费，与 InputExecutor（键盘）平行为一对执行兄弟。
  *          维护的是**命令期望值**，与 CursorMonitor 的**观测值**严格分离，两者互不写入。
@@ -57,8 +57,9 @@ final class PointerExecutor {
     /// 快速点 A 再点 B 时，A 的迟到回执不得把光标从 B 抢走。
     private var locateGeneration: UInt64 = 0
 
-    /// 把光标定位到目标窗口的可见区域。**只移动**：不点击、不改选区、不夺取焦点。
-    /// 与其它指针命令在同一串行队列里核验锁屏、拖动、代际与用户活动之后才注入，并同步更新 expected。
+    /// 把光标定位到目标窗口的可见区域。与其它指针命令在同一串行队列里核验锁屏、拖动、代际与用户活动之后才注入。
+    /// 默认**只移动**；若调用方在定位成功后另行请求 `click(at:)`，则会在检出到的输入框位置补一次单击聚焦
+    /// （见 Server.performLocate 对聊天/Agent 工具的处理）。
     /// - anchor: 请求发出时的鼠标位置。等待激活期间用户动过鼠标/触控板 → 放弃本次定位，
     ///   不能等用户手势结束后再突然把光标挪走。
     func locate(to point: CGPoint, generation: UInt64, anchor: CGPoint?, completion: @escaping (LocateOutcome) -> Void) {
@@ -78,6 +79,22 @@ final class PointerExecutor {
             }
             self.post(.mouseMoved, at: target)
             completion(.moved(target))
+        }
+    }
+
+    /// 在指定点单击：先移动到该点，再按下/抬起，间隔 40ms。用于把焦点落到输入框
+    /// （Electron/WebKit/自定义 NSTextView 的输入框在 mousedown 阶段抢焦点，零间隔会被 up 中断，
+    /// 表现为"指针动了但框没聚焦"——与 `tap` 分支保持同一时序）。与其它指针命令同队列、同门禁执行。
+    func click(at point: CGPoint) {
+        queue.async {
+            guard LockScreenInput.state == "unlocked" else { return }
+            guard !self.dragging else { return }
+            let target = self.clamped(point)
+            self.expected = target
+            self.post(.mouseMoved, at: target)
+            self.post(.leftMouseDown, at: target, clickState: 1)
+            usleep(40_000)
+            self.post(.leftMouseUp, at: target, clickState: 1)
         }
     }
 
