@@ -53,7 +53,7 @@ iOS 的“运动与方向访问”是另一项系统权限：只允许由用户�
 
 受浏览器安全模型限制，普通网页不能读取 iPhone 是否已安装/完全信任某个根证书。产品只能通过真实 HTTPS 健康探测判断结果，不能伪造“已完成”。若跨源探测受限，使用新窗口打开一个返回后可识别的短验证页，或让 HTTPS 页面成功加载后持久化一次本机完成标记；标记只能改善引导，最终仍以握手成功为准。
 
-Apple 官方路径与限制：https://support.apple.com/zh-cn/102390 。真机验收覆盖当前 iOS：首次下载、描述文件安装、完全信任、返回检测、运动权限，以及已经信任后的第二次进入不再重复引导。
+Apple 官方路径与限制：<https://support.apple.com/zh-cn/102390> 。真机验收覆盖当前 iOS：首次下载、描述文件安装、完全信任、返回检测、运动权限，以及已经信任后的第二次进入不再重复引导。
 
 ### B. 建立跨弹窗的安全恢复协议
 
@@ -95,6 +95,7 @@ Apple 官方路径与限制：https://support.apple.com/zh-cn/102390 。真机�
 ### 实际改动
 
 **Sources（新增 3 个、改 9 个）**
+
 - 新增 `InputActivity.swift`（进程级活动闸，NSCountingLock + 时间戳）、`PointerGeometry.swift`（纯几何落点）、`TargetWindowLocator.swift`（AX + WindowServer 窗口解析）。
 - `main.swift`：`ServerWatchdog` 3 次失败 + `InputActivity` 安静 3s + handoff 单实例交接。
 - `LiveDraft.swift`：五态机 + `probe` 只读分支（只比对、只发公共前缀差量）。
@@ -106,6 +107,7 @@ Apple 官方路径与限制：https://support.apple.com/zh-cn/102390 。真机�
 - `KeyboardDraftWriter.swift`：公共前缀差量（恢复复用）。`ShortcutActions.swift`、`SecureTransport.swift`（前轮）相应协同。
 
 **Web（改 6 个）**
+
 - `index.html`：新增 `#live-flag`、`#screen-input-status` 状态落点。
 - `app.js`：`selectGeneration` 选择代际（迟到 A/B 回执整条丢弃）+ 定位意图仅手动选择显式传 `true`。
 - `settings.js`：四步向导 + `setWristLinks` 接受 `{kind: link|action|step|hint}` 结构化条目。
@@ -114,6 +116,7 @@ Apple 官方路径与限制：https://support.apple.com/zh-cn/102390 。真机�
 - `screen.css`：`#live-flag` 样式。
 
 **tests（新增 5 个）**
+
 - `tests/draft-state.test.swift`、`tests/input-activity.test.swift`、`tests/pointer-geometry.test.swift`（`swiftc -parse-as-library` 隔离单测）。
 - `tests/live-recovery.test.cjs`（静态契约：锁定 `scheduleProbe` 探测中必须登记 pending、`probeLive` 收尾必须补排、`stopRecovery` 清空、两状态元素必须存在）。
 - `tests/live-recovery.runtime.py`（浏览器运行时回归，17 项断言，桌面零写入）。
@@ -131,6 +134,7 @@ Apple 官方路径与限制：https://support.apple.com/zh-cn/102390 。真机�
 ### 真机结果（待验收）
 
 自动化覆盖了协议/状态机/几何/前端契约，但以下需要真机确认，明确列为**待验收**，不凭模拟器结论代替：
+
 - **钥匙串/看门狗**：本地运行无密码弹窗（内存装配已生效）；但"系统睡眠唤醒后 securityd 行为、连续 HTTPS 数小时"的真机长稳观察待验收。
 - **连续发送 / 弹窗恢复**：运行时回归 17/17 已覆盖 WorkBuddy 编辑器重建与系统弹窗的等价桩；但**真实 WorkBuddy Electron 提交后编辑器 AX 重建**、**macOS 系统弹窗真实抢焦点后自动续接**待 iPhone/iPad 与用户主机实测验收。
 - **鼠标就位**：只读探针已证明几何与窗口解析正确；**真机鼠标移动**只针对明确测试窗口执行，不点击/不输入用户正在工作的内容，待验收。
