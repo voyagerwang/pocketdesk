@@ -297,6 +297,18 @@ async function refresh() {
       $('secureQrItem').hidden = true;
       $('secureHint').textContent = '';
     }
+    // 安卓只展示「翻外发送」安全二维码：把另外两个连接用二维码收起，避免一屏堆三张。
+    // 安全连接可用时仅留它；没配 HTTPS 时保留 IP 码兜底，保证安卓至少还能扫一张连上。
+    const androidPhone = status.phonePlatform === 'Android';
+    const permItem = $('qr').closest('.qr-item');
+    const ipItem = $('qr-ip').closest('.qr-item');
+    if (androidPhone) {
+      if (permItem) permItem.hidden = true;
+      if (ipItem) ipItem.hidden = !!status.secureURL;
+    } else {
+      if (permItem) permItem.hidden = false;
+      if (ipItem) ipItem.hidden = false;
+    }
     // 手机在线状态：标题行右侧的状态徽章（与顶部 #conn 同一 pill 范式），只有"已连接"才点亮。
     const seen = status.phoneLastSeen * 1000;
     const phoneState = $('phoneState');
