@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 CoreGraphics 的 CGEvent/CGDisplay 系列 API；消费 WSServer 转发的手势 JSON。
- * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、有效屏区域钳制、pointer 绝对拖动与 move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置、目标窗口定位（移动到窗口可见区；手动选中且 AX 能检出主输入框时顺带单击聚焦，按代际与用户活动门禁）、拒绝执行时经 onError 上报）。
+ * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、有效屏区域钳制、相对移动携带真实增量 delta、pointer 绝对拖动与 move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置、目标窗口定位（移动到窗口可见区；手动选中且 AX 能检出主输入框时顺带单击聚焦，按代际与用户活动门禁）、拒绝执行时经 onError 上报）。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的指针执行层；仅被 WSServer 消费，与 InputExecutor（键盘）平行为一对执行兄弟。
  *          维护的是**命令期望值**，与 CursorMonitor 的**观测值**严格分离，两者互不写入。
@@ -150,10 +150,17 @@ final class PointerExecutor {
         return bounds.isNull ? nil : bounds
     }
 
-    private func post(_ type: CGEventType, at point: CGPoint, button: CGMouseButton = .left, clickState: Int64 = 1) {
+    private func post(_ type: CGEventType, at point: CGPoint, button: CGMouseButton = .left, clickState: Int64 = 1,
+                      delta: CGPoint? = nil) {
         let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button)
         // 显式标记 clickState：Electron/Chromium 系应用会丢弃未带按下次数的合成点击（表现为点不动、无法聚焦）。
         event?.setIntegerValueField(.mouseEventClickState, value: clickState)
+        // 相对移动要带增量：真实鼠标事件都有 dx/dy，"光标隐藏直到鼠标移动"等系统状态只认增量，
+        // 位置字段本身不算移动。不补增量时，UU 远程等应用触发的隐藏态只能靠物理鼠标解除。
+        if let delta {
+            event?.setDoubleValueField(.mouseEventDeltaX, value: delta.x)
+            event?.setDoubleValueField(.mouseEventDeltaY, value: delta.y)
+        }
         event?.post(tap: .cghidEventTap)
     }
 
@@ -206,11 +213,14 @@ final class PointerExecutor {
             let base = basePosition()
             let next = clamped(CGPoint(x: base.x + dx, y: base.y + dy))
             expected = next
+            // 增量取钳制后的实际位移：真实鼠标的 delta 与位移一致，调用方（应用、系统隐藏态判定）
+            // 才能把它当成一次真实移动。钳制把位移吃掉多少，delta 就写多少，不放大也不保留。
+            let delta = CGPoint(x: next.x - base.x, y: next.y - base.y)
             if dragging || type == "drag" {
                 if !dragging { dragging = true; post(.leftMouseDown, at: next) }
-                post(.leftMouseDragged, at: next)
+                post(.leftMouseDragged, at: next, delta: delta)
             } else {
-                post(.mouseMoved, at: next)
+                post(.mouseMoved, at: next, delta: delta)
             }
         case "tap":
             // 点画面移光标：比例坐标 → 目标显示器绝对坐标。先移动，可选顺带单击。
