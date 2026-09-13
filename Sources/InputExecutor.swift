@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard、ApplicationServices 的 AXUIElement、CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的命令词汇、ImageBatchStore 的有界多图资源、ImagePastePolicy 的目标专属时序、ExecutionTrace 的门禁与结果分级、TargetStore/InputFocus/InputBinding/LiveDraft 的目标和草稿事务。
- * [OUTPUT]: 对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、显式整段清空（幂等、可从冻结态破冰；文档类目标只清手机侧）、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
+ * [OUTPUT]: 对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、显式整段清空（幂等、可从冻结态破冰；文档类目标只清手机侧）、统一的 UU 文字剪贴板时序、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/live-input、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
  * [PROTOCOL]: 删除键经 postDeleteKey 发送（不携带 DEL 字符），避免 Chromium 把 Backspace 当成 Delete 键；clearScopeAllowsComputer 不再按进程白名单一刀切拦掉聊天类应用（飞书/钉钉等同进程文档与消息无法从 bundle 区分），改由 focusedInDocument 按需保护真实文档正文；变更时更新此头部，然后检查 CLAUDE.md
@@ -472,12 +472,9 @@ final class InputExecutor {
         } else { clickAnchor = nil }
         // deferred 从未向电脑写过草稿，只在此处粘贴一次最终全文。replace 只提交已有文本。
         if draft.mode == .deferred && !command.text.isEmpty {
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            guard pasteboard.setString(command.text, forType: .string), postKey(9, flags: .maskCommand) else {
+            guard pasteTextViaClipboard(command.text, bundleIdentifier: front.bundleIdentifier) else {
                 throw draft.stop("正文粘贴动作失败；请检查电脑内容，勿重复发送。")
             }
-            usleep(front.bundleIdentifier == "com.netease.uuremote" ? 600_000 : 200_000)
         }
         if !pictures.isEmpty {
             imageExecutionDrafts.insert(id); imageExecutionOrder.append(id)
@@ -568,17 +565,28 @@ final class InputExecutor {
     private func performUURemotePaste(text: String, imageData: [Data]) {
         InputActivity.shared.begin()
         defer { InputActivity.shared.end() }
-        let pasteboard = NSPasteboard.general
         if !text.isEmpty {
-            pasteboard.clearContents()
-            pasteboard.setString(text, forType: .string)
-            usleep(120_000); postKey(9, flags: .maskCommand); usleep(600_000)
+            _ = pasteTextViaClipboard(text, bundleIdentifier: ImagePastePolicy.uuBundleIdentifier)
         }
+        let pasteboard = NSPasteboard.general
         for image in imageData.compactMap(NSImage.init(data:)) {
             pasteboard.clearContents(); pasteboard.writeObjects([image])
             usleep(120_000); postKey(9, flags: .maskCommand); usleep(1_000_000)
         }
         postKey(36) // Return
+    }
+
+    // 所有“剪贴板文字 + Cmd+V”入口共用这一处，避免旧发送与 deferred 草稿再次产生时序分叉。
+    // UU 必须在按键前等待它观察到新剪贴板版本；按键后的等待只负责远端消费，不能互相替代。
+    private func pasteTextViaClipboard(_ text: String, bundleIdentifier: String?) -> Bool {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.setString(text, forType: .string) else { return false }
+        let timing = ImagePastePolicy.textTiming(bundleIdentifier: bundleIdentifier)
+        if timing.clipboardSettleMicros > 0 { usleep(timing.clipboardSettleMicros) }
+        guard postKey(9, flags: .maskCommand) else { return false }
+        if timing.consumptionMicros > 0 { usleep(timing.consumptionMicros) }
+        return true
     }
 
     // 先在仍持有焦点的编辑器中输入文字，避免图片挂载期间的焦点变化吞掉文字。
