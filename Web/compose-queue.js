@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费异步文本写入函数；请求包含目标、正文与是否提交。
- * [OUTPUT]: 提供 ComposeQueue；合并同草稿快照，提交独立完成；前次失败时仅保留已排队的同草稿显式删除，并要求核验恢复。
+ * [OUTPUT]: 提供 ComposeQueue；生命周期取消以 ComposeCancelledError 拒绝，写入失败仍传播真实错误；合并同草稿快照，提交独立完成；前次失败时仅保留已排队的同草稿显式删除，并要求核验恢复。
  * [POS]: Web 输入的顺序边界；首页和全屏共用，不包含 DOM 或输入法逻辑。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -16,8 +16,10 @@ class ComposeQueue {
       this.drain();
     });
   }
-  clear(reason = '输入位置已变化，请重新确认') {
-    for (const item of this.pending.splice(0)) for (const w of item.waiters) w.reject(new Error(reason));
+  clear(reason = '输入位置已变化，请重新确认', cancelled = true) {
+    const error = new Error(reason);
+    if (cancelled) error.name = 'ComposeCancelledError';
+    for (const item of this.pending.splice(0)) for (const w of item.waiters) w.reject(error);
   }
   async drain() {
     if (this.running) return;
@@ -34,7 +36,7 @@ class ComposeQueue {
           && deletion.value.draftId === item.value.draftId && deletion.value.targetId === item.value.targetId
           && deletion.value.contextPromise === item.value.contextPromise;
         if (canReconcile) this.pending.pop();
-        this.clear('前次输入未完成，请确认电脑内容后继续');
+        this.clear('前次输入未完成，请确认电脑内容后继续', false);
         if (canReconcile) { deletion.value.retry = true; this.pending.push(deletion); }
       }
     }
