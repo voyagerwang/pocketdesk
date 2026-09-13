@@ -13,8 +13,10 @@ struct ImagePasteTiming: Equatable {
 }
 
 struct TextPasteTiming: Equatable {
-    let clipboardSettleMicros: UInt32
-    let consumptionMicros: UInt32
+    /// 目标应用读取本机剪贴板并把新代际同步到远端后，才允许发送 Cmd+V。
+    let beforePasteMicros: UInt32
+    /// Cmd+V 发出后给目标输入框消费按键的时间。
+    let afterPasteMicros: UInt32
 }
 
 enum ImagePastePolicy {
@@ -35,8 +37,8 @@ enum ImagePastePolicy {
 
     static func textTiming(bundleIdentifier: String?) -> TextPasteTiming {
         bundleIdentifier == uuBundleIdentifier
-            ? TextPasteTiming(clipboardSettleMicros: 120_000, consumptionMicros: 600_000)
-            : TextPasteTiming(clipboardSettleMicros: 0, consumptionMicros: 200_000)
+            ? TextPasteTiming(beforePasteMicros: 1_200_000, afterPasteMicros: 200_000)
+            : TextPasteTiming(beforePasteMicros: 0, afterPasteMicros: 200_000)
     }
 
     static func needsInterImageClick(timing: ImagePasteTiming, imageIndex: Int, imageCount: Int) -> Bool {
