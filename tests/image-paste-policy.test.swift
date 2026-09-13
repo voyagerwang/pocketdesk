@@ -36,9 +36,9 @@ enum ImagePastePolicyTests {
             interImageClickMicros: nil))
 
         precondition(ImagePastePolicy.textTiming(bundleIdentifier: "com.netease.uuremote")
-            == TextPasteTiming(clipboardSettleMicros: 120_000, consumptionMicros: 600_000))
+            == TextPasteTiming(beforePasteMicros: 1_200_000, afterPasteMicros: 200_000))
         precondition(ImagePastePolicy.textTiming(bundleIdentifier: "com.bytedance.Feishu")
-            == TextPasteTiming(clipboardSettleMicros: 0, consumptionMicros: 200_000))
+            == TextPasteTiming(beforePasteMicros: 0, afterPasteMicros: 200_000))
 
         print("image paste policy tests passed")
     }

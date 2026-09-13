@@ -577,15 +577,16 @@ final class InputExecutor {
     }
 
     // 所有“剪贴板文字 + Cmd+V”入口共用这一处，避免旧发送与 deferred 草稿再次产生时序分叉。
-    // UU 必须在按键前等待它观察到新剪贴板版本；按键后的等待只负责远端消费，不能互相替代。
+    // UU 读取本机剪贴板很快，但传到远端是另一段异步链路：必须在 Cmd+V 前等待远端同步。
+    // 按键后的等待只负责目标输入框消费按键，放在那里无法修复“永远粘贴上一代”。
     private func pasteTextViaClipboard(_ text: String, bundleIdentifier: String?) -> Bool {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         guard pasteboard.setString(text, forType: .string) else { return false }
         let timing = ImagePastePolicy.textTiming(bundleIdentifier: bundleIdentifier)
-        if timing.clipboardSettleMicros > 0 { usleep(timing.clipboardSettleMicros) }
+        if timing.beforePasteMicros > 0 { usleep(timing.beforePasteMicros) }
         guard postKey(9, flags: .maskCommand) else { return false }
-        if timing.consumptionMicros > 0 { usleep(timing.consumptionMicros) }
+        if timing.afterPasteMicros > 0 { usleep(timing.afterPasteMicros) }
         return true
     }
 
