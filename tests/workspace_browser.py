@@ -1,6 +1,6 @@
 """
 [INPUT]: 依赖 Playwright、Pillow 与本地 Web 文件，以模拟 HTTP/WS 隔离真实桌面。
-[OUTPUT]: 回车提交清空、历史存储异常不阻断收尾、旧 IME 迟到事件隔离、启动时已有正文同步、暂停后删空保持 ID、电脑原文不反填、已有草稿聚焦/全屏带入全文同步、候选完成失焦保留、点击/滚动合一与放大精确落点、触控板激活隔离与右缘防抖、锁屏/断屏恢复与重认证序号、原生输入法入口与自绘键盘移除、快捷切屏画面匹配、滚动入口、小屏布局、始终可见输入栏、模拟键盘视口偏移/缩小与首页隔离、首页/全屏 IME 重建、失焦探针取消与首页/全屏失败保留与原 ID 重试、全屏操作回归断言与 /tmp 下的浏览器截图。
+[OUTPUT]: 切换取消排队快照不冻结同步、回车提交清空、历史存储异常不阻断收尾、旧 IME 迟到事件隔离、启动时已有正文同步、暂停后删空保持 ID、电脑原文不反填、已有草稿聚焦/全屏带入全文同步、候选完成失焦保留、点击/滚动合一与放大精确落点、触控板激活隔离与右缘防抖、锁屏/断屏恢复与重认证序号、原生输入法入口与自绘键盘移除、快捷切屏画面匹配、滚动入口、小屏布局、始终可见输入栏、模拟键盘视口偏移/缩小与首页隔离、首页/全屏 IME 重建、失焦探针取消与首页/全屏失败保留与原 ID 重试、全屏操作回归断言与 /tmp 下的浏览器截图。
 [POS]: tests 的浏览器集成验证；手机软键盘和实际捕获性能仍需真机验证。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -29,7 +29,8 @@ frame_displays = []
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
-    page = browser.new_page(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True, device_scale_factor=2)
+    # 明确使用 Android UA，才能真正覆盖下方 Gboard 专属的编辑会话自愈路径。
+    page = browser.new_page(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True, device_scale_factor=2, user_agent='Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36')
     errors, writes, key_writes = [], [], []
     flags = {"frame_failed": False, "locked": False, "fail_submit": False, "fail_live": False, "mode": "selection"}
     page.on('pageerror', lambda e: errors.append(str(e)))
@@ -479,6 +480,28 @@ with sync_playwright() as p:
     page.wait_for_function("!document.querySelector('#screen-view').open")
     assert page.locator('body > main').evaluate('e => !e.inert && getComputedStyle(e).visibility === "visible"')
     assert not page.evaluate('document.documentElement.classList.contains("screen-fullscreen-open")')
+    # 请求在途时切回首页：取消排队快照不能冒充远端失败、冻结后续输入。
+    result = page.evaluate("""async () => {
+      clearTimeout(liveTimer); stopRecovery();
+      livePaused = false; liveFailure = ''; liveMode = null;
+      const originalQueue = liveQueue;
+      let release;
+      liveQueue = new ComposeQueue(() => new Promise(resolve => { release = resolve; }));
+      const first = pushLive('在途正文');
+      const pending = pushLive('切换前最后一句').catch(error => error.name);
+      hideKeyboard();
+      const cancellation = await pending;
+      const paused = livePaused;
+      release({ mode: 'selection' }); await first;
+      liveQueue = originalQueue;
+      stopRecovery(); livePaused = false; liveFailure = '';
+      return { cancellation, paused };
+    }""")
+    assert not result['paused'], '切换取消未发送快照不得冻结同步: ' + str(result)
+    assert result['cancellation'] == 'ComposeCancelledError', result
+    page.locator('#text').fill('回到首页继续同步')
+    page.wait_for_timeout(250)
+    assert writes[-1]['text'] == '回到首页继续同步'
     assert not errors, errors
     print(json.dumps({'result': 'passed', 'writes': len(writes), 'screenshots': 3, 'presentedFrames': page.evaluate('window.presentedFrames')}, ensure_ascii=False))
     browser.close()
