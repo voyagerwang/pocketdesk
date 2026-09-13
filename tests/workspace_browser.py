@@ -1,6 +1,6 @@
 """
 [INPUT]: 依赖 Playwright、Pillow 与本地 Web 文件，以模拟 HTTP/WS 隔离真实桌面。
-[OUTPUT]: 切换取消排队快照不冻结同步、回车提交清空、历史存储异常不阻断收尾、旧 IME 迟到事件隔离、启动时已有正文同步、暂停后删空保持 ID、电脑原文不反填、已有草稿聚焦/全屏带入全文同步、候选完成失焦保留、点击/滚动合一与放大精确落点、触控板激活隔离与右缘防抖、锁屏/断屏恢复与重认证序号、原生输入法入口与自绘键盘移除、快捷切屏画面匹配、滚动入口、小屏布局、始终可见输入栏、模拟键盘视口偏移/缩小与首页隔离、首页/全屏 IME 重建、失焦探针取消与首页/全屏失败保留与原 ID 重试、全屏操作回归断言与 /tmp 下的浏览器截图。
+[OUTPUT]: 切换取消排队快照不冻结同步、Android 长按输入框保持原生焦点且不靠额外粘贴按钮、回车提交清空、历史存储异常不阻断收尾、旧 IME 迟到事件隔离、启动时已有正文同步、暂停后删空保持 ID、电脑原文不反填、已有草稿聚焦/全屏带入全文同步、候选完成失焦保留、点击/滚动合一与放大精确落点、触控板激活隔离与右缘防抖、锁屏/断屏恢复与重认证序号、原生输入法入口与自绘键盘移除、快捷切屏画面匹配、滚动入口、小屏布局、始终可见输入栏、模拟键盘视口偏移/缩小与首页隔离、首页/全屏 IME 重建、失焦探针取消与首页/全屏失败保留与原 ID 重试、全屏操作回归断言与 /tmp 下的浏览器截图。
 [POS]: tests 的浏览器集成验证；手机软键盘和实际捕获性能仍需真机验证。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -258,6 +258,18 @@ with sync_playwright() as p:
     page.wait_for_timeout(220)
     assert writes[-1]['text'] == '全屏已有正文' and not writes[-1]['submit']
     assert page.locator('#kb-proxy').input_value() == '全屏已有正文', '电脑原文不得覆盖手机已有正文'
+    # 全屏长按期间即使浏览器为系统菜单派发临时 blur，也不能收起输入栏或强行重聚焦。
+    page.locator('#kb-proxy').evaluate("e => e.setSelectionRange(0, 2)")
+    page.locator('#kb-proxy').dispatch_event('pointerdown', {
+        'pointerType': 'touch', 'pointerId': 6, 'clientX': 30, 'clientY': 18
+    })
+    page.wait_for_timeout(380)
+    page.locator('#kb-proxy').evaluate('e => e.blur()')
+    assert page.evaluate('kbActive && !document.querySelector("#screen-compose").hidden')
+    page.locator('#kb-proxy').focus()
+    page.locator('#kb-proxy').dispatch_event('pointerup', {
+        'pointerType': 'touch', 'pointerId': 6, 'clientX': 30, 'clientY': 18
+    })
     existing_id = writes[-1]['draftId']
     page.evaluate("kbProxy.value='全屏已有正文候选确认'; kbProxy.dispatchEvent(new CompositionEvent('compositionend')); kbProxy.blur()")
     page.wait_for_timeout(220)
@@ -502,6 +514,22 @@ with sync_playwright() as p:
     page.locator('#text').fill('回到首页继续同步')
     page.wait_for_timeout(250)
     assert writes[-1]['text'] == '回到首页继续同步'
+    # Android 悬浮键盘不一定缩小 VisualViewport。长按期间仍须保持原生编辑焦点，
+    # 不能在 pointerdown 就按“键盘已收起”误判而 blur，系统选区/粘贴菜单才有机会出现。
+    page.locator('#text').focus()
+    page.locator('#text').evaluate("e => e.setSelectionRange(0, 2)")
+    page.locator('#text').dispatch_event('pointerdown', {
+        'pointerType': 'touch', 'pointerId': 7, 'clientX': 40, 'clientY': 20
+    })
+    page.wait_for_timeout(420)
+    assert page.evaluate("document.activeElement === textEl"), '长按尚未结束时不得主动 blur 输入框'
+    page.locator('#text').dispatch_event('contextmenu')
+    assert page.evaluate("document.activeElement === textEl"), '原生菜单阶段不得重建或抢夺输入焦点'
+    page.locator('#text').dispatch_event('pointerup', {
+        'pointerType': 'touch', 'pointerId': 7, 'clientX': 40, 'clientY': 20
+    })
+    assert page.evaluate("document.activeElement === textEl")
+    assert page.locator('#paste-btn').count() == 0 and page.locator('#screen-paste-btn').count() == 0
     assert not errors, errors
     print(json.dumps({'result': 'passed', 'writes': len(writes), 'screenshots': 3, 'presentedFrames': page.evaluate('window.presentedFrames')}, ensure_ascii=False))
     browser.close()

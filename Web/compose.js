@@ -8,7 +8,8 @@
  *           recoverable 后按公共前缀只补差量，needs-user-focus 就地提示“点一下电脑输入框”，**绝不重放正文**。
  * [POS]: 全屏切换主动取消的未发送快照不进入失败冻结；实际请求失败仍走只读恢复。
  *        Web 输入编排层；每次提交等待自己的完成结果，不用同步成功代替提交成功。
- *         kb-proxy 的 blur 区分“点屏定位导致的失焦”（window.pocketdeskScreenTapPending 命中即重聚焦、键盘保持）与真收起（返回键/Esc/关闭按钮，照常收起并交还布局权）。
+ *         kb-proxy 的 blur 区分“点屏定位导致的失焦”（window.pocketdeskScreenTapPending 命中即重聚焦、键盘保持）与真收起（返回键/Esc/关闭按钮，照常收起并交还布局权）；
+ *         原生长按期间不改变焦点，主页残留焦点自愈延后到短按 pointerup，避免悬浮键盘不缩视口时打断系统粘贴菜单。
  *        发送入口只注册为 window.pocketdeskComposeSend；window.pocketdeskSend 归 pad.js
  *        （画面/指针指令），两者名字不可互换。
  *        安卓 Chrome 专属补丁（键盘残留焦点的再聚焦、内边距补聚焦、IME 卡死自愈）一律由
@@ -286,7 +287,21 @@ function wireHomeCompose(el) {
   // 退出触控板模式只在 focus 上做：原先在 pointerdown 里同步摘掉 pad-mode，会让输入框
   // 在这一次点按**还没结束时就**从 52px 撑回 140px；安卓会因此把这一下判成无效点按，
   // 焦点拿不到、键盘也不弹。焦点到手后再变布局就与手势无关了。
-  el.addEventListener('pointerdown', releaseStaleFocus);
+  let tapStart = null;
+  el.addEventListener('pointerdown', event => {
+    if (!androidInputPatch || event.pointerType === 'mouse') return;
+    tapStart = { at: performance.now(), x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+  });
+  el.addEventListener('pointerup', event => {
+    if (!tapStart || tapStart.pointerId !== event.pointerId) return;
+    const tap = tapStart;
+    tapStart = null;
+    // 长按属于浏览器原生选区/粘贴手势，期间绝不能 blur 或重建编辑元素。
+    if (performance.now() - tap.at >= 350 || Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > 8) return;
+    releaseStaleFocus();
+    if (document.activeElement !== el) el.focus({ preventScroll: true });
+  });
+  el.addEventListener('pointercancel', () => { tapStart = null; });
   el.addEventListener('focus', exitPadMode);
   el.addEventListener('keydown', handleHomeComposeKeydown);
 }
@@ -401,7 +416,20 @@ function syncKbToggle() {
 
 // 草稿编辑框的"会话外"监听：失焦复位、聚焦更新视口。初始与 recreate 出来的都接这一份。
 function wireKbProxyExtras(p) {
+  let touchStartedAt = 0;
+  let touchReleaseTimer = 0;
   p.addEventListener('input', () => { kbGotInput = true; syncKeyboardDraft(); });
+  p.addEventListener('pointerdown', event => {
+    if (event.pointerType !== 'mouse') {
+      clearTimeout(touchReleaseTimer);
+      touchStartedAt = performance.now();
+    }
+  });
+  p.addEventListener('pointerup', () => {
+    // 某些浏览器在 pointerup 之后才交给系统显示选区菜单，短暂保留长按证据。
+    touchReleaseTimer = setTimeout(() => { touchStartedAt = 0; }, 700);
+  });
+  p.addEventListener('pointercancel', () => { touchStartedAt = 0; clearTimeout(touchReleaseTimer); });
   // 用户收起原生键盘（返回键 / 键盘收起键）：失焦即复位，并交还布局权。
   p.addEventListener('blur', () => {
     if (kbRecreating) return;            // 重建时旧元素被移除会触发 blur，那是假失焦，跳过
@@ -413,22 +441,13 @@ function wireKbProxyExtras(p) {
       setTimeout(() => { if (document.activeElement !== p) p.focus({ preventScroll: true }); }, 0);
       return;
     }
-    // 长按输入框会唤起原生菜单（粘贴 / 全选 / 光标），iOS 此刻可能对编辑框触发**瞬时失焦**：
-    // 仍持有选区或不久刚发生过长按，都说明这是菜单交互而非真收起键盘。保持键盘抬起并重新聚焦，
-    // 否则表现为“长按一下键盘就缩回去、焦点丢失、没法触发粘贴”。
-    const recentLongPress = (window.pocketdeskKbLongPress || 0) && performance.now() - window.pocketdeskKbLongPress < 600;
-    window.pocketdeskKbLongPress = 0;
-    if (p.selectionStart !== p.selectionEnd || recentLongPress) {
-      setTimeout(() => { if (document.activeElement !== p) p.focus({ preventScroll: true }); }, 0);
-      return;
-    }
+    // 长按/选区菜单引起的临时 blur 不改变布局，也不强抢焦点；前者会打断原生菜单，
+    // 后者会让全屏输入栏误判成键盘已关闭。真正的返回键收起没有这两类证据。
+    if (p.selectionStart !== p.selectionEnd || (touchStartedAt && performance.now() - touchStartedAt >= 350)) return;
     kbActive = false;
     window.pocketdeskKeyboardClosed?.(); // 让画面按真实视口重新铺一次
     syncKbToggle();
   });
-  // 长按唤起原生菜单的前置信号：打时间戳，供上方 blur 判定“这是长按 / 选区造成的瞬时失焦”。
-  // 绝不 preventDefault —— 必须让原生粘贴 / 选择菜单正常出现。
-  p.addEventListener('contextmenu', () => { window.pocketdeskKbLongPress = performance.now(); });
   // 重建会话是 blur→focus 两步，focus 回来要把键盘态补上（blur 那边刚把它清掉）。
   p.addEventListener('focus', () => { kbActive = true; refreshKeyboardViewport(); syncKbToggle(); });
   // 原生回车交给输入法插入换行；提交使用底栏发送，不抢候选确认键。
@@ -556,47 +575,6 @@ function hideKeyboard() {
   syncKbToggle();
   if (document.activeElement === kbProxy) kbProxy.blur();
   window.pocketdeskKeyboardClosed?.();   // 交还布局权，让画面按真实视口重新铺一次
-}
-
-/* ---------- 粘贴：不依赖原生长按菜单的兼容性，给一个确定可用的粘贴入口 ---------- */
-// 优先异步 Clipboard API（需安全上下文 + 用户手势，按钮点击即满足手势要求）；
-// 兜底走临时文本框 + execCommand('paste')，覆盖部分 Android / 桌面 WebView
-//（iOS Safari 会拒绝该命令，此时只能回退到原生长按菜单，但按钮点击已是最好的触发时机）。
-async function readClipboardText() {
-  if (navigator.clipboard?.readText && window.isSecureContext) {
-    try { return await navigator.clipboard.readText(); } catch (_) { /* 落到兜底 */ }
-  }
-  try {
-    const t = document.createElement('textarea');
-    t.setAttribute('readonly', '');
-    t.style.position = 'fixed';
-    t.style.top = '-9999px';
-    t.style.opacity = '0';
-    document.body.appendChild(t);
-    t.focus({ preventScroll: true });
-    const ok = document.execCommand('paste');
-    const v = t.value;
-    t.remove();
-    return ok ? v : '';
-  } catch (_) {
-    return '';
-  }
-}
-
-// 把剪贴板文本插入到当前输入框光标处（无选区则追到末尾），并触发同步。
-async function pasteInto(intoEl) {
-  if (!intoEl || !intoEl.isConnected) return;
-  let text = '';
-  try { text = await readClipboardText(); } catch (_) { text = ''; }
-  if (!text) { message('剪贴板为空或无法读取。', true); haptic([20, 40, 20]); return; }
-  intoEl.focus({ preventScroll: true });
-  const start = intoEl.selectionStart ?? intoEl.value.length;
-  const end = intoEl.selectionEnd ?? intoEl.value.length;
-  intoEl.setRangeText(text, start, end, 'end');
-  intoEl.dispatchEvent(new Event('input', { bubbles: true }));
-  pocketdeskMarkInput();
-  scheduleLive();
-  haptic(8);
 }
 
 // 发完就收：草稿空了说明已提交，键盘让位给画面。
@@ -751,16 +729,6 @@ async function clearDraft() {
 window.pocketdeskClearDraft = clearDraft;
 
 sendEl.addEventListener('click', send);
-// 粘贴：手机上原生长按菜单在部分机型/输入框会失灵（长按反而收起键盘、丢焦点），
-// 这里给一个确定可用的入口：读剪贴板并插入到当前输入框光标处。
-const pasteBtn = document.getElementById('paste-btn');
-if (pasteBtn) pasteBtn.addEventListener('click', () => pasteInto(textEl));
-const screenPasteBtn = document.getElementById('screen-paste-btn');
-if (screenPasteBtn) {
-  // pointerdown 先于“焦点从代理移到按钮”的 blur 触发；借此打标记，让 blur 判定为瞬时失焦、键盘保持抬起。
-  screenPasteBtn.addEventListener('pointerdown', () => { window.pocketdeskKbLongPress = performance.now(); });
-  screenPasteBtn.addEventListener('click', () => pasteInto(kbProxy));
-}
 function handleHomeComposeKeydown(event) {
   // 中文/日文输入法在选词、候选期间按回车是给 IME 用的，不能当成“发送”。
   if (event.isComposing || event.keyCode === 229) return;

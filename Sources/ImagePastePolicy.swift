@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 消费目标应用 bundle identifier 与本次图片数量。
- * [OUTPUT]: 提供逐图剪贴板写入后的稳定等待、Cmd+V 后的消费等待，以及是否需要在相邻图片间重建编辑器插入点；Chrome 多图采用更保守节奏。
- * [POS]: Sources 的图片粘贴时序策略；InputExecutor 负责执行，策略本身无桌面副作用并可隔离测试。
+ * [OUTPUT]: 提供文字/图片剪贴板写入后的稳定等待、Cmd+V 后的消费等待，以及是否需要在相邻图片间重建编辑器插入点；UU 文字与 Chrome 多图采用目标专属节奏。
+ * [POS]: Sources 的剪贴板粘贴时序策略；InputExecutor 负责执行，策略本身无桌面副作用并可隔离测试。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import Foundation
@@ -12,8 +12,14 @@ struct ImagePasteTiming: Equatable {
     let interImageClickMicros: UInt32?
 }
 
+struct TextPasteTiming: Equatable {
+    let clipboardSettleMicros: UInt32
+    let consumptionMicros: UInt32
+}
+
 enum ImagePastePolicy {
     static let chromeBundleIdentifier = "com.google.Chrome"
+    static let uuBundleIdentifier = "com.netease.uuremote"
     private static let editableScopeRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
 
     static func timing(bundleIdentifier: String?, imageCount: Int) -> ImagePasteTiming {
@@ -25,6 +31,12 @@ enum ImagePastePolicy {
         }
         return ImagePasteTiming(clipboardSettleMicros: 0, consumptionMicros: 1_000_000,
             interImageClickMicros: nil)
+    }
+
+    static func textTiming(bundleIdentifier: String?) -> TextPasteTiming {
+        bundleIdentifier == uuBundleIdentifier
+            ? TextPasteTiming(clipboardSettleMicros: 120_000, consumptionMicros: 600_000)
+            : TextPasteTiming(clipboardSettleMicros: 0, consumptionMicros: 200_000)
     }
 
     static func needsInterImageClick(timing: ImagePasteTiming, imageIndex: Int, imageCount: Int) -> Bool {

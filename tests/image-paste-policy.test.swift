@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Sources/ImagePastePolicy.swift 的纯时序决策。
- * [OUTPUT]: 验证 Chrome 多图每张 Cmd+V 前后采用保守间隔，单图及其他应用保持既有节奏。
+ * [OUTPUT]: 验证 UU 文字粘贴在 Cmd+V 前留出剪贴板同步时间、Chrome 多图每张 Cmd+V 前后采用保守间隔，其他应用保持既有节奏。
  * [POS]: tests 的图片粘贴策略隔离回归；不访问剪贴板、不注入按键、不连接真实飞书。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -34,6 +34,11 @@ enum ImagePastePolicyTests {
         let uu = ImagePastePolicy.timing(bundleIdentifier: "com.netease.uuremote", imageCount: 3)
         precondition(uu == ImagePasteTiming(clipboardSettleMicros: 0, consumptionMicros: 1_000_000,
             interImageClickMicros: nil))
+
+        precondition(ImagePastePolicy.textTiming(bundleIdentifier: "com.netease.uuremote")
+            == TextPasteTiming(clipboardSettleMicros: 120_000, consumptionMicros: 600_000))
+        precondition(ImagePastePolicy.textTiming(bundleIdentifier: "com.bytedance.Feishu")
+            == TextPasteTiming(clipboardSettleMicros: 0, consumptionMicros: 200_000))
 
         print("image paste policy tests passed")
     }
