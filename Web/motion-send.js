@@ -122,20 +122,17 @@
   function requestPermission() {
     if (!sensorSupported()) return Promise.resolve({ ok: false, code: 'no-sensor-api' });
     if (!needsPermission()) { authGranted = true; return Promise.resolve({ ok: true }); }
-    // 必须在用户点按的同一个任务里调用：前面不能有 await，否则 iOS 判定丢失用户激活。
-    return Promise.resolve()
-      .then(function () { return window.DeviceMotionEvent.requestPermission(); })
-      .then(function (motion) {
-        if (motion !== 'granted') return { ok: false, code: 'permission-denied' };
-        if (typeof window.DeviceOrientationEvent.requestPermission !== 'function') return { ok: true };
-        return window.DeviceOrientationEvent.requestPermission().then(function (orient) {
-          return orient === 'granted' ? { ok: true } : { ok: false, code: 'permission-denied' };
-        });
-      })
-      .then(function (result) {
-        if (result.ok) authGranted = true;
-        return result;
+    // 两个权限请求都直接在点击调用栈内发起，不等第一个授权结束才请求另一个。
+    try {
+      var motionRequest = window.DeviceMotionEvent.requestPermission();
+      var orientationRequest = typeof window.DeviceOrientationEvent.requestPermission === 'function'
+        ? window.DeviceOrientationEvent.requestPermission() : Promise.resolve('granted');
+      return Promise.all([motionRequest, orientationRequest]).then(function (values) {
+        var ok = values.every(function (value) { return value === 'granted'; });
+        authGranted = ok;
+        return { ok: ok, code: ok ? 'ok' : 'permission-denied' };
       }, function () { return { ok: false, code: 'permission-denied' }; });
+    } catch (error) { return Promise.resolve({ ok: false, code: 'permission-denied' }); }
   }
 
   /* ---------- 第三层：数据 ---------- */

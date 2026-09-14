@@ -131,11 +131,20 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
 .act-row[data-outcome="sent"] .act-badge{color:var(--warn);background:rgb(165 96 10 / 12%)}
 .act-row[data-outcome="blocked"] .act-badge,.act-row[data-outcome="failed"] .act-badge{color:var(--danger);background:rgb(217 56 67 / 10%)}
 .act-row[data-outcome="blocked"] .act-detail,.act-row[data-outcome="failed"] .act-detail{color:var(--danger)}
+/* 连接入口沿用控制台色彩，点击展开、悬停摘要。 */
+.device-menu{position:relative}
+.device-menu summary{cursor:pointer;list-style:none}
+.device-menu summary::-webkit-details-marker{display:none}
+.device-popover{position:absolute;right:0;top:calc(100% + .5rem);width:min(24rem,85vw);max-height:65vh;overflow:auto;background:var(--panel);border:1px solid var(--line-strong);border-radius:.5rem;padding:1rem;z-index:30;box-shadow:0 .5rem 2rem var(--line)}
+.device-row{padding:.75rem 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.device-row p{margin:.3rem 0;color:var(--muted);font-size:.75rem}
+.device-popover h3{font-size:.875rem;margin:0 0 .5rem}
+.device-popover details{margin-top:1rem}
 </style>
 </head>
 <body>
 <main>
-  <header><h1>PocketDesk 控制台</h1><span class="header-tools"><span id="theme-switch" class="theme-switch" role="group" aria-label="界面主题"><button type="button" data-theme-choice="classic">经典蓝</button><button type="button" data-theme-choice="muji">米白</button></span><span id="conn" class="pill">连接中</span></span></header>
+  <header><h1>PocketDesk 控制台</h1><span class="header-tools"><span id="theme-switch" class="theme-switch" role="group" aria-label="界面主题"><button type="button" data-theme-choice="classic">经典蓝</button><button type="button" data-theme-choice="muji">米白</button></span><span id="conn" class="pill">连接中</span><details class="device-menu" id="device-menu"><summary id="device-count" class="pill">设备连接</summary><div class="device-popover"><h3>当前连接</h3><div id="device-current">正在读取…</div><details><summary>连接记录</summary><p class="hint">最近 30 天，最多 500 条；时间按心跳记录。</p><div id="device-history"></div></details></div></details></span></header>
 
   <section class="card">
     <h2><span class="step">1</span>系统授权</h2>
@@ -154,14 +163,14 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
       </div>
       <div class="qr-item">
         <img id="qr-ip" alt="IP 地址二维码">
-        <b>当前网络 IP · 安卓</b>
+        <b>手机连接</b>
         <a id="ipUrl" class="hint mono url-link" href="#">生成中…</a>
       </div>
       <div id="secureQrItem" class="qr-item" hidden>
-        <img id="qr-secure" alt="安全连接二维码（翻腕发送用）">
-        <b>安全连接 · 翻腕发送</b>
+        <img id="qr-secure" alt="手机连接二维码">
+        <b>手机连接</b>
         <a id="secureUrl" class="hint mono url-link" href="#">生成中…</a>
-        <span id="secureHint" class="hint"></span>
+
       </div>
       <div class="connect-info"></div>
     </div>
@@ -251,7 +260,65 @@ async function post(url, body) {
   return response.json();
 }
 
+const deviceMenu = $('device-menu');
+document.addEventListener('click', event => { if (!deviceMenu.contains(event.target)) { deviceMenu.open = false; deviceMenu.querySelectorAll('[data-editing]').forEach(form => { delete form.dataset.editing; form.hidden = true; }); } });
+document.addEventListener('keydown', event => { if (event.key === 'Escape' && deviceMenu.open) { deviceMenu.open = false; deviceMenu.querySelectorAll('[data-editing]').forEach(form => { delete form.dataset.editing; form.hidden = true; }); $('device-count').focus(); } });
+function deviceRow(device, historical = false) {
+  const row = document.createElement('div'); row.className = 'device-row';
+  const title = document.createElement('strong');
+  title.textContent = device.name || device.model || device.platform || '未知设备';
+  row.append(title);
+  const rename = document.createElement('button'); rename.type = 'button'; rename.className = 'btn'; rename.textContent = '改名';
+  rename.style.marginLeft = '.5rem'; rename.setAttribute('aria-label', `修改 ${title.textContent} 的名称`);
+  const form = document.createElement('form'); form.hidden = true;
+  const input = document.createElement('input'); input.maxLength = 60; input.value = device.name || ''; input.setAttribute('aria-label', '设备显示名称'); input.placeholder = '留空恢复自动名称';
+  const save = document.createElement('button'); save.type = 'submit'; save.className = 'btn'; save.textContent = '保存';
+  const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn'; cancel.textContent = '取消';
+  const error = document.createElement('p'); error.setAttribute('role', 'status');
+  form.append(input, save, cancel, error); row.append(rename, form);
+  rename.onclick = () => { form.hidden = false; form.dataset.editing = 'true'; input.focus(); input.select(); };
+  cancel.onclick = () => { form.hidden = true; delete form.dataset.editing; rename.focus(); };
+  form.onsubmit = async event => {
+    event.preventDefault(); save.disabled = true;
+    try {
+      await post('/api/devices/name', { id: device.id, name: input.value.trim() });
+      delete form.dataset.editing; await refreshDevices();
+    } catch (e) { error.textContent = e.message; }
+    finally { save.disabled = false; }
+  };
+  const subtitle = document.createElement('p');
+  subtitle.textContent = [...new Set([device.model, device.platform, device.browser].filter(Boolean))].join(' · ') + ' · ' + device.id.slice(0, 6);
+  row.append(subtitle);
+  const status = document.createElement('p');
+  const time = value => new Date(value * 1000).toLocaleString();
+  status.textContent = historical ? `${time(device.started)} → ${device.ended ? time(device.ended) : '仍在线'}` : `${device.controlling ? '控制中' : '页面在线 · 未控制'} · ${time(device.started)} 连接`;
+  row.append(status); return row;
+}
+async function refreshDevices() {
+  try {
+    const response = await fetch('/api/devices', { cache: 'no-store' });
+    if (!response.ok) throw new Error('无法读取');
+    const { devices } = await response.json();
+    const online = devices.filter(d => d.online);
+    const count = $('device-count');
+    count.textContent = online.length ? `${online.length} 台设备已连接` : '暂无设备连接';
+    count.className = online.length ? 'pill ready' : 'pill';
+    count.title = online.map(d => `${d.name} · ${d.controlling ? '控制中' : '页面在线'}`).join('\n') || '点击查看连接记录';
+    if (deviceMenu.querySelector('[data-editing]')) return;
+    $('device-current').replaceChildren(...online.map(d => deviceRow(d)));
+    if (!online.length) $('device-current').textContent = '暂无设备连接';
+    $('device-history').replaceChildren(...devices.map(d => deviceRow(d, true)));
+    if (!devices.length) $('device-history').textContent = '暂无连接记录';
+  } catch {
+    $('device-count').textContent = '设备状态不可用';
+    $('device-count').className = 'pill'; $('device-count').title = '';
+    $('device-current').textContent = '无法读取，请在电脑本机打开控制台。';
+    $('device-history').replaceChildren();
+  }
+}
+
 async function refresh() {
+  refreshDevices();
   try {
     const status = await fetch('/api/status').then(r => r.json());
     state.status = status;
@@ -287,7 +354,6 @@ async function refresh() {
     if (status.secureURL) {
       $('secureQrItem').hidden = false;
       setLink('secureUrl', status.secureURL, '');
-      $('secureHint').textContent = '翻腕发送需要安全连接：手机扫码后 Safari 会提示“无法验证服务器”，点“访问此网站”一次即可，无需安装证书或开启完全信任。';
       if ($('qr-secure').dataset.url !== status.secureURL) {
         $('qr-secure').dataset.url = status.secureURL;
         $('qr-secure').classList.remove('error');
@@ -295,20 +361,10 @@ async function refresh() {
       }
     } else {
       $('secureQrItem').hidden = true;
-      $('secureHint').textContent = '';
     }
-    // 安卓只展示「翻外发送」安全二维码：把另外两个连接用二维码收起，避免一屏堆三张。
-    // 安全连接可用时仅留它；没配 HTTPS 时保留 IP 码兜底，保证安卓至少还能扫一张连上。
-    const androidPhone = status.phonePlatform === 'Android';
-    const permItem = $('qr').closest('.qr-item');
-    const ipItem = $('qr-ip').closest('.qr-item');
-    if (androidPhone) {
-      if (permItem) permItem.hidden = true;
-      if (ipItem) ipItem.hidden = !!status.secureURL;
-    } else {
-      if (permItem) permItem.hidden = false;
-      if (ipItem) ipItem.hidden = false;
-    }
+    // 同一入口适用于 iOS 和 Android，优先使用现有 HTTPS 地址。
+    $('qr').closest('.qr-item').hidden = true;
+    $('qr-ip').closest('.qr-item').hidden = !!status.secureURL;
     // 手机在线状态：标题行右侧的状态徽章（与顶部 #conn 同一 pill 范式），只有"已连接"才点亮。
     const seen = status.phoneLastSeen * 1000;
     const phoneState = $('phoneState');

@@ -1,0 +1,11 @@
+const assert = require('node:assert/strict');
+const { describe } = require('../Web/device-info.js');
+const iphone = describe({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1' });
+assert.equal(iphone.category, 'iPhone');
+assert.equal(iphone.model, '');
+assert.equal(iphone.browser, 'Safari');
+assert.equal(describe({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) Safari/605.1', maxTouchPoints: 5 }).category, 'iPad');
+assert.equal(describe({ userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP1A) AppleWebKit/537.36 Chrome/125.0 Mobile Safari/537.36' }).model, 'Pixel 8');
+assert.equal(describe({ userAgent: 'Mozilla/5.0 (Linux; Android 10; K) Chrome/130.0 Mobile Safari/537.36' }).model, '');
+assert.equal(describe({ userAgent: 'Mozilla/5.0 (Linux; Android 14; SM-S9210) Chrome/125.0 SamsungBrowser/26.0 Safari/537.36' }).browser, 'Samsung Internet');
+console.log('device-info: passed');

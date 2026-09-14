@@ -2,7 +2,7 @@
  * [INPUT]: 消费 index.html 的 #phone-settings 面板与 header 齿轮，以及迁来的 #sens / #scroll-speed / #ruler-mode。
  * [OUTPUT]: 提供唯一手机设置面板的开关、遮罩关闭、焦点恢复与偏好读写；翻腕组保存用户意愿与灵敏度档位，
  *           按 motion-send 的四级状态（unsupported / needs-permission / unverified / running）渲染：
- *           环境不过关整组隐藏，其余状态就地写回 #wrist-note，失败只给一句「暂时无法使用翻腕发送，
+ *           环境不过关保留开关并禁用，其余状态就地写回 #wrist-note，失败只给一句「暂时无法使用甩送，
  *           请使用发送按钮」。
  * [POS]: Web 首页的设置边界；不持有业务草稿，不向 Mac 发送点击、滚动或快捷键。
  *        不为翻腕提供任何证书/端口/系统配置引导——那是免证书方案明令撤除的门槛。
@@ -45,11 +45,11 @@ function writeMotionPref(patch) {
 
 /* ---------- 翻腕文案：三句人话，不出现端口、证书或系统设置路径 ---------- */
 
-const WRIST_IDLE_NOTE = '手机向前轻翻，停住片刻后发送。';
+const WRIST_IDLE_NOTE = '开启后，手机向前甩动并停稳，即可发送当前输入的内容。';
 const WRIST_ACTIVE_NOTE = '监听中：说完话轻翻手腕即可发送。';
-const WRIST_CHECKING_NOTE = '正在确认这台手机能不能用翻腕…';
+const WRIST_CHECKING_NOTE = '正在检查甩送是否可用…';
 // 失败只有这一句：不循环弹权限、不要求系统配置、不提怎么修。
-const WRIST_FAIL_NOTE = '暂时无法使用翻腕发送，请使用发送按钮';
+const WRIST_FAIL_NOTE = '暂时无法使用甩送，请使用发送按钮';
 
 function setWristNote(text, warn = false) {
   wristNote.textContent = text;
@@ -62,13 +62,19 @@ function wristStatus() {
   return window.pocketdeskMotion?.status?.() ?? 'unsupported';
 }
 
-// 整组可见性只有环境层说了算：非安全上下文或浏览器没给传感器接口 → 整组隐藏。
+// 甩送入口始终可见；不可用时禁用开关并就地说明原因。
 // 曾经这里挂着一套四步证书向导（下载 CA → 系统里安装 → 开启信任 → 跳 HTTPS 地址），
 // 那是要求用户为一个手势功能承担安装与信任成本，已按免证书方案撤除。
 function updateWristUI() {
   const state = wristStatus();
-  if (wristGroup) wristGroup.hidden = state === 'unsupported';
-  if (state === 'unsupported') return;   // 隐藏时不写提示，避免留下孤儿文案
+  if (wristGroup) wristGroup.hidden = false;
+  document.querySelector('#wrist-sensitivity-row').hidden = state !== 'running';
+  wristToggle.disabled = state === 'verifying';
+  if (state === 'unsupported') {
+    wristToggle.checked = false;
+    setWristNote(WRIST_IDLE_NOTE);
+    return;
+  }
   const running = state === 'running';
   if (wristToggle && wristToggle.checked !== running) wristToggle.checked = running;
   labelSensitivityOptions();
@@ -87,6 +93,7 @@ wristToggle.addEventListener('change', async () => {
   if (!wristToggle.checked) {
     writeMotionPref({ enabled: false });
     window.pocketdeskMotion?.disable();
+    document.querySelector('#wrist-sensitivity-row').hidden = true;
     setWristNote(WRIST_IDLE_NOTE);
     return;
   }
@@ -102,13 +109,20 @@ wristToggle.addEventListener('change', async () => {
   wristToggle.disabled = false;
   if (result?.ok) {
     writeMotionPref({ enabled: true });
+    updateWristUI();
     setWristNote(WRIST_ACTIVE_NOTE);
     return;
   }
   // 门禁不通过：立刻回到关闭，不留下"看起来开了"的开关。
   wristToggle.checked = false;
   writeMotionPref({ enabled: false });
-  setWristNote(WRIST_FAIL_NOTE, true);
+  const failureNotes = {
+    'insecure-context': '浏览器限制了当前连接的运动权限，无法开启甩送。',
+    'no-sensor-api': '当前浏览器不提供运动权限，无法开启甩送。',
+    'permission-denied': '未获得运动与方向权限，甩送未开启。'
+  };
+  document.querySelector('#wrist-sensitivity-row').hidden = true;
+  setWristNote(failureNotes[result.code] || WRIST_FAIL_NOTE, true);
 });
 
 /* ---------- 面板生命周期 ---------- */
@@ -144,9 +158,9 @@ settingsDialog.addEventListener('close', () => {
   settingsReturnFocus = null;
 });
 
-// 体感模块可在发送门禁里查询面板是否打开，避免设置期间误触发翻腕发送。
+// 体感模块可在发送门禁里查询面板是否打开，避免设置期间误触发甩送。
 window.pocketdeskSettingsOpen = () => settingsDialog.open === true;
-// 供 motion-send 判断“用户是否开启了翻腕发送”（只是意愿，不等于当前能跑）。
+// 供 motion-send 判断“用户是否开启了甩送”（只是意愿，不等于当前能跑）。
 window.pocketdeskMotionEnabled = () => readMotionPref().enabled === true;
 
 /* ---------- 翻腕灵敏度 ---------- */

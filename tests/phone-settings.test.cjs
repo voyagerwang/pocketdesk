@@ -79,8 +79,6 @@ assert.ok(/<script src="\/settings\.js\?v=/.test(html), 'index.html 需带版本
 
 // 整组默认隐藏：环境层（安全上下文 + 传感器接口）过关才由 settings.js 打开。
 // 目的不是"少显示一行字"，而是"非安全上下文下不能出现证书下载、灰色开关或维修教程"。
-assert.ok(/<section id="wrist-group"[^>]*hidden>/.test(html), '翻腕组必须能整组隐藏，且默认隐藏');
-assert.ok(settings.includes("wristGroup.hidden"), '设置面板必须按能力整组显隐翻腕');
 assert.ok(settings.includes("'unsupported'"), '设置面板必须消费 motion-send 的 unsupported 状态');
 // 证书向导整条链路必须消失：不能再有任何一步要求用户下载、安装或信任 CA。
 for (const gone of ['wrist-links', 'wrist-authorize']) {
@@ -93,7 +91,7 @@ for (const gone of ['PocketDesk-CA', 'caCertificatePath', 'probeSecure', 'detect
 }
 assert.ok(!motionSend.includes("':46487'"), '体感模块不得再拼 HTTPS 端口去引导用户换地址');
 // 失败只给一句人话，不要求系统配置、不循环弹权限。
-assert.ok(settings.includes('暂时无法使用翻腕发送，请使用发送按钮'), '失败提示必须是那句固定人话');
+assert.ok(settings.includes('暂时无法使用甩送，请使用发送按钮'), '失败提示必须是那句固定人话');
 assert.ok(/wristToggle\.disabled = true/.test(settings), '验证期间必须锁住开关，避免重复弹权限');
 // 四级状态与数据层探测：能不能用，取决于真的收到有效传感器数据，而不是接口存在。
 for (const state of ['unsupported', 'needs-permission', 'unverified', 'running']) {
@@ -126,3 +124,8 @@ assert.ok(/case \("GET", "\/PocketDesk-CA\.cer"\)/.test(server), 'Server.swift �
 assert.ok(server.includes('application/x-x509-ca-cert'), 'CA 需用证书 MIME 触发系统安装流程');
 
 console.log('phone settings: single entry, migrated controls, default-off wrist guard, no-certificate degradation passed');
+
+assert.ok(html.includes('aria-label="甩送"'), '手机统一使用甩送名称');
+assert.ok(settings.includes('wristGroup.hidden = false'), '不支持时仍显示开关和原因');
+assert.ok(!consoleHtml.includes('翻腕发送'), '电脑不展示翻腕发送文案');
+assert.ok(!consoleHtml.includes('访问此网站'), '不提示绕过证书警告');

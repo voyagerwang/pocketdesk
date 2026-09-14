@@ -28,6 +28,7 @@ final class Server {
     private var secureListener: NWListener?
     var secureTransport: SecureTransport?
     private var iconCache: [String: Data] = [:]
+    private let devices = DeviceConnections(directory: TargetStore.supportDirectory)
     private var phoneLastSeen: TimeInterval = 0
     private var phonePlatform: String = ""   // 手机上报的平台：Android / iOS（首拍心跳里带 userAgent 推断）
     // 图片走 base64 JSON 体，2MB 远远不够；放宽到 12MB（客户端已把图压到 2048px JPEG）。
@@ -136,7 +137,20 @@ final class Server {
             return
         }
 
+        if (path == "/api/devices" || path == "/api/devices/name") && !fromLoopback {
+            respond(connection, status: 403, json: ["error": "仅电脑本机可查看连接记录。"]); return
+        }
         switch (method, path) {
+        case ("POST", "/api/devices/name"):
+            guard let metadata = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+                  let id = metadata["id"] as? String, let name = metadata["name"] as? String,
+                  devices.rename(id: id, name: name) else {
+                respond(connection, status: 400, json: ["error": "名称保存失败，请重试（最多 60 字）。"]); return
+            }
+            respond(connection, status: 200, json: ["ok": true])
+        case ("GET", "/api/devices"):
+
+            respond(connection, status: 200, json: ["devices": devices.snapshot(controls: controlAuthorized)])
         case ("POST", "/api/screen/permission"):
             permissionRequested = true
             screenCapture.requestPermission()
@@ -289,6 +303,9 @@ final class Server {
             }
             respond(connection, status: 200, data: png, contentType: "image/png")
         case ("POST", "/api/pair"):
+            if let metadata = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
+                devices.heartbeat(metadata)
+            }
             phoneLastSeen = Date().timeIntervalSince1970
             // 手机首拍心跳带 userAgent：推断平台，供控制台按平台收敛二维码（安卓只留翻外发送的安全码）。
             if let body = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
@@ -478,7 +495,7 @@ final class Server {
             }
         case ("GET", "/"), ("GET", "/index.html"):
             serveFile("index.html", connection: connection)
-        case ("GET", let asset) where ["screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "style.css", "app-extras.css", "screen.css"].contains(String(asset.dropFirst())):
+        case ("GET", let asset) where ["device-info.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "style.css", "app-extras.css", "screen.css"].contains(String(asset.dropFirst())):
             serveFile(String(path.dropFirst()), connection: connection)
         default:
             respond(connection, status: 404, json: ["error": "未找到资源。"])
