@@ -307,7 +307,7 @@ final class Server {
                 devices.heartbeat(metadata)
             }
             phoneLastSeen = Date().timeIntervalSince1970
-            // 手机首拍心跳带 userAgent：推断平台，供控制台按平台收敛二维码（安卓只留翻外发送的安全码）。
+            // 手机首拍心跳带 userAgent：推断平台，供控制台按平台收敛二维码（安卓只留甩送的安全码）。
             if let body = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
                let ua = body["userAgent"] as? String, !ua.isEmpty {
                 phonePlatform = ua.range(of: "Android", options: .caseInsensitive) != nil ? "Android" : "iOS"
