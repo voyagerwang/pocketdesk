@@ -35,6 +35,7 @@ FULLSCREEN_POINTER_PROPOSAL.md - 全屏手机操控优化建议：绝对定位�
 FULLSCREEN_WORKSPACE_PLAN.md - 全屏改造主方案：基于 v2.9.23 的缺陷复核、UU 官方交互参考、触屏/指针工作台、键盘视口与持续画面链路、分阶段执行和验收；覆盖旧全屏方案的重叠决策（已落地首版，真机及性能验收待完成）
 FULLSCREEN_IMPLEMENTATION.md - 全屏首版效果、实现范围、协议、验证记录及真机待验收项
 AGENT_PRODUCT_ARCHITECTURE.md - Agent 整体产品设计：任务与记忆、规则路由、Workbench 集成契约、执行权限/接管、token 成本及分阶段验收（方案）
+AGENT_MODE_PLAN.md - 口述办事一期：意图底座与确定性动作（P1）、窗口摆放与一键布局（P2）、给应用发消息（P3）的分步方案与验收（方案）
 </config>
 
 锁屏解锁：用户级预登录标记支持当前会话锁屏事件；HTTPS/WSS :46487–46489 与原通道共享控制租约，密码只走 LockScreenInput，不写日志/历史/剪贴板。首次手机信任本机 CA；不覆盖重启后的 FileVault 登录。

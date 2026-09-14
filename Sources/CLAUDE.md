@@ -40,3 +40,5 @@ TargetWindowLocator.swift: 只读的窗口解析层（AppKit/AX + CGWindowList�
 
 SecureTransport.swift: 从本机私有 DER 证书与私钥在**内存**中装配 TLS 身份（`SecKeyCreateWithData` + `SecIdentityCreate`，全程不进钥匙串，故没有上锁、没有 ACL、没有密码询问），为 HTTP、控制和画面建立 TLS 监听；不修改客户端信任，并对外给出 CA 证书路径供手机下载。
 LockScreenInput.swift: 锁屏专用一次性挑战与物理按键执行；绑定租约和会话代际，取消/解锁失效，不经草稿与日志，不自动重试。
+
+DeviceConnections.swift: 已鉴权浏览器心跳的设备描述与连接记录；45 秒超时、30 天/500 条保留、重启不恢复在线态。描述不能作为身份依据，GET /api/devices 仅回环来源可读，控制态经服务端租约校验。

@@ -659,3 +659,8 @@ main.pad-mode .pad-title {
   font-size: var(--text-sm);
 }
 
+
+/* 甩送主开关与按需出现的次级设置。 */
+.sheet-group .wrist-main { color: var(--fg-muted); font-size: var(--text-sm); font-weight: 600; letter-spacing: 0.04em; }
+.sheet-group .wrist-secondary { color: var(--fg-muted); font-size: var(--text-sm); font-weight: 400; }
+#wrist-sensitivity-row[hidden] { display: none; }
