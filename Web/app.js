@@ -620,6 +620,8 @@ async function heartbeatTick() {
     }
     // 主题跟随服务端：电脑端切换后，手机下一拍（≤5s）自动换肤。
     applyTheme(current.theme);
+    // 安全连接地址随之刷新，供设置面板在开启甩送时升级到 HTTPS 触发证书信任。
+    window.pocketdeskSecureURL = current.secureURL || '';
     const frontId = current.frontmostId;      // 命中 Dock 目标时的 id，否则 null
     const frontName = current.frontmostName;  // 前台应用名（始终有值）
     const key = frontId ?? frontName ?? null;
@@ -717,6 +719,16 @@ async function boot() {
     }
     // 浏览器恢复的正文可能早于目标就绪；就绪后补齐，不等下一次手敲。
     if (textEl.value) scheduleLive();
+    // 安全连接地址（含正确主机，无 token）：供设置面板在开启甩送时升级到 HTTPS 触发证书信任。
+    window.pocketdeskSecureURL = status.secureURL || '';
+    // 若刚才是从 HTTP 升级到安全连接过来的，恢复升级前留在输入框的正文。
+    const preSecureDraft = localStorage.getItem('pd-draft-pre-secure');
+    if (preSecureDraft) {
+      try {
+        localStorage.removeItem('pd-draft-pre-secure');
+        if (textEl) { textEl.value = preSecureDraft; scheduleLive(); }
+      } catch { /* 存储异常忽略 */ }
+    }
   } catch {
     httpDown = true;
     connectionEl.textContent = '未连接';
