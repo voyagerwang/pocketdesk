@@ -1,7 +1,8 @@
 /**
  * [INPUT]: 依赖 LiveDraft 的纯状态机、隔离 DraftEditor 与内存输入框替身 FakeField，不读取真实桌面。
  * [OUTPUT]: 验证整值/选区替换、Unicode、冲突停止、显式重试核验与当前焦点续发均不重复写入、未知结果拒绝恢复、提交封闭；手机已有全文与连续删空保留电脑前后文；
- *           清空按当前实际内容整段删净且幂等，门禁失效/不可读/不可定位三种"证明不了"如实失败，基线分叉后可破冰续写、失败则保留正文。
+ *           update 删除按「AX 连败退避（连败 3 次停用、成功清零）→ Cmd+A 整框全选（旧文恰为整框且光标在文末，读回确认后一次覆盖）→ 逐字 Backspace」降级，全选没落 DOM 先按 Right 还原光标再逐字，空替换不补刀（旧版多发一次退格冻结草稿的回归锁在此）；
+ *           清空按当前实际内容整段删净且幂等，成功判据始终是"读回为空"；AX 设选区假成功/设不了选区时退到真实键盘 Cmd+A 兜底，删不动（退格被吞）两轮后如实失败并保留正文，门禁失效/不可读照样拒绝，基线分叉后可破冰续写。
  * [POS]: tests 的输入事务回归；真实 AX 控件另行验收。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -36,6 +37,16 @@ final class FakeField {
     var permitting = true
     var readable = true
     var selectable = true
+    /// 模拟 Chromium 对 AX 写选区"报告成功却不落 DOM"：select 声称成功，状态原地不动。
+    var selectLies = false
+    /// 模拟退格被应用吞掉（键发出了、内容没删）：ZCode 实况里"选区读回通过、删完还剩一字"。
+    var backspaceNoop = false
+    /// Cmd+A 和弦是否送达（false 模拟组件吞键）：update 整框全选没立住时须退回逐字。
+    var keyboardSelectAll = true
+    /// 模拟 Cmd+A"送达但没生效"（键发出了、全选没落）：验证按 Right 还原光标后才退逐字。
+    var keyboardSelectAllNoop = false
+    /// AX 设选区被尝试的次数：验证连败退避在 3 次后不再白试、成功即清零。
+    var selectAttempts = 0
     init(_ text: String = "", caret: Int = 0) {
         self.text = text; self.caret = caret; self.selection = 0
     }
@@ -43,15 +54,30 @@ final class FakeField {
         KeyboardDraftWriter(read: { [self] in
             readable ? DraftSnapshot(text: text, location: caret, length: selection) : nil
         }, select: { [self] range in
+            selectAttempts += 1
             guard selectable else { return false }
-            caret = range.location; selection = range.length
+            if !selectLies { caret = range.location; selection = range.length }
             return true
         }, valid: { [self] in permitting }, key: { [self] code, flags in
             guard permitting else { return false }
+            // Cmd+A：真实键盘全选——clearAll 的兜底路径与 update 的整框批量替换都靠它。
+            if code == 0, flags == .maskCommand {
+                guard keyboardSelectAll else { return false }
+                guard !keyboardSelectAllNoop else { return true }
+                caret = 0; selection = text.utf16.count
+                return true
+            }
+            // 右方向键：有选区折回右端，无选区原地不动（真实控件行为）。
+            // update 的整框全选没立住时靠它把光标收回去，才允许退回逐字退格。
+            if code == 124 {
+                if selection > 0 { caret += selection; selection = 0 }
+                return true
+            }
             // 退格：有选区整段删，无选区吃光标前一个字——后者是真实控件的行为，
             // 替身不这么写就会在"选区没建立起来"时假装什么都没发生。
             if code == 51 {
                 deletes += 1
+                guard !backspaceNoop else { return true }
                 let before = (text as NSString)
                 let origin = selection > 0 ? caret : max(0, caret - 1)
                 let count = selection > 0 ? selection : (caret > 0 ? 1 : 0)
@@ -59,7 +85,7 @@ final class FakeField {
                 caret = origin; selection = 0
                 return true
             }
-            // Shift+左：光标左移并扩选。clearAll 在"控件不支持设选区"时的退路要用它；
+            // Shift+左：光标左移并扩选。update 的逐字退格补差在窄光标场景要用它；
             // 本替身不实现的部分（其余方向键/修饰键组合）一律 false，宁可失败不假装成功。
             if code == 123, flags == .maskShift, caret > 0 {
                 caret -= 1; selection += 1
@@ -126,8 +152,12 @@ final class FakeField {
         }, valid: { allowed }, key: { code, _ in
             guard code == 51 else { return false }
             deletes += 1
-            let value = (actual.text as NSString).replacingCharacters(in: NSRange(location: actual.location, length: actual.length), with: "")
-            actual = .init(text: value, location: actual.location, length: 0); return true
+            // 与真实控件一致：有选区删整个选区，无选区吃光标前一个字——逐字退格路径依赖后者。
+            let hasSelection = actual.length > 0
+            let origin = hasSelection ? actual.location : max(0, actual.location - 1)
+            let count = hasSelection ? actual.length : (actual.location > 0 ? 1 : 0)
+            let value = (actual.text as NSString).replacingCharacters(in: NSRange(location: origin, length: count), with: "")
+            actual = .init(text: value, location: origin, length: 0); return true
         }, insert: { text in
             inserts.append(text)
             let value = (actual.text as NSString).replacingCharacters(in: NSRange(location: actual.location, length: actual.length), with: text)
@@ -152,6 +182,51 @@ final class FakeField {
         allowed = false
         rejects { try realtime.update("焦点失效不能继续输入") }
         assert(inserts.count == writesBeforeLostFocus)
+
+        // ---------- 实时同步的键盘删除降级链（受控输入框 = AX 选区不可信） ----------
+        // 受控输入框（Electron/React）AX 选区常设不上/假成功：update 按「AX 连败退避 →
+        // Cmd+A 整框全选 → 逐字 Backspace」降级，每一步都以读回为准；空框起听写的整句改写
+        // 恰为"整框替换"，单和弦 Cmd+A 一次选中、由注入一次覆盖，不再逐字删除。
+        let kbField = FakeField("", caret: 0); kbField.selectable = false
+        let kbWriter = kbField.writer()
+        assert(kbWriter.update(from: "", to: "今天天气很好我们出去玩吧"), "空框起听写首句照常追加")
+        assert(kbField.text == "今天天气很好我们出去玩吧" && kbField.deletes == 0)
+        assert(kbWriter.update(from: "今天天气很好我们出去玩吧", to: "明天天气很好我们出去玩吧"), "整框改写应成功")
+        assert(kbField.text == "明天天气很好我们出去玩吧" && kbField.deletes == 0, "整框改写由 Cmd+A 全选后一次覆盖，不逐字退格")
+        assert(kbField.selectAttempts == 1, "AX 先试一次（失败）才落到键盘路径")
+        // AX 失败只是暂时的：连败未达上限时下一轮仍先试 AX——原生应用一次读回迟滞不该永久逐字。
+        kbField.selectable = true
+        assert(kbWriter.update(from: "明天天气很好我们出去玩吧", to: "后天天气很好我们出去玩吧"))
+        assert(kbField.text == "后天天气很好我们出去玩吧" && kbField.deletes == 0 && kbField.selectAttempts == 2,
+            "AX 恢复后整段批量替换回归，连败计数清零")
+        // 连败 3 次才停用 AX：之后不再白试，键盘路径继续兜底。
+        kbField.selectable = false
+        var previous = "后天天气很好我们出去玩吧"
+        for next in ["乙日天气很好我们出去玩吧", "丙日天气很好我们出去玩吧", "丁日天气很好我们出去玩吧", "戊日天气很好我们出去玩吧"] {
+            assert(kbWriter.update(from: previous, to: next), "键盘路径持续兜底：\(next)")
+            previous = next
+        }
+        assert(kbField.text == "戊日天气很好我们出去玩吧" && kbField.deletes == 0, "Cmd+A 整框替换持续生效")
+        assert(kbField.selectAttempts == 5, "连败 3 次后 AX 不再被白试")
+        // Cmd+A 被应用吞掉（键没送达，状态未变）：直接退逐字，结果仍正确。
+        let swallowField = FakeField("", caret: 0); swallowField.selectable = false; swallowField.keyboardSelectAll = false
+        let swallowWriter = swallowField.writer()
+        assert(swallowWriter.update(from: "", to: "电脑已有正文"))
+        assert(swallowWriter.update(from: "电脑已有正文", to: "明天再说吧"))
+        assert(swallowField.text == "明天再说吧" && swallowField.deletes == 6, "全选没立住时逐字退格兜底删净")
+        // Cmd+A 送达却没落 DOM（真实控件怪癖）：先按 Right 收回并读回确认光标，再退逐字删净。
+        let noopField = FakeField("", caret: 0); noopField.selectable = false; noopField.keyboardSelectAllNoop = true
+        let noopWriter = noopField.writer()
+        assert(noopWriter.update(from: "", to: "电脑已有正文"))
+        assert(noopWriter.update(from: "电脑已有正文", to: "明天再说吧"))
+        assert(noopField.text == "明天再说吧" && noopField.deletes == 6, "全选没落 DOM 时光标先还原再逐字")
+        // 回归锁：逐字路径 + 空替换（手机侧删除）后不得再补一刀退格——旧版在此多发一次
+        // Backspace，把共同前缀多删一字，读回永远对不上目标而冻结草稿。
+        let trimField = FakeField("电脑已有正文", caret: 6); trimField.selectable = false
+        let trimWriter = trimField.writer()
+        assert(trimWriter.update(from: "电脑已有正文", to: "电脑已有"), "手机侧删两个字的差量应成功")
+        assert(trimField.text == "电脑已有" && trimField.deletes == 2, "逐字删除恰好删到位，不再补刀")
+
         // 读取延迟导致失败：稍后确认目标文本已落入，只恢复基线，不再注入一次。
         let snapshot = DraftSnapshot.end(of: "")
         var pending: DraftSnapshot?, readBack = false, insertCount = 0
@@ -202,13 +277,21 @@ final class FakeField {
         assert(clearField.deletes == 1, "整段清空只发一次删除，不播放连按式的键流")
         assert(clearWriter.clearAll() && clearField.deletes == 1, "已空的框幂等认账，不再多按一次删除")
 
-        // 三种"证明不了"的情形都必须如实失败——清空是删除动作，宁可报错也不盲删。
+        // "证明不了"的情形必须如实失败——读不回为空就不许声称已清空，也不许丢掉正文。
         let gatedField = FakeField("有内容"); gatedField.permitting = false
         assert(!gatedField.writer().clearAll(), "门禁失效时不得声称已清空")
         let blindField = FakeField("有内容"); blindField.readable = false
         assert(!blindField.writer().clearAll(), "读不到控件时不得盲删")
+        // AX 设不了选区不再是死路：改走真实键盘 Cmd+A 兜底，读回为空即算成功。
         let stuckField = FakeField("有内容"); stuckField.selectable = false
-        assert(!stuckField.writer().clearAll(), "定位不到删除范围时不得乱删")
+        assert(stuckField.writer().clearAll() && stuckField.text.isEmpty, "AX 设不了选区时用键盘全选兜底删净")
+        // AX 选区"假成功"（Chromium 实况）：select 声称成功却没落 DOM，路径一读不回选区，
+        // 自动落到键盘 Cmd+A 删净——这正是 ZCode 上"选区读回通过、退格却删不动"的形状。
+        let lyingField = FakeField("假成功控件"); lyingField.selectLies = true
+        assert(lyingField.writer().clearAll() && lyingField.text.isEmpty, "AX 选区假成功时由键盘 Cmd+A 兜底删净")
+        // 键盘兜底也删不动（退格被应用吞掉）：两轮后如实失败，内容原样保留。
+        let stuckDelete = FakeField("删不掉"); stuckDelete.backspaceNoop = true
+        assert(!stuckDelete.writer().clearAll() && stuckDelete.text == "删不掉", "删不动时如实失败并保留正文")
 
         // ---------- 清空是冻结态的唯一出路，且不给"结果未知"的停止开后门 ----------
         let field = FakeField("电脑已有正文")
@@ -233,7 +316,8 @@ final class FakeField {
         try frozen.update("清空后接着输入")
         assert(field.text == "清空后接着输入", "清空后同一轮必须能继续输入")
         // 对照：删不干净时如实失败，绝不声称已清空，也绝不因此丢掉正文。
-        let undeletable = FakeField("删不掉"); undeletable.selectable = false
+        //（键盘兜底能删动的是"能读回为空"的情形；这里让退格被吞，模拟删不动的控件。）
+        let undeletable = FakeField("删不掉"); undeletable.backspaceNoop = true
         rejects { try frozen.clear { undeletable.writer().clearAll() } }
         assert(frozen.stopped && frozen.text == "清空后接着输入", "清空失败要保留正文并停在冻结态")
         // 结果未知的停止（图片已粘贴）不开后门：清空会把可能已生效的内容抹掉。

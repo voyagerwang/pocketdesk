@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 AppKit Accessibility 与 Util 前台观测。
  * [OUTPUT]: 提供 InputFocus 三态焦点探测、带 PID/聚焦窗口/WebArea 校验的安全鼠标锚点、有界查找、显式聚焦及无正文诊断（字符数量、占位文本相等关系与选区）。
  * [POS]: Sources 的焦点能力边界；InputExecutor 决定是否允许聚焦，全屏绑定输入只读探测。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md。focusedElement 读不到焦点时对 Electron 应用写 AXManualAccessibility（附 AXEnhancedUserInterface）激活其 AX 树：先 false 再 true 强制状态变化、按 pid 1s 节流可重写，异步开树有界轮询，使清空等可核验路径对 AX 盲的 Electron 应用生效；不改变"读不到控件不盲删"的红线
  */
 import AppKit
 
@@ -140,7 +140,21 @@ enum InputFocus {
     }
 
     // 同一份焦点元素供绑定与选区替换消费；应用级不可见时尝试系统级，并核对 PID。
+    // Electron/Chromium 在没有辅助技术证据时不构建 AX 树，聚焦元素查询返回 noValue（-25212，
+    // 实测 ZCode：应用级与系统级同时 noValue，但 CGEvent 注入照样能输入）。对应用元素写
+    // AXManualAccessibility=true 是 Electron 官方的开启方式；开树是异步的，激活后有界轮询等待。
+    // 每个 pid 只主动激活一次：真正的盲应用不应在每次聚焦查询时反复付这几百毫秒。
     static func focusedElement(pid: pid_t) -> AXUIElement? {
+        if let element = readFocusedElement(pid: pid) { return element }
+        guard activateManualAccessibility(pid: pid) else { return nil }
+        for _ in 0..<6 {
+            usleep(100_000)
+            if let element = readFocusedElement(pid: pid) { return element }
+        }
+        return nil
+    }
+
+    private static func readFocusedElement(pid: pid_t) -> AXUIElement? {
         for owner in [AXUIElementCreateApplication(pid), AXUIElementCreateSystemWide()] {
             var raw: CFTypeRef?
             guard AXUIElementCopyAttributeValue(owner, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
@@ -151,6 +165,30 @@ enum InputFocus {
             return element
         }
         return nil
+    }
+
+    private static var manualAccessibilityAttempts: [pid_t: TimeInterval] = [:]
+    private static let activationLock = NSLock()
+    /// 返回 true 表示本次真的写入了激活属性（调用方需等待树构建后重试）；1 秒内已写过则返回 false。
+    /// 刻意**不永久缓存失败**：激活写入可能被应用丢失或在其重启 AX 状态后被吞（实测 ZCode 出现过
+    /// 写入后长时间不开树、重写才生效），按 1s 节流反复补写，代价对真正的盲应用也只是每次聚焦
+    /// 查询多一次属性写 + 600ms 有界等待，且这些调用点（建轮/清空/探测）都是用户动作频次。
+    private static func activateManualAccessibility(pid: pid_t) -> Bool {
+        activationLock.lock(); defer { activationLock.unlock() }
+        let now = ProcessInfo.processInfo.systemUptime
+        if let last = manualAccessibilityAttempts[pid], now - last < 1.0 { return false }
+        manualAccessibilityAttempts[pid] = now
+        let app = AXUIElementCreateApplication(pid)
+        // Chromium 侧识别这两个属性并开始构建 AX 树：AXManualAccessibility 是 Electron 官方开关，
+        // AXEnhancedUserInterface 是 VoiceOver 用的同一机制；不认识它们的应用会返回错误，忽略即可。
+        // 必须先写 false 再写 true：应用若还记着上次激活的 true，重复写 true 属"无变化"，
+        // 不会触发它重建 AX 树（实测 ZCode 第二次激活因此长时间不开树）。
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanFalse)
+        AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanFalse)
+        usleep(20_000)
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        return true
     }
     /* ---------- 注入前的焦点确认 ---------- */
     // 激活（activate）只保证应用到了前台，不保证里面有输入框拿着键盘焦点。
