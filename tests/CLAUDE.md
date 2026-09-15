@@ -14,6 +14,8 @@ image-paste-policy.test.swift: 隔离验证 UU 文字把 1.2s 远端同步等待
 
 multi_image_browser.py: 覆盖 Canvas 不可用时长图 JPEG 预览/上传原字节保留和透明 PNG 转 JPEG 白底；Playwright 模拟接口验证多选删除保序、上传失败保留重试、正文/纯图等待压缩、损坏图片不吞旧选择、满额删除追加及横向布局；覆盖健康状态重复点击当前目标不换草稿，失败后重选当前目标或切换目标才更换草稿/队列，同时保留正文、附件批次并隔离旧目标；截图写入 /tmp，不连接真实桌面服务。
 
+model-config.test.swift: 隔离验证 `ModelConfigStore` 的纯函数——端点归一化（补尾缀、不重复拼接）与协议白名单（file/ftp/无 scheme 必须拒绝），以及脱敏视图：keyHint 只给首尾、`hasKey` 为真时视图里任何字段都不得出现 Key 主体、短 Key 只回「已保存」；另锁 `isConfigured` 要求三项齐全。不联网、不读写真实配置。
+
 m0-model-probe.cjs: M0 运行时验证探针（方案 §12 M0-A）。只发 HTTP，验证 OpenAI 兼容接口的五项真实能力——文本返回、工具调用闭环（模型请求→本地伪造结果回传→模型给出最终回答）、同上下文续接、请求可中止（中止后 5s 内必须真的结束，否则视为取消不可靠）、错误分类与 usage 是否可读；不支持的能力记 UNKNOWN 不记 PASS。凭证只从 `PD_MODEL_BASE_URL` / `PD_MODEL_API_KEY` / `PD_MODEL_NAME` 三个环境变量读取，不落盘、不进日志。`node tests/m0-model-probe.cjs` EXIT=0 表示无 FAIL。
 
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md

@@ -90,6 +90,20 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
 .theme-switch button+button{border-left:1px solid var(--line)}
 .theme-switch button.on{background:var(--accent);color:#fff}
 .theme-switch button:not(.on):hover{color:var(--ink)}
+/* 小精灵模型服务：两列字段 + 整行 Key，结论用等宽块原样呈现服务端证据。 */
+.field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0}
+.field span{font-size:12px;color:var(--muted)}
+.field input{width:100%;padding:11px 14px;border:1px solid var(--line-strong);border-radius:4px;background:#fff;color:var(--ink);font:inherit}
+.field input:focus{outline:none;border-color:var(--accent)}
+.field-row{display:flex;gap:12px;margin-bottom:12px}
+@media (max-width:640px){.field-row{flex-direction:column}}
+#agentState{margin-left:auto}
+#agentState.ok{color:var(--ok);border-color:var(--ok)}
+#agentState.bad{color:var(--danger);border-color:var(--danger)}
+#mState.ok{color:var(--ok)}#mState.bad{color:var(--danger)}
+.probe-out{margin:12px 0 0;padding:12px;border:1px solid var(--line);border-radius:4px;background:var(--panel);font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:280px;overflow:auto}
+.probe-out.ok{border-color:var(--accent-line)}
+.probe-out.bad{border-color:var(--danger);color:var(--danger)}
 /* muji 主题令牌覆盖：米白纸面克制风（默认 classic 经典蓝，与手机页/服务端一致）。 */
 :root[data-theme="muji"]{--ink:#1a1a1a;--muted:#666;--faint:#999;--bg:#f5f3ee;--panel:#fbfaf7;--line:rgb(26 26 26 / 10%);--line-strong:rgb(26 26 26 / 22%);--accent:#b74127;--accent-soft:rgb(183 65 39 / 8%);--accent-line:rgb(183 65 39 / 40%);--danger:#b74127}
 :root[data-theme="muji"] body{background:#f5f3ee}
@@ -204,6 +218,24 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
     <h2><span class="step">5</span>最近动作</h2>
     <p class="sub">手机端每一次点击都会记在这里。手机上「点了没反应」时，来这里看它到底走到哪一步——多数情况是电脑锁了屏、或当时前台不是你以为的那个应用。</p>
     <div id="activityLog" class="activity-log"></div>
+  </section>
+
+  <section class="card">
+    <h2><span class="step">6</span>小精灵 · 模型服务<span id="agentState" class="pill">检查中…</span></h2>
+    <p class="sub">小精灵接到任务后交给哪个模型执行，在这里配。只要接口兼容 OpenAI 的对话与工具调用协议就能用（自建或中转同样可以），换厂商只改这三格。配置只写在这台 Mac 上，不会下发给手机。</p>
+    <div class="field-row">
+      <label class="field"><span>Base URL</span><input id="mBase" type="text" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span>模型名</span><input id="mModel" type="text" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false"></label>
+    </div>
+    <label class="field"><span>API Key</span><input id="mKey" type="password" placeholder="sk-…" autocomplete="new-password" spellcheck="false"></label>
+    <div class="row" style="margin-top:14px">
+      <button id="mTest" class="btn">测试连接</button>
+      <button id="mSave" class="btn primary">保存</button>
+      <button id="mClear" class="btn ghost">清空</button>
+      <span id="mState" class="hint"></span>
+    </div>
+    <p class="hint" id="mKeyHint" style="margin:10px 0 0"></p>
+    <pre class="probe-out" id="mOut" hidden></pre>
   </section>
 </main>
 <input id="iconFile" type="file" accept="image/*" hidden>
@@ -877,5 +909,7 @@ $('qr-ip').onerror = () => { $('qr-ip').classList.add('error'); };
 $('qr-secure').onerror = () => { $('qr-secure').classList.add('error'); };
 refresh(); setInterval(refresh, 3000);
 </script>
+<!-- 模型服务面板独立成文件：console.html 已经很长，不再往里堆第二段大块脚本。 -->
+<script src="/console-agent.js"></script>
 </body>
 </html>

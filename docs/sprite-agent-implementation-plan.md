@@ -269,6 +269,17 @@ BrowserAdapter、AgentAdapter、ModelAdapter 三者分开。tt-bridge 只是浏�
 1. 提交当前 16 个未提交改动（Server.swift、InputExecutor、InputFocus 等），作为回归基线。
 2. 现有测试全绿，普通应用实时输入/图片/轻甩/指针/PiP 的真实回保持不变——它是 M1 回归的对照物。
 
+### M0 进展（2026-09-16）
+
+- 代码基线已建（两个提交），7 个 Swift 隔离测试 + 5 个 Node 测试全绿，主应用编译通过。
+- **模型服务的页面化配置已落地**：控制台第 6 张卡「小精灵 · 模型服务」可填 Base URL / 模型名 / API Key，保存、清空、测试连接三项齐备（`Web/console-agent.js`；服务端 `ModelConfig.swift` / `ModelClient.swift` / `AgentHTTP.swift`，路由委托见 `Server.swift`）。配置落在 `Application Support/VoiceDeck/model.json` 且收紧为 0600，完整 Key 永不出服务端（只回 `hasKey`/`keyHint`），不下发手机。
+- 「测试连接」跑的就是 M0-A 的前两项真验证：纯文本返回 + 工具调用闭环（模型发起 `read_page` → 本地伪造结果回传 → 模型给出最终回答），并如实回报用量、耗时与不支持的情况。填好配置点一下即出证据，不需要再准备环境变量。
+- **待做**：M0-A 的续接与取消（用 `tests/m0-model-probe.cjs`）、M0-B 的 tt-bridge 五项核验（含 CC BY-NC 许可结论）。这两项没出证据前不进入 M1 的任务链实施。
+
+### 端点鉴权边界（v1.1 补充，与 §9 一并生效）
+
+§9 要求 `/api/v1` 全部鉴权，指的是**面向手机的任务接口**（`/api/v1/tasks/…` 等，M1 起），它们必须带 Bearer 且**不因回环豁免**。本机控制台用的管理端点（`/api/v1/model-config`、`/api/v1/model-test`）是另一类：它们**只允许回环**、非回环 GET 直接 403、POST 另有既有写鉴权挡在 401，同样不允许局域网匿名调用。两类端点都不把模型配置或任务正文暴露给局域网。
+
 ### M1 入口与真实只读任务
 
 实现应用同行可排序的小精灵、独立草稿、键盘交互、统一按钮/轻甩、任务持久接收、网页总结/追问、结果回传与断线恢复。普通应用输入及触控板回归必须通过。该阶段可发布只读能力，不开放未受仲裁保护的浏览器写入。
