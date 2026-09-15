@@ -130,9 +130,14 @@ final class Server {
         let authorization = Self.headerValue("Authorization", in: headerText)
 
         // 写端点鉴权：手机 token 来自扫码 URL；控制台走 localhost 回环豁免（本机即机主）。
+        // 例外：小精灵的任务接口**连回环也要 Bearer**（方案 §9 v1.1）——回环豁免意味着本机上
+        // 任何进程（含网页里被加载的脚本）都能读走全部任务正文与模型返回，这不是"本机即机主"能兜住的。
         let isWrite = method != "GET"
         let fromLoopback = Self.isLoopback(connection)
-        if (isWrite || path.hasPrefix("/api/screen/") || path == "/api/input-context") && !fromLoopback && !Auth.verify(authorizationHeader: authorization) {
+        let strictAuth = AgentHTTP.requiresBearer(path)
+        let needsAuth = isWrite || path.hasPrefix("/api/screen/") || path == "/api/input-context" || strictAuth
+        let loopbackExempt = fromLoopback && !strictAuth
+        if needsAuth && !loopbackExempt && !Auth.verify(authorizationHeader: authorization) {
             respond(connection, status: 401, json: ["error": "未授权：请重新扫码连接。"])
             return
         }
@@ -370,6 +375,20 @@ final class Server {
             store.save(cleaned)
             iconCache = [:]
             respond(connection, status: 200, json: ["ok": true])
+        // 接收者顺序：小精灵与普通应用共用一套排序，但小精灵不进 TargetStore 的应用列表（方案 §3）。
+        case ("GET", "/api/recipients"):
+            respond(connection, status: 200, json: RecipientOrder.view(targets: store.targets))
+        case ("POST", "/api/recipients"):
+            guard let payload = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any],
+                  let order = payload["order"] as? [String] else {
+                respond(connection, status: 400, json: ["error": "顺序格式无效。"]); return
+            }
+            do {
+                try RecipientOrder.save(order, targets: store.targets)
+                respond(connection, status: 200, json: RecipientOrder.view(targets: store.targets))
+            } catch {
+                respond(connection, status: 500, json: ["error": error.localizedDescription])
+            }
         case ("POST", "/api/target-icon"):
             guard let upload = try? JSONDecoder().decode(IconUpload.self, from: bodyData),
                   let png = Data(base64Encoded: upload.data), png.count <= 512_000,
@@ -495,12 +514,13 @@ final class Server {
             }
         case ("GET", "/"), ("GET", "/index.html"):
             serveFile("index.html", connection: connection)
-        case ("GET", let asset) where ["device-info.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "style.css", "app-extras.css", "screen.css", "console-agent.js"].contains(String(asset.dropFirst())):
+        case ("GET", let asset) where ["device-info.js", "agent-client.js", "agent-panel.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "style.css", "app-extras.css", "screen.css", "console-agent.js"].contains(String(asset.dropFirst())):
             serveFile(String(path.dropFirst()), connection: connection)
         default:
             // /api/v1 下的本机管理端点（模型服务配置与连通性实测）委托 AgentHTTP，
             // Server 保持一行转发，不把路由表继续堆在自己身上。
             if AgentHTTP.handle(method: method, path: path, body: bodyData, fromLoopback: fromLoopback,
+                                authorization: authorization,
                                 queue: queue, respond: { status, json in self.respond(connection, status: status, json: json) }) { return }
             respond(connection, status: 404, json: ["error": "未找到资源。"])
         }

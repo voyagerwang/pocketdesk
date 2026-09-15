@@ -274,7 +274,23 @@ BrowserAdapter、AgentAdapter、ModelAdapter 三者分开。tt-bridge 只是浏�
 - 代码基线已建（两个提交），7 个 Swift 隔离测试 + 5 个 Node 测试全绿，主应用编译通过。
 - **模型服务的页面化配置已落地**：控制台第 6 张卡「小精灵 · 模型服务」可填 Base URL / 模型名 / API Key，保存、清空、测试连接三项齐备（`Web/console-agent.js`；服务端 `ModelConfig.swift` / `ModelClient.swift` / `AgentHTTP.swift`，路由委托见 `Server.swift`）。配置落在 `Application Support/VoiceDeck/model.json` 且收紧为 0600，完整 Key 永不出服务端（只回 `hasKey`/`keyHint`），不下发手机。
 - 「测试连接」跑的就是 M0-A 的前两项真验证：纯文本返回 + 工具调用闭环（模型发起 `read_page` → 本地伪造结果回传 → 模型给出最终回答），并如实回报用量、耗时与不支持的情况。填好配置点一下即出证据，不需要再准备环境变量。
-- **待做**：M0-A 的续接与取消（用 `tests/m0-model-probe.cjs`）、M0-B 的 tt-bridge 五项核验（含 CC BY-NC 许可结论）。这两项没出证据前不进入 M1 的任务链实施。
+**M0-A 结论（2026-09-16 出证据）**：1–3 项通过（文本返回、工具调用闭环、续接均已跑通，`/api/v1/tasks/:id/actions` 的 supplement 沿同一 taskId 回放历史并拿到上下文相关回答）。第 4 项**取消判定为不支持**：OpenAI 兼容接口没有中断在途请求的标准手段，因此产品侧的措辞与状态一律按「不支持真中断」设计——手机按钮是「放弃并保留草稿」，任务状态是 `abandoned` 而非「已停止」，回包明说「Mac 上已发出的这次调用可能仍会跑完」。第 5 项用量与错误分类可用（读不到时记 unknown）。
+
+**M0-B 结论（偏离，已记录）**：tt-bridge 五项**未做**，卡在第 4 项 CC BY-NC 许可——它与 PocketDesk 的 MIT 内置分发冲突，不是今晚能定的法律判断。按 §8.1 的 BrowserAdapter 隔离，**M1 的网页正文读取改走自有 macOS AX**（`Sources/PageReader.swift`）：零新依赖、零许可风险、可立即交付真实只读能力。tt-bridge 降为 M2 写入阶段的候选实现，接口一致，替换不动 TaskService。**这条偏离的代价要如实记录**：AX 方案拿不到 tabId（绑定引用只有 windowId + URL + 标题），正文质量依赖页面可访问性树的完整度，长文档与动态渲染页的截断/噪音比例尚未在真机上量化——M2 评估 tt-bridge 时应拿这份数据对比。
+
+### M1 实施记录（2026-09-16 凌晨）
+
+已交付（均为只读能力，未开放任何写入）：
+
+- **入口**：`Web/app.js` 内置接收者 `SPRITE_ID`，与应用共用一行 Dock、可拖动排序、首次迁移在首位；选中它不激活应用、不绑 AX 输入、不被电脑前台切走；新开首页默认选中它。控制台目标列表纳入小精灵为可排序项（`Web/console.html` + `/api/recipients`）。
+- **草稿隔离**：`agentDraft` 与电脑应用草稿分开保存；小精灵分支绕过 `showKeyboard()`（`window.pocketdeskFocusCompose` 无桌面副作用）；切到小精灵时收起图片入口，首版只收文字。
+- **发送**：`send()` 在 sprite 时整条转 `sendToSprite()`，与服务端的轻甩共用 `pocketdeskComposeSend` 同一把锁；正文只进任务 API。
+- **服务端**：`AgentModels` / `TaskStore`（文件化：`tasks.json` + `events.jsonl` + `dedupe.json`）/ `TaskService` / `AgentRunner` / `PageReader` / `RecipientOrder` / `AgentHTTP` 任务路由。
+- **鉴权**：`/api/v1` 任务类端点**含回环在内**全部 Bearer（反转了 Server 原有的回环豁免）；任务按主体隔离，读别人的任务回 404。
+- **证据**（本地假 OpenAI 服务 + 并行实例）：提交→accepted→工具调用闭环→succeeded 全通；同 requestId 重提交回到同一任务；同 requestId 换内容 409；回环无 token 访问 tasks 401；追问沿同一 taskId、事件 seq 单调（6→11）；放弃回 `abandoned` 并附真实说明；接收者顺序保存后不被重新置顶、未知 id 被清理。
+- **回归**：9 个 Swift 隔离测试 + 7 个 Node 测试全绿，主应用编译无错。
+
+未在本次交付：M2 的浏览器写入与控制权仲裁、tt-bridge 许可结论、多模态附件、真机（Android/iOS 输入法与传感器）验收——方案 §13 里与这些相关的行仍待真机证据。
 
 ### 端点鉴权边界（v1.1 补充，与 §9 一并生效）
 

@@ -607,6 +607,57 @@ window.pocketdeskKeyboardActive = () => fullComposeOpen();
 // 名字必须独立：window.pocketdeskSend 属于 pad.js 的 queuePad（画面/指针指令通道），
 // screen.js 的每一处点按、滚动、cursor-subscribe 都走它。本文件在 pad.js 之后加载，
 // 一旦占用这个名字就会把画面指令全部转成“发送草稿”——表现为没开翻腕也自动发送。
+/**
+ * 无桌面副作用的聚焦路径——小精灵专用。
+ * showKeyboard() 会 refreshInputContext()，并在已有草稿时走 scheduleLive()，
+ * 那等于把还没发送的 AI 指令同步到电脑，正好违反方案 §5「发送前不调 /api/live-input」。
+ * 小精灵只需要把焦点放进输入框，所以走这条不联网、不读输入上下文的路。
+ */
+window.pocketdeskFocusCompose = () => {
+  const el = fullComposeOpen() ? kbProxy : textEl;
+  el.readOnly = false;
+  el.focus({ preventScroll: true });
+};
+
+/**
+ * 小精灵发送分支：正文只交给任务 API，不进电脑输入框、不写剪贴板、不发按键（方案 §5）。
+ * 与轻甩共用同一个 pocketdeskComposeSend 入口，因此按钮和甩送天生同一把锁。
+ */
+async function sendToSprite() {
+  if (submittingDraft) return;
+  if (liveComposing) { message('请先结束听写或确认输入法候选，再发送。', true); return; }
+  submittingDraft = true;
+  sendEl.disabled = true;
+  textEl.readOnly = true; kbProxy.readOnly = true;
+  clearTimeout(liveTimer);   // 这一轮不属于电脑输入框，不得触发任何同步
+  try {
+    const raw = liveValue();
+    textEl.value = raw;
+    const text = raw.trim();
+    if (!text) throw new Error('先输入一点想让小精灵做的事。');
+    const agent = window.pocketdeskAgent;
+    if (!agent) throw new Error('小精灵组件还没加载好，请刷新页面重试。');
+    const task = agent.current();
+    // 执行中不接受新输入：不暗中并行两个任务（方案 §7）。
+    if (task && !task.canFollowUp) throw new Error('上一个任务还在进行中，等它结束或先放弃它。');
+    message(task ? '正在追问小精灵…' : '已交给小精灵…');
+    // 提交瞬间固定正文快照：等待期间切走目标也不改变本次去向。
+    if (task) await agent.followUp(text);
+    else await agent.submit(text, agent.currentPage());
+    // 服务端确认持久接收后才清草稿；失败时正文保留，让人看清原因再决定（方案 §5）。
+    clearCompose();
+    window.pocketdeskAgentPanel?.render();
+    haptic([12]);
+  } catch (error) {
+    message(error.message, true);
+    haptic([28, 50, 28]);
+  } finally {
+    submittingDraft = false;
+    sendEl.disabled = false;
+    textEl.readOnly = false; kbProxy.readOnly = false;
+  }
+}
+
 window.pocketdeskComposeSend = send;
 window.pocketdeskInputSettled = (ms = 300) => Date.now() - lastInputAt >= ms;
 window.pocketdeskHasDraft = () => Boolean(textEl.value || pendingImages.length);
@@ -645,6 +696,8 @@ async function send() {
     message('请先在上方 Dock 选择一个目标应用。', true);
     return;
   }
+  // 内置接收者不进电脑输入链路：小精灵有自己完全独立的一条路径。
+  if (selected === SPRITE_ID) return sendToSprite();
   if (liveComposing) { message('请先结束听写或确认输入法候选，再发送。', true); return; }
   submittingDraft = true;
   sendEl.disabled = true;

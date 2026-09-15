@@ -79,6 +79,9 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
 .target-wrap.drop-before>.target-row,.target-row.drop-before{box-shadow:0 -3px 0 -1px var(--accent)}
 .target-wrap.drop-after>.target-row,.target-row.drop-after{box-shadow:0 3px 0 -1px var(--accent)}
 .target-row img{width:34px;height:34px;border-radius:6px}
+/* 小精灵没有应用图标，用同一尺寸的徽标占位，保持整行对齐。 */
+.sprite-badge{display:grid;place-items:center;width:34px;height:34px;flex:none;border-radius:6px;background:var(--accent-soft);color:var(--accent)}
+.sprite-badge svg{width:20px;height:20px;fill:currentColor}
 .target-row b{font-weight:600;font-size:13px;flex:1}
 .target-row .missing{color:var(--danger);font-size:11px;margin-right:8px}
 #saveState{margin-left:8px;font-size:12px;color:var(--muted)}
@@ -270,7 +273,9 @@ themeSwitch.addEventListener('click',async event=>{
 </script>
 <script>
 const $ = id => document.getElementById(id);
-let state = { targets: [], platform: 'macOS', status: null };
+let state = { targets: [], recipients: [], platform: 'macOS', status: null };
+// 内置接收者：小精灵不是应用，不进 /api/targets 的普通应用列表，只参与接收者排序（方案 §3）。
+const SPRITE_ID = '__sprite__';
 let iconTargetId = null;
 let lastActivityLog = [];
 
@@ -363,8 +368,10 @@ async function refresh() {
     authState.className = granted ? 'ok' : 'bad';
     $('openSettings').disabled = granted;
     if (status.platform !== 'macOS') { $('authHint').textContent = '在系统设置中允许 VoiceDeck 获得输入控制权限。'; }
-    if (!state.targets.length || !$('current').children.length) { state.targets = status.targets; renderTargets(); }
-    else { state.targets = status.targets; }
+    state.targets = status.targets;
+    // 接收者顺序每次刷新都拉：新增/删除应用后服务端会归一化，控制台必须跟着走。
+    await refreshRecipients();
+    if (!$('current').children.length) renderTargets();
     const incoming = status.shortcuts || [];
     if (JSON.stringify(incoming) !== JSON.stringify(shortcuts)) { shortcuts = incoming; renderShortcuts(); }
     if (JSON.stringify(status.actions || []) !== JSON.stringify(presetActions)) {
@@ -458,9 +465,80 @@ function attachDragSort(row, { key, index, zone, commit }) {
   });
 }
 
+// 接收者行 = 小精灵 + 已配置应用，顺序以服务端保存的 recipients 为准。
+// 顺序里没有的项按原相对顺序追加；小精灵缺失时补到首位（首次迁移，只发生一次）。
+function recipientRows() {
+  const byId = new Map(state.targets.map(target => [target.id, target]));
+  const rows = [];
+  const seen = new Set();
+  for (const id of state.recipients) {
+    if (id === SPRITE_ID) {
+      if (!seen.has(id)) { rows.push({ id, target: null }); seen.add(id); }
+      continue;
+    }
+    const target = byId.get(id);
+    if (target && !seen.has(id)) { rows.push({ id, target }); seen.add(id); }
+  }
+  state.targets.forEach(target => { if (!seen.has(target.id)) { rows.push({ id: target.id, target }); seen.add(target.id); } });
+  if (!seen.has(SPRITE_ID)) rows.unshift({ id: SPRITE_ID, target: null });
+  return rows;
+}
+
+function buildSpriteRow(index) {
+  const wrap = document.createElement('div'); wrap.className = 'target-wrap';
+  const row = document.createElement('div'); row.className = 'target-row';
+  row.innerHTML = `<span class="drag-handle" aria-hidden="true">⠿</span>
+    <span class="sprite-badge" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.2l2.05 5.23a2 2 0 0 0 1.13 1.13L20.4 11.6l-5.22 2.04a2 2 0 0 0-1.13 1.13L11.99 20l-2.06-5.23a2 2 0 0 0-1.13-1.13L3.6 11.6l5.2-2.04a2 2 0 0 0 1.13-1.13z"/><path d="M18.6 3.4l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg></span>
+    <b style="flex:1;min-width:0">小精灵</b>
+    <span class="pill" style="padding:2px 8px;font-size:11px">AI 助手</span>
+    <span style="font-size:11px;color:var(--muted)">手机端入口，可拖动排序</span>`;
+  attachDragSort(row, {
+    key: 'targets', index, zone: wrap,
+    commit: async (from, to) => { if (reorder(state.recipients, from, to)) await saveRecipients(state.recipients); },
+  });
+  wrap.append(row);
+  return wrap;
+}
+
+/**
+ * 保存接收者顺序。小精灵与普通应用共用一套拖拽，但小精灵只落在 recipients 里；
+ * 应用顺序随后按同一份顺序重排，两条持久化通道保持一致，避免手机与控制台各显示一套。
+ */
+async function saveRecipients(order) {
+  state.recipients = order;
+  const rank = new Map(order.map((id, index) => [id, index]));
+  state.targets.sort((a, b) => (rank.get(a.id) ?? 9999) - (rank.get(b.id) ?? 9999));
+  try {
+    await post('/api/recipients', { order });
+  } catch (error) {
+    alert(error.message);
+    return;
+  }
+  await save();
+}
+
+/// 移除应用：应用列表与接收者顺序都要清掉，否则手机端会留着一条已经不存在的应用。
+async function removeRecipient(id) {
+  state.targets = state.targets.filter(target => target.id !== id);
+  state.recipients = state.recipients.filter(item => item !== id);
+  await save();
+  await saveRecipients(state.recipients);
+}
+
+async function refreshRecipients() {
+  try {
+    const result = await fetch('/api/recipients', { cache: 'no-store' }).then(response => response.json());
+    state.recipients = Array.isArray(result.order) ? result.order : [];
+  } catch {
+    // 读不到就沿用现有顺序：控制台只是排序入口，不该因为一次失败把列表清空。
+  }
+}
+
 function renderTargets() {
   const box = $('current'); box.innerHTML = '';
-  state.targets.forEach((target, index) => {
+  recipientRows().forEach((item, index) => {
+    if (!item.target) { box.append(buildSpriteRow(index)); return; }
+    const target = item.target;
     const wrap = document.createElement('div'); wrap.className = 'target-wrap';
     const hasCustom = Array.isArray(target.shortcuts) && target.shortcuts.length > 0;
     const row = document.createElement('div'); row.className = 'target-row';
@@ -472,12 +550,13 @@ function renderTargets() {
     row.addEventListener('click', async event => {
       const button = event.target.closest('button[data-act]');
       const act = button?.dataset.act; if (!act) return;
-      if (act === 'remove') { if (!armConfirm(button)) return; state.targets.splice(index, 1); await save(); }
+      if (act === 'remove') { if (!armConfirm(button)) return; await removeRecipient(target.id); }
       if (act === 'settings') renderTargetSettings(target.id);
     });
+    // 拖拽改的是接收者顺序（含小精灵），不再直接改应用数组——小精灵不在里面。
     attachDragSort(row, {
       key: 'targets', index, zone: wrap,   // zone=wrap：展开的设置面板也算投放区
-      commit: async (from, to) => { if (reorder(state.targets, from, to)) await save(); },
+      commit: async (from, to) => { if (reorder(state.recipients, from, to)) await saveRecipients(state.recipients); },
     });
     wrap.append(row);
     // 设置面板（当前展开的那个目标）：默认打开面板 + 专属快捷键组。
