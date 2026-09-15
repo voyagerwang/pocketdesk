@@ -495,9 +495,13 @@ final class Server {
             }
         case ("GET", "/"), ("GET", "/index.html"):
             serveFile("index.html", connection: connection)
-        case ("GET", let asset) where ["device-info.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "style.css", "app-extras.css", "screen.css"].contains(String(asset.dropFirst())):
+        case ("GET", let asset) where ["device-info.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "style.css", "app-extras.css", "screen.css", "console-agent.js"].contains(String(asset.dropFirst())):
             serveFile(String(path.dropFirst()), connection: connection)
         default:
+            // /api/v1 下的本机管理端点（模型服务配置与连通性实测）委托 AgentHTTP，
+            // Server 保持一行转发，不把路由表继续堆在自己身上。
+            if AgentHTTP.handle(method: method, path: path, body: bodyData, fromLoopback: fromLoopback,
+                                queue: queue, respond: { status, json in self.respond(connection, status: status, json: json) }) { return }
             respond(connection, status: 404, json: ["error": "未找到资源。"])
         }
     }
