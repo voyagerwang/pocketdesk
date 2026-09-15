@@ -1,9 +1,9 @@
 /**
  * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard、ApplicationServices 的 AXUIElement、CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的命令词汇、ImageBatchStore 的有界多图资源、ImagePastePolicy 的目标专属时序、ExecutionTrace 的门禁与结果分级、TargetStore/InputFocus/InputBinding/LiveDraft 的目标和草稿事务。
- * [OUTPUT]: 对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、显式整段清空（幂等、可从冻结态破冰；文档类目标只清手机侧）、统一的 UU 文字剪贴板时序、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
+ * [OUTPUT]: 对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、显式整段清空（幂等、可从冻结态破冰；文档类目标只清手机侧）、统一的 UU 文字剪贴板时序、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点；白板等无输入框画布退化为纯粘贴序列并用方向键分离相邻图片）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/live-input、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
- * [PROTOCOL]: 删除键经 postDeleteKey 发送（不携带 DEL 字符），避免 Chromium 把 Backspace 当成 Delete 键；clearScopeAllowsComputer 不再按进程白名单一刀切拦掉聊天类应用（飞书/钉钉等同进程文档与消息无法从 bundle 区分），改由 focusedInDocument 按需保护真实文档正文；变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 删除键经 postDeleteKey 发送（不携带 DEL 字符），避免 Chromium 把 Backspace 当成 Delete 键；clearScopeAllowsComputer 不再按进程白名单一刀切拦掉聊天类应用（飞书/钉钉等同进程文档与消息无法从 bundle 区分），改由 focusedInDocument 按需保护真实文档正文；frontmostMatches/preferredFrontApp 以键盘焦点归属（focusedApplicationPID）为准、窗口层序只作回退——半激活态（窗口在最上、活跃应用是别人，实测 Electron/飞书）按层序判会假通过或误报"不在前台"；verifyActivation 轮询期内每两拍补发一次激活；变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 import CoreGraphics
@@ -171,11 +171,33 @@ final class InputExecutor {
 
     // 前台应用是不是某个目标应用（按 bundleID 或路径比对，与 /api/status 判定保持一致）。
     private func frontmostMatches(targetId: String) -> Bool {
-        guard let config = store.resolve(targetId),
-              let front = Util.frontmostApp() else { return false }
-        if let bundleID = config.bundleID, front.bundleIdentifier == bundleID { return true }
-        if let path = config.path, front.bundleURL?.path == path { return true }
-        return false
+        guard let config = store.resolve(targetId) else { return false }
+        func matches(_ app: NSRunningApplication) -> Bool {
+            if let bundleID = config.bundleID, app.bundleIdentifier == bundleID { return true }
+            if let path = config.path, app.bundleURL?.path == path { return true }
+            return false
+        }
+        // 内容会落进谁由键盘焦点决定，不由窗口层序决定：后台 agent 激活 Electron 应用
+        // 常见"窗口抬到最上、活跃应用还是别人"的半激活态（实测飞书）——按层序判会假通过
+        // （字进了别的应用），下一拍又判失败（反复弹"目标不在前台"）。AX 焦点应用是打字
+        // 落点的真值；读不出来（盲应用/瞬时错误）才退回窗口层序的旧判据。
+        if let focusPID = InputFocus.focusedApplicationPID() {
+            return NSWorkspace.shared.runningApplications
+                .first(where: { $0.processIdentifier == focusPID })
+                .map(matches) ?? false
+        }
+        guard let front = Util.frontmostApp() else { return false }
+        return matches(front)
+    }
+
+    /// 写入目标进程：键盘焦点归属的应用优先，读不出焦点才退回窗口层序的最上层应用。
+    /// 绑定与读回都必须跟着"键入会落到谁"走，否则半激活态下会把 A 应用的元素当靶子、
+    /// 键却打进了 B 应用，读回永远对不上。
+    private func preferredFrontApp() -> NSRunningApplication? {
+        if let focusPID = InputFocus.focusedApplicationPID() {
+            return NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == focusPID })
+        }
+        return Util.frontmostApp()
     }
 
 
@@ -299,6 +321,29 @@ final class InputExecutor {
         return !focusedInDocument(pid: front.processIdentifier)
     }
 
+    // 本次命令是否带着待提交图片：决定绑定失败时能否走画布兜底（见 establishContext）。
+    private func imageSubmit(_ command: LiveInputCommand) -> Bool {
+        command.submit == true
+            && (command.imageBatchId != nil || command.usePendingImage == true
+                || !(command.imageIds ?? []).isEmpty)
+    }
+
+    /// 常规绑定失败时，只允许**图片提交**退化为应用级绑定：白板/画布目标没有可编辑元素
+    /// 可认（AX 甚至把画布报成"不是输入框"），但粘贴只要求前台应用正确。文字仍然必须有
+    /// 可核验的编辑位置，不在此开后门。
+    private func establishContext(imagesPending: Bool) throws -> String {
+        let binding = InputBinding.shared.establish()
+        if let established = binding["context"] as? String { return established }
+        let relaxed = InputBinding.shared.establishRelaxed()
+        if imagesPending, let token = relaxed["context"] as? String {
+            ExecutionLog.shared.append(kind: "live", label: "图片直发绑定", outcome: .buffered,
+                detail: "目标无可编辑输入框，按画布粘贴模式绑定应用级范围。",
+                frontApp: relaxed["name"] as? String)
+            return token
+        }
+        throw LiveDraftFailure(message: binding["error"] as? String ?? "无法确定电脑输入框。")
+    }
+
     private func applyDraft(_ command: LiveInputCommand, authorized: @escaping () -> Bool) throws -> LiveInputReceipt {
         if let reason = EnvironmentGate.blockReason() {
             throw LiveDraftFailure(message: reason, state: .needsUserFocus)
@@ -326,7 +371,7 @@ final class InputExecutor {
         guard command.reset != true else { throw LiveDraftFailure(message: "请清空手机草稿后重新开始输入。") }
         let target = command.targetId ?? Self.frontmostPseudoId
         guard target == Self.frontmostPseudoId || frontmostMatches(targetId: target),
-              let front = Util.frontmostApp() else {
+              let front = preferredFrontApp() else {
             // 目标应用暂时不在前台属于焦点中断：草稿与基线都保留，用户把应用切回来即可自动续接。
             throw LiveDraftFailure(message: "目标应用已不在前台，草稿已保留；切回它就会自动继续。",
                                    state: .interrupted)
@@ -340,11 +385,7 @@ final class InputExecutor {
             if let requested = command.context, InputBinding.shared.validate(requested) {
                 context = requested
             } else {
-                let binding = InputBinding.shared.establish()
-                guard let established = binding["context"] as? String else {
-                    throw LiveDraftFailure(message: binding["error"] as? String ?? "无法确定电脑输入框。")
-                }
-                context = established
+                context = try establishContext(imagesPending: imageSubmit(command))
             }
             resumeAtCurrentFocus = true
         } else if let draft = liveDraft, draft.id == id {
@@ -352,11 +393,7 @@ final class InputExecutor {
             // 应用，首字落入后才暴露编辑元素；能力提升不代表用户切换了输入位置。
             context = draft.context
         } else {
-            let binding = InputBinding.shared.establish()
-            guard let established = binding["context"] as? String else {
-                throw LiveDraftFailure(message: binding["error"] as? String ?? "无法确定电脑输入框。")
-            }
-            context = established
+            context = try establishContext(imagesPending: imageSubmit(command))
         }
         guard command.context == nil || command.context == context else {
             throw LiveDraftFailure(message: "输入位置已变化，请在电脑上点一下原输入框再继续；手机草稿已保留。",
@@ -461,14 +498,21 @@ final class InputExecutor {
         }
         // Chrome 飞书多图的点击锚点必须在任何提交期外部写入之前确认。预检失败时既不粘
         // deferred 正文，也不登记图片执行防重放，用户修正鼠标位置后仍可安全重试。
+        // 画布类目标（白板等无输入框页面）没有可锚定的编辑器，退化为纯粘贴序列，
+        // 相邻图片改用方向键分离；此时也不要求鼠标停在"输入框内"。
         let pasteTiming = ImagePastePolicy.timing(bundleIdentifier: front.bundleIdentifier, imageCount: pictures.count)
+        let canvasPaste = InputBinding.shared.snapshot(forToken: context)?["scope"] as? String == "application"
         let clickAnchor: InputFocus.EditableAnchor?
         if pasteTiming.interImageClickMicros != nil {
-            let point = CGEvent(source: nil)?.location
-            guard let point, let anchor = InputBinding.shared.captureClickAnchor(context, point: point) else {
-                throw LiveDraftFailure(message: "请先把电脑鼠标放在飞书输入框内，再发送多张图片。")
+            if canvasPaste {
+                clickAnchor = nil
+            } else {
+                let point = CGEvent(source: nil)?.location
+                guard let point, let anchor = InputBinding.shared.captureClickAnchor(context, point: point) else {
+                    throw LiveDraftFailure(message: "请先把电脑鼠标放在飞书输入框内，再发送多张图片。")
+                }
+                clickAnchor = anchor
             }
-            clickAnchor = anchor
         } else { clickAnchor = nil }
         // deferred 从未向电脑写过草稿，只在此处粘贴一次最终全文。replace 只提交已有文本。
         if draft.mode == .deferred && !command.text.isEmpty {
@@ -492,15 +536,29 @@ final class InputExecutor {
             }
             usleep(pasteTiming.consumptionMicros)
             if ImagePastePolicy.needsInterImageClick(timing: pasteTiming, imageIndex: index, imageCount: pictures.count) {
-                guard authorized(), InputBinding.shared.validateOwner(context), let clickAnchor,
-                      InputFocus.validateStoredAnchor(clickAnchor),
-                      postLeftClick(at: clickAnchor.point) else {
-                    throw draft.stop("图片已开始粘贴，但无法安全点击飞书输入框；请检查电脑内容，勿重复发送。")
-                }
-                usleep(pasteTiming.interImageClickMicros!)
-                guard valid(), InputBinding.shared.captureClickAnchor(context,
-                    point: clickAnchor.point) != nil else {
-                    throw draft.stop("图片已开始粘贴，但输入位置或控制权已变化；请检查电脑内容，勿重复发送。")
+                if let clickAnchor {
+                    guard authorized(), InputBinding.shared.validateOwner(context),
+                          InputFocus.validateStoredAnchor(clickAnchor),
+                          postLeftClick(at: clickAnchor.point) else {
+                        throw draft.stop("图片已开始粘贴，但无法安全点击飞书输入框；请检查电脑内容，勿重复发送。")
+                    }
+                    usleep(pasteTiming.interImageClickMicros!)
+                    guard valid(), InputBinding.shared.captureClickAnchor(context,
+                        point: clickAnchor.point) != nil else {
+                        throw draft.stop("图片已开始粘贴，但输入位置或控制权已变化；请检查电脑内容，勿重复发送。")
+                    }
+                } else {
+                    // 画布模式：不点鼠标（点击会改选白板对象且改变不了粘贴位置），
+                    // 用方向键把刚粘贴的选中元素挪开，让下一张落在看得见的位置。
+                    for code in ImagePastePolicy.canvasNudgeKeycodes {
+                        guard postKey(code) else {
+                            throw draft.stop("图片已开始粘贴，但方向键发送失败；请检查电脑内容，勿重复发送。")
+                        }
+                        usleep(ImagePastePolicy.canvasNudgeGapMicros)
+                    }
+                    guard valid() else {
+                        throw draft.stop("图片已开始粘贴，但输入位置或控制权已变化；请检查电脑内容，勿重复发送。")
+                    }
                 }
             }
         }
@@ -693,6 +751,12 @@ final class InputExecutor {
                 completion(.success(ActivateOutcome(pid: pid > 0 ? pid : nil,
                                                     note: visible ? "" : "窗口可能在另一个桌面空间或另一块显示器。")))
                 return
+            }
+            // 激活偶发只抬窗口不落焦点（实测 Electron/飞书：窗口层序闪一下又回去，活跃应用没换）。
+            // 轮询期内每两拍补发一次激活，给系统第二次机会，而不是干等 3.5 秒后如实失败。
+            if attempt % 2 == 0, let app = self.runningApp(targetId: targetId) {
+                app.unhide()
+                app.activate(options: [.activateAllWindows])
             }
             guard attempt < maxAttempts else {
                 let front = Util.frontmostApp()

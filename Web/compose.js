@@ -608,13 +608,15 @@ window.pocketdeskKeyboardActive = () => fullComposeOpen();
 // screen.js 的每一处点按、滚动、cursor-subscribe 都走它。本文件在 pad.js 之后加载，
 // 一旦占用这个名字就会把画面指令全部转成“发送草稿”——表现为没开翻腕也自动发送。
 window.pocketdeskComposeSend = send;
-window.pocketdeskInputSettled = (ms = 700) => Date.now() - lastInputAt >= ms;
+window.pocketdeskInputSettled = (ms = 300) => Date.now() - lastInputAt >= ms;
 window.pocketdeskHasDraft = () => Boolean(textEl.value || pendingImages.length);
 window.pocketdeskCanMotionSend = () => {
   if (!selected || sendEl.disabled || submittingDraft || liveComposing) return false;
   // 中断冻结中、恢复探测进行中、上一轮提交收尾中，一律不发：迟到候选不得提交新一轮草稿。
   if (livePaused || liveProbing) return false;
-  if (!(window.pocketdeskInputSettled && window.pocketdeskInputSettled(700))) return false; // 仍在输入/听写中
+  // 300ms：说完话后的第一次翻腕（起翻+停稳约 300–500ms）即可命中门禁；
+  // 原 700ms 会把说完就翻的候选静默丢掉，用户只能等冷却后再翻一次，体感延迟 1.5s+。
+  if (!(window.pocketdeskInputSettled && window.pocketdeskInputSettled(300))) return false; // 仍在输入/听写中
   return true;
 };
 

@@ -2,9 +2,9 @@
  * [INPUT]: 依赖 Util 前台应用观测及 InputFocus 应用/系统级焦点元素，不遍历或移动焦点。
  * [OUTPUT]: 提供 InputBinding 的短期上下文令牌、完整写入前校验、当前页面点击范围、附件粘贴期间的目标进程校验、
  *           不可伪造的绑定身份与只读快照（原 PID、元素/页面范围、最后确认文本边界）、以及最近一次校验失败的原因；
- *           Chromium AX 对象变化时以当前聚焦窗口的 WebArea 重新核验。
+ *           Chromium AX 对象变化时以当前聚焦窗口的 WebArea 重新核验；另为图片直发提供应用级兜底绑定 establishRelaxed（白板/画布无输入框目标，validate 届时只核验前台进程）。
  * [POS]: Sources 的全屏输入目标边界；HTTP 建立上下文，InputExecutor 每次写入前验证并据失效原因分级草稿状态。
- * [PROTOCOL]: validate 在切应用/编辑器重建导致 AX 元素失效时自愈（沿用原令牌更新元素引用，避免可恢复中断误判 needs-user-focus）；变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: validate 在切应用/编辑器重建导致 AX 元素失效时自愈（沿用原令牌更新元素引用，避免可恢复中断误判 needs-user-focus）；establish/establishRelaxed 的绑定进程跟随键盘焦点归属（focusedApplicationPID），读不出焦点才退回窗口层序——半激活态下按层序绑会绑错应用；变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 
@@ -30,9 +30,19 @@ final class InputBinding {
         InputFocus.focusedElement(pid: pid)
     }
 
+    /// 绑定目标进程：键盘焦点归属的应用优先（键入会落到谁就绑谁），读不出焦点才退回
+    /// 窗口层序的最上层应用。后台 agent 激活 Electron 应用的半激活态（窗口在最上、活跃
+    /// 应用是别人）下按层序绑会把 A 应用的元素当靶子、键却打进了 B 应用。
+    private static func bindingTargetApp() -> NSRunningApplication? {
+        if let focusPID = InputFocus.focusedApplicationPID() {
+            return NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == focusPID })
+        }
+        return Util.frontmostApp()
+    }
+
     func establish() -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
-        guard let app = Util.frontmostApp() else { return ["error": "无法确定前台应用，请先点击电脑输入框。"] }
+        guard let app = Self.bindingTargetApp() else { return ["error": "无法确定前台应用，请先点击电脑输入框。"] }
         let pid = app.processIdentifier
         let observedFocus = focused(pid)
         let clickScope = InputFocus.normalizedClickScope(observedFocus, pid: pid)
@@ -60,6 +70,28 @@ final class InputBinding {
         response["context"] = binding!.token
         lastInvalidReason = ""
         return response
+    }
+
+    /// 图片直发的兜底绑定：目标没有可编辑元素可认（白板画布、AX 把画布报成"不是输入框"）时，
+    /// 常规 establish 会直接报错。粘贴只要求前台应用正确、不要求焦点在输入框，故退化为
+    /// 应用级绑定（element=nil，validate 因此只核验前台进程）。只允许图片提交走这条路——
+    /// 文字必须有可核验的编辑位置，画布上的 Cmd+V 不需要。
+    func establishRelaxed() -> [String: Any] {
+        lock.lock(); defer { lock.unlock() }
+        guard let app = Self.bindingTargetApp() else { return ["error": "无法确定前台应用，请先点击电脑输入框。"] }
+        let pid = app.processIdentifier
+        let clickScope = InputFocus.normalizedClickScope(focused(pid), pid: pid)
+        let now = ProcessInfo.processInfo.systemUptime
+        if let old = binding, old.pid == pid, old.element == nil, same(old.clickScope, clickScope),
+           now - old.touched < 600 {
+            binding?.touched = now
+        } else {
+            binding = Binding(token: UUID().uuidString, pid: pid, element: nil,
+                clickScope: clickScope, touched: now,
+                confirmedText: "", confirmedLocation: 0, confirmedLength: 0)
+        }
+        lastInvalidReason = ""
+        return ["context": binding!.token, "name": app.localizedName ?? "当前应用", "scope": "application"]
     }
 
     private func same(_ a: AXUIElement?, _ b: AXUIElement?) -> Bool {

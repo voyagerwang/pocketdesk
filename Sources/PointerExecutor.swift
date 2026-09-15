@@ -85,16 +85,16 @@ final class PointerExecutor {
     /// 在指定点单击：先移动到该点，再按下/抬起，间隔 40ms。用于把焦点落到输入框
     /// （Electron/WebKit/自定义 NSTextView 的输入框在 mousedown 阶段抢焦点，零间隔会被 up 中断，
     /// 表现为"指针动了但框没聚焦"——与 `tap` 分支保持同一时序）。与其它指针命令同队列、同门禁执行。
-    func click(at point: CGPoint) {
+    func click(at point: CGPoint, completion: ((Bool) -> Void)? = nil) {
         queue.async {
-            guard LockScreenInput.state == "unlocked" else { return }
-            guard !self.dragging else { return }
+            guard LockScreenInput.state == "unlocked", !self.dragging else { completion?(false); return }
             let target = self.clamped(point)
             self.expected = target
             self.post(.mouseMoved, at: target)
             self.post(.leftMouseDown, at: target, clickState: 1)
             usleep(40_000)
             self.post(.leftMouseUp, at: target, clickState: 1)
+            completion?(true)
         }
     }
 
