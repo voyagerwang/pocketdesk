@@ -85,6 +85,9 @@ let lastActivateAt = 0;     // 刚在手机上激活过应用时，短暂抑制�
 let lastSeenFront = null;   // 边沿触发：只在电脑前台应用发生变化时跟随一次
 let frontmostLabel = null;  // 伪目标态的前台应用名：识别到什么，"发送到 X"就写什么
 let manualUntil = 0;        // 手动滑动 Dock 期间暂停跟随，避免抢用户的操作
+const SPRITE_ID = '__sprite__';   // 内置接收者：小精灵不是应用，绝不走 activate / AX 输入绑定
+let recipientOrder = [];    // 服务端保存的接收者顺序；首次迁移把小精灵放在首位
+let agentDraft = '';        // 小精灵未发文字，与电脑应用草稿分开保存（方案 §5）
 
 /* ---------- 通用 ---------- */
 
@@ -103,9 +106,42 @@ function haptic(pattern) {
 
 /* ---------- 渲染 ---------- */
 
+// 接收者顺序来自服务端（控制台可拖拽排序并持久保存，方案 §3）。
+// 顺序里没有的项按原相对顺序追加；小精灵缺失时补到首位——这只在迁移时发生一次。
+function orderedRecipients() {
+  const byId = new Map(targets.map(item => [item.id, item]));
+  const list = [];
+  const seen = new Set();
+  for (const id of recipientOrder) {
+    if (id === SPRITE_ID) {
+      if (!seen.has(SPRITE_ID)) { list.push({ id: SPRITE_ID, name: '小精灵' }); seen.add(SPRITE_ID); }
+      continue;
+    }
+    const target = byId.get(id);
+    if (target && !seen.has(id)) { list.push(target); seen.add(id); }
+  }
+  targets.forEach(item => { if (!seen.has(item.id)) { list.push(item); seen.add(item.id); } });
+  if (!seen.has(SPRITE_ID)) list.unshift({ id: SPRITE_ID, name: '小精灵' });
+  return list;
+}
+
+// 小精灵图标用本地 SVG：不用 emoji、外部字体或 CDN（方案 §2）。
+function spriteButton() {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `target target-sprite${selected === SPRITE_ID ? ' selected' : ''}`;
+  button.dataset.targetId = SPRITE_ID;
+  button.setAttribute('role', 'radio');
+  button.setAttribute('aria-checked', String(selected === SPRITE_ID));
+  button.tabIndex = selected === SPRITE_ID ? 0 : -1;
+  button.innerHTML = '<span class="target-icon sprite-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.2l2.05 5.23a2 2 0 0 0 1.13 1.13L20.4 11.6l-5.22 2.04a2 2 0 0 0-1.13 1.13L11.99 20l-2.06-5.23a2 2 0 0 0-1.13-1.13L3.6 11.6l5.2-2.04a2 2 0 0 0 1.13-1.13z"/><path d="M18.6 3.4l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg></span><small>小精灵</small>';
+  return button;
+}
+
 function renderTargets() {
   row.innerHTML = '';
-  targets.forEach(target => {
+  orderedRecipients().forEach(target => {
+    if (target.id === SPRITE_ID) { row.append(spriteButton()); return; }
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `target${target.id === selected ? ' selected' : ''}`;
@@ -139,13 +175,17 @@ function markSelected() {
   // 快捷键组随选中态切换：选中目标有专属组就只显示那组，否则回退全局组。
   syncShortcutsForSelected();
   const front = targets.find(item => item.id === selected);
+  const isSprite = selected === SPRITE_ID;
   // 没有目标时按钮置灰并明说：点了也不会有去向。
-  const hasTarget = Boolean(front) || selected === FRONTMOST_ID;
+  const hasTarget = Boolean(front) || selected === FRONTMOST_ID || isSprite;
   sendEl.disabled = !hasTarget;
   sendEl.classList.toggle('no-target', !hasTarget);
   // 识别到什么就写什么：Dock 目标用配置名；伪目标用心跳识别出的前台应用名（frontmostLabel）。
-  const label = front ? front.name : (selected === FRONTMOST_ID ? (frontmostLabel || '当前前台') : null);
-  sendEl.textContent = label ? `发送到 ${label}` : '请先选择应用';
+  const label = front ? front.name : (selected === FRONTMOST_ID ? (frontmostLabel || '当前前台') : (isSprite ? '小精灵' : null));
+  sendEl.textContent = label ? `发送给 ${label}` : '请先选择应用';
+  // 首版小精灵只收文字：切过去就收起图片入口，电脑应用的附件留在应用草稿里（方案 §5）。
+  const imageButton = document.querySelector('#image-btn');
+  if (imageButton) imageButton.hidden = isSprite;
 }
 
 /* ---------- 选中与唤醒 ---------- */
@@ -198,6 +238,9 @@ async function activateTarget(targetId, locate = false) {
 
 async function selectTarget(button) {
   const targetId = button.dataset.targetId;
+  if (targetId === SPRITE_ID) { selectSprite(); return; }
+  // 小精灵 → 应用：先存 AI 草稿，严禁把 AI 指令灌进目标输入框（方案 §5）。
+  if (selected === SPRITE_ID) agentDraft = textEl.value;
   const rebuiltDraft = beginDraftForExplicitTarget(targetId);
   selected = targetId;
   markSelected();
@@ -206,6 +249,26 @@ async function selectTarget(button) {
   // 切换目标或失败后重选当前目标，代表用户要以此刻输入位置开始新一轮；已有正文
   // 立即触发新绑定，纯图片发送时绑定。健康状态重复点击不重建，避免把全文再次追加。
   if (activated && rebuiltDraft && textEl.value) scheduleLive();
+}
+
+// 选中内置接收者：不唤醒应用、不绑定 AX 输入、不移动鼠标（方案 §3/§4）。
+// 小精灵是手机端接收者，与 Mac 前台应用是两种状态，不共用一个变量表达。
+function selectSprite() {
+  if (selected === SPRITE_ID) {
+    // 已选中再点一次只回到输入并聚焦：不清草稿、不新建任务（方案 §4）。
+    window.pocketdeskFocusCompose?.();
+    return;
+  }
+  // 应用 → 小精灵：取消未发送的镜像队列与恢复定时器，封存应用草稿，恢复独立 AI 草稿。
+  // 已在途的写入不能假称撤回，电脑上的已有文字也不删除（方案 §5）。
+  beginDraftForExplicitTarget(SPRITE_ID);
+  selected = SPRITE_ID;
+  markSelected();
+  exitPadMode();
+  textEl.value = agentDraft;
+  // 只聚焦，不走 showKeyboard：后者会 refreshInputContext + scheduleLive，
+  // 等价于把还没发的 AI 指令同步到电脑（方案 §11 点名要绕开的桌面副作用）。
+  window.pocketdeskFocusCompose?.();
 }
 
 row.addEventListener('click', event => {
@@ -641,6 +704,9 @@ async function heartbeatTick() {
     // 边沿触发：只在电脑前台应用发生变化时跟随一次。
     if (key === lastSeenFront) return;
     lastSeenFront = key;
+    // 手动选中小精灵时不跟随前台（方案 §3）：手机接收者与 Mac 前台应用是两种状态，
+    // 电脑那边切了应用就把用户正在对话的小精灵切走，等于抢走他正在写的东西。
+    if (selected === SPRITE_ID) return;
     if (frontId && targets.some(item => item.id === frontId)) {
       selected = frontId;
       frontmostLabel = null;   // Dock 目标态：名字由 markSelected 从 targets 取
@@ -693,6 +759,11 @@ async function boot() {
     const status = await fetch('/api/status').then(response => response.json());
     window.pocketdeskAccessibility = status.accessibility;
     targets = status.targets;
+    // 接收者顺序由控制台保存；读失败时退回「小精灵在前 + 应用原顺序」，不阻塞启动。
+    try {
+      const recipients = await fetch('/api/recipients', { headers: authHeaders() }).then(response => response.json());
+      recipientOrder = Array.isArray(recipients.order) ? recipients.order : [];
+    } catch { recipientOrder = []; }
     syncShortcuts(status.shortcuts || []);
     renderTargets();
     applyTheme(status.theme);
@@ -702,17 +773,14 @@ async function boot() {
     if (!status.accessibility) message('请先在电脑端控制台完成授权，页面仍可输入。', true);
     // 刷新后立即对齐一次选中态：Mac 前台命中 Dock 目标就选它，否则进入伪目标并记住前台名，
     // 保证底部"发送到 X"与 Dock 高亮始终反映真实状态，而不是上次会话的残留默认值。
+    // 新开首页默认选小精灵（方案 §1）：它是手机端主入口，不是"电脑上恰好在前台的那个应用"。
+    // 这里仍然记录当前前台作为边沿跟随的基线——心跳只在用户离开小精灵后才把选中带到应用上。
     const frontId = status.frontmostId;
-    if (frontId && targets.some(item => item.id === frontId)) {
-      selected = frontId;
-      lastSeenFront = frontId;
-      frontmostLabel = null;
-    } else if (status.frontmostName) {
-      selected = FRONTMOST_ID;
-      lastSeenFront = status.frontmostName;
-      frontmostLabel = status.frontmostName;
-    }
+    selected = SPRITE_ID;
+    lastSeenFront = frontId ?? status.frontmostName ?? null;
+    frontmostLabel = null;
     markSelected();
+    // 小精灵不唤醒任何应用：它没有 bundleID，/api/activate 与 AX 绑定都对它无意义（方案 §3）。
     // 进入即把前台目标唤醒到“已选中且已就绪”：默认高亮的只是 UI 提示，桌面绑定要等首键才建；
     // 若 Mac 输入框没焦点，首键 establish 失败会冻结草稿、表现为“无反应”。主动唤醒一遍，
     // 让手机“默认选中”与实际输入就绪对齐（与手动点一下目标等价，不移动鼠标、不重置草稿）。
@@ -728,7 +796,13 @@ async function boot() {
       });
     }
     // 浏览器恢复的正文可能早于目标就绪；就绪后补齐，不等下一次手敲。
-    if (textEl.value) scheduleLive();
+    // 小精灵正文只在手机上，发送前不进 /api/live-input（方案 §5），所以这里不能同步。
+    if (textEl.value && selected !== SPRITE_ID) scheduleLive();
+    // 小精灵面板：任务卡与当前网页绑定都由它自己渲染，失败不影响主流程。
+    try {
+      window.pocketdeskAgentPanel?.init();
+      window.pocketdeskAgent?.fetchPage();
+    } catch { /* 面板缺失只影响小精灵，不拖垮首页 */ }
     // 安全连接地址（含正确主机，无 token）：供设置面板在开启甩送时升级到 HTTPS 触发证书信任。
     window.pocketdeskSecureURL = status.secureURL || '';
     // 若刚才是从 HTTP 升级到安全连接过来的，恢复升级前留在输入框的正文。
@@ -760,5 +834,9 @@ function applyTheme(name) {
 }
 
 
+
+// 提示出口：小精灵的任务卡与客户端共用它，避免各脚本自己造一套 toast。
+// 它们对缺失做了降级（静默），但这个全局本身不该缺席——所以在这里显式导出。
+window.pocketdeskMessage = message;
 
 // 下行入口：screen.js 订阅服务端推送（光标位置 / 错误 / 鉴权回执）。

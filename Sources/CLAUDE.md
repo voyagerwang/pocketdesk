@@ -24,8 +24,17 @@ InputFocus.swift: AX 三态焦点能力与诊断快照，提供只读探测、�
 InputBinding.swift: 10 分钟短期输入上下文；AX 可识别时绑定输入元素并在上下文中返回当前文本，传统编辑元素不可见时仍保留聚焦 WebArea；常规写入校验同一聚焦元素，Chrome 多图锚点允许在同一 PID、聚焦窗口与当前 WebArea 内重新核验，失效后拒绝草稿写入。establish/establishRelaxed 的绑定进程**跟随键盘焦点归属**（focusedApplicationPID 优先，读不出焦点才退回窗口层序）——半激活态下按层序绑会把 A 应用的元素当靶子、键却打进了 B 应用，读回永远对不上。`establishRelaxed` 为图片直发提供应用级兜底绑定——白板/画布目标没有可编辑元素可认（AX 甚至报"不是输入框"），粘贴只要求前台应用正确，绑定 element=nil 后 validate 只核验前台进程；只允许图片提交走这条路，文字必须有可核验的编辑位置。除实时校验外还提供**只读证据**：`snapshot(forToken:)` 返回绑定身份与最后确认文本/选区边界，`recordConfirmed(_:text:)` 在每次写入落地后推进"最后确认状态"，`lastInvalidReason` 记录失效原因（人话，供回执；不参与决策）。恢复探测只读这些字段，不改绑定。
 ModelConfig.swift: 模型服务配置层——Base URL / 模型名 / API Key 的持久化（`Application Support/VoiceDeck/model.json`，写后收紧为 0600）、脱敏视图（`hasKey` + `keyHint`，**完整 Key 永不出服务端**）、端点归一化（只接受 http/https，自动补 `/chat/completions`，file/ftp/无 scheme 一律拒绝，不给 SSRF 留口子）。Key 落盘而非钥匙串是权衡：本项目 ad-hoc 签名、每次重编译 CDHash 都变，钥匙串项会跟着失效（与辅助功能授权同理），换正式签名后再迁。
 ModelClient.swift: 模型适配层最薄的一环——对 OpenAI 兼容 `/chat/completions` 发一次请求，解析 `content` / `tool_calls` / `usage`，失败给出 HTTP 状态与服务端原文摘要。**只翻译协议，不持有任何工具执行权**：工具由 PocketDesk 本地执行后回传，模型永远不能直接操作电脑。错误报文只回显响应体，绝不回显请求体（里面有 API Key）；401/403 一律归到鉴权，不把反向代理的登录页 HTML 塞给控制台。
-AgentHTTP.swift: `/api/v1` 下「本机管理类」端点的路由层（模型配置读写 `model-config`、连通性实测 `model-test`），Server 只做一行委托，不把路由表堆在自己身上。**只允许回环访问**（非回环 GET 直接 403，POST 另由既有写鉴权挡在 401）；这与将来 M1 的手机侧任务接口（`/api/v1/tasks/…`，必须带 Bearer）是两类端点，但都不允许局域网匿名调用。实测走两步真验证：①纯文本 ②工具调用闭环（模型发起 `read_page` → 本地伪造结果回传 → 模型给出最终回答），不支持/失败一律如实报 `supported:false` 或错误原因，不粉饰成「可用」。保存与清空的失败必须回错误，**不能用 `try?` 吞掉后回成功**——写失败却说已清空是假成功。
+AgentHTTP.swift: `/api/v1` 的路由层，Server 只做一行委托，不把路由表堆在自己身上。两类端点分开：①**本机管理类**（模型配置读写 `model-config`、连通性实测 `model-test`）只允许回环；②**任务类**（`tasks` 建/查/事件/动作、`executors`、`context/page`）由 `requiresBearer` 判定，**含回环在内一律要 Bearer**——回环豁免意味着本机任何进程都能读走全部任务正文。任务按主体隔离（subject 由 token 派生），读别人的任务一律 404 而非 403，不泄露存在性。**只允许回环访问**（非回环 GET 直接 403，POST 另由既有写鉴权挡在 401）；这与将来 M1 的手机侧任务接口（`/api/v1/tasks/…`，必须带 Bearer）是两类端点，但都不允许局域网匿名调用。实测走两步真验证：①纯文本 ②工具调用闭环（模型发起 `read_page` → 本地伪造结果回传 → 模型给出最终回答），不支持/失败一律如实报 `supported:false` 或错误原因，不粉饰成「可用」。保存与清空的失败必须回错误，**不能用 `try?` 吞掉后回成功**——写失败却说已清空是假成功。
 NetworkPeer.swift: 基于真实远端地址判断回环，控制与画面握手共用，不信任客户端自报主机名。
+
+小精灵（M1，仅只读能力）
+
+AgentModels.swift: 任务领域模型——TaskStatus（accepted/running/needsInput/succeeded/failed/**abandoned**/verifying）、TaskMessage、PageBinding、TaskUsage、AgentTask、TaskEvent。abandoned 是刻意的命名：M1 的 runtime 不支持真正取消，用户点「放弃」只表示手机不再等待，任务仍会在 Mac 上跑完，叫「已停止」就是谎报。PageBinding 的 tabId **可选**（自有 AX 拿不到标签页 ID），漂移校验以 URL + 标题为准。用量读不到时整体 unknown，不允许拿 0 冒充。
+TaskStore.swift: 任务与事件的唯一权威存储——`tasks.json`（原子整体写）+ `events.jsonl`（append-only，逐行解析跳过半行）+ `dedupe.json`（主体 + requestId 去重）。claim 是幂等接受：同键同内容回到同一任务，同键不同内容抛 conflict（绝不派第二个）。写失败必须抛出，静默吞掉会让手机以为任务接住了。schema 不认识就弃用并留 .bak，不猜着解析。目录与三个文件路径可替换，测试指向临时目录。
+TaskService.swift: 生命周期与状态机唯一决定处——submit/supplement/abandon/能力报告/当前网页绑定。串行一个活动任务；supplement 上限 5 轮、软超时 5 分钟（只提示）、硬超时 10 分钟；单条输入 16 KiB。abandon 不叫停止，回包里明确写「Mac 上已发出的这次调用可能仍会跑完」。
+AgentRunner.swift: 模型 ↔ 本地工具的循环，**工具执行权始终在 PocketDesk 侧**：模型只能发起 read_page，本文件本地执行后把结果回传，模型不能直接操作电脑。工具集写死在代码里，不接受请求体自定义工具（防止模型给自己发工具）。最多 6 轮；读不到页面不判失败，把原因写进上下文让模型如实说明。
+PageReader.swift: BrowserAdapter 的自有实现，用 AX 读前台浏览器的 URL/标题/正文，**只做只读**——不点击、不填表、不执行脚本。节点/深度/字符三重预算，截断如实上报。M1 用它替代 tt-bridge：后者 CC BY-NC 许可与内置分发冲突且未实测；接口一致，替换实现不动 TaskService。
+RecipientOrder.swift: 小精灵与普通应用的统一接收者顺序（`recipients.json`）。小精灵**不写进 TargetStore 的应用列表**——它不是有 bundleID 的 macOS 应用，混进去会被 /api/activate 与 AX 绑定当成真应用。归一化清理未知/重复引用、补齐新增应用；小精灵缺失时只在首位插一次（迁移语义），之后用户排到哪就保持在哪，不得每次读取重新置顶。
 ScreenStream.swift: ScreenCaptureKit 持续采样目标 30fps、1280/1920 宽 JPEG；只保留最新待编码帧，捕获器确认 idle 时复用静态画面，不落盘。
 FrameServer.swift: 独立画面 WebSocket（HTTP 端口 +2），同屏同质量共享采集器；每客户端一帧在途和一帧最新待发，浏览器呈现 ACK 后续发，超时关闭，最后观看者离开时停采集。
 

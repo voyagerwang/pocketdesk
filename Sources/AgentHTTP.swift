@@ -24,10 +24,21 @@ enum AgentHTTP {
     ]]
     private static let fakePage = "标题：PocketDesk 使用说明\n正文：PocketDesk 把手机变成电脑的输入端与控制台，支持实时输入、触控板与画面查看。"
 
+    /// 任务类路径：**含回环在内**都要求 Bearer。回环豁免会让本机任意进程读到全部任务正文。
+    static func requiresBearer(_ path: String) -> Bool {
+        path.hasPrefix("/api/v1/tasks") || path == "/api/v1/executors" || path == "/api/v1/context/page"
+    }
+
     /// 返回 true 表示已接管该路径（调用方不要继续走 404）。
     static func handle(method: String, path: String, body: Data, fromLoopback: Bool,
+                       authorization: String?, query: String = "",
                        queue: DispatchQueue,
                        respond: @escaping (Int, [String: Any]) -> Void) -> Bool {
+        if requiresBearer(path) {
+            handleTaskRoutes(method: method, path: path, body: body, query: query,
+                             authorization: authorization, respond: respond)
+            return true
+        }
         guard managedPaths.contains(path) else { return false }
         guard fromLoopback else {
             respond(403, ["error": "模型服务配置只允许在这台 Mac 上修改。"])
@@ -178,5 +189,165 @@ enum AgentHTTP {
                 }
             }
         }
+    }
+
+    // MARK: 任务接口（M1，全部要求 Bearer）
+
+    /// 配对主体：由当前 token 派生，换 token 后旧任务不再可见。
+    private static var subject: String { String(Auth.token.prefix(8)) }
+
+    private static func handleTaskRoutes(method: String, path: String, body: Data, query: String,
+                                         authorization: String?,
+                                         respond: @escaping (Int, [String: Any]) -> Void) {
+        guard Auth.verify(authorizationHeader: authorization) else {
+            respond(401, ["error": "未授权：任务接口需要配对 token。"])
+            return
+        }
+        let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+        switch (method, path) {
+        case ("GET", "/api/v1/executors"):
+            respond(200, ["executors": TaskService.executors()])
+        case ("GET", "/api/v1/context/page"):
+            guard let binding = TaskService.currentPageBinding() else {
+                respond(200, ["page": NSNull()])
+                return
+            }
+            respond(200, ["page": ["browser": binding.browser, "url": binding.url, "title": binding.title,
+                                   "domain": binding.domain ?? "", "observedAt": binding.observedAt]])
+        case ("POST", "/api/v1/tasks"):
+            submit(json: json, respond: respond)
+        case ("GET", "/api/v1/tasks"):
+            list(query: query, respond: respond)
+        case ("GET", let target) where target.hasPrefix("/api/v1/tasks/by-request/"):
+            let requestId = String(target.dropFirst("/api/v1/tasks/by-request/".count))
+            guard let task = TaskStore.task(subject: subject, requestId: requestId) else {
+                respond(404, ["error": "这个请求没有对应任务。"])
+                return
+            }
+            respond(200, ["task": task.json()])
+        case ("GET", let target) where target.hasSuffix("/events"):
+            let taskId = String(target.dropFirst("/api/v1/tasks/".count).dropLast("/events".count))
+            events(taskId: taskId, query: query, respond: respond)
+        case ("POST", let target) where target.hasSuffix("/actions"):
+            let taskId = String(target.dropFirst("/api/v1/tasks/".count).dropLast("/actions".count))
+            performAction(taskId: taskId, json: json, respond: respond)
+        case ("GET", let target) where target.hasPrefix("/api/v1/tasks/"):
+            let taskId = String(target.dropFirst("/api/v1/tasks/".count))
+            guard let task = TaskStore.task(id: taskId), task.subject == subject else {
+                respond(404, ["error": "找不到这个任务。"])
+                return
+            }
+            respond(200, ["task": task.json()])
+        default:
+            respond(405, ["error": "不支持的方法。"])
+        }
+    }
+
+    private static func submit(json: [String: Any], respond: (Int, [String: Any]) -> Void) {
+        guard let requestId = json["requestId"] as? String, !requestId.isEmpty else {
+            respond(400, ["error": "缺少 requestId：提交超时后要靠它找回原任务。"])
+            return
+        }
+        guard let text = json["text"] as? String else {
+            respond(400, ["error": "缺少正文。"])
+            return
+        }
+        do {
+            let task = try TaskService.submit(subject: subject, requestId: requestId, text: text,
+                                              context: pageBinding(from: json["context"]))
+            respond(200, ["task": task.json()])
+        } catch {
+            respond(statusFor(error), ["error": error.localizedDescription])
+        }
+    }
+
+    private static func performAction(taskId: String, json: [String: Any], respond: (Int, [String: Any]) -> Void) {
+        guard let name = json["action"] as? String else {
+            respond(400, ["error": "缺少动作名。"])
+            return
+        }
+        guard let task = TaskStore.task(id: taskId), task.subject == subject else {
+            respond(404, ["error": "找不到这个任务。"])
+            return
+        }
+        _ = task
+        do {
+            switch name {
+            case "supplement":
+                let updated = try TaskService.supplement(taskId: taskId, text: json["text"] as? String ?? "",
+                                                         expectedRevision: json["expectedRevision"] as? Int)
+                respond(200, ["task": updated.json()])
+            case "cancel":
+                let updated = try TaskService.abandon(taskId: taskId)
+                // 不叫「已停止」：runtime 不支持真中断，已派发的调用仍会跑完（方案 §7）。
+                respond(200, ["task": updated.json(),
+                              "note": "手机不再等待这个任务；Mac 上已发出的这次调用可能仍会跑完。"])
+            default:
+                respond(400, ["error": "不支持的动作：\(name)"])
+            }
+        } catch {
+            respond(statusFor(error), ["error": error.localizedDescription])
+        }
+    }
+
+    private static func events(taskId: String, query: String, respond: (Int, [String: Any]) -> Void) {
+        guard let task = TaskStore.task(id: taskId), task.subject == subject else {
+            respond(404, ["error": "找不到这个任务。"])
+            return
+        }
+        _ = task
+        let after = Int(queryValue("after", in: query) ?? "") ?? 0
+        let result = TaskStore.events(taskId: taskId, after: after)
+        respond(200, ["events": result.events.map { $0.json() },
+                      "needRefresh": result.needRefresh,
+                      "latestSeq": TaskStore.latestSeq()])
+    }
+
+    private static func list(query: String, respond: (Int, [String: Any]) -> Void) {
+        let mine = TaskStore.all().filter { $0.subject == subject }.sorted { $0.updatedAt > $1.updatedAt }
+        let cursor = Int(queryValue("cursor", in: query) ?? "") ?? 0
+        let page = Array(mine.dropFirst(cursor).prefix(20))
+        let next = cursor + page.count
+        respond(200, ["tasks": page.map { summary($0) },
+                      "nextCursor": next < mine.count ? next : NSNull()])
+    }
+
+    /// 历史摘要：**不返回正文**（方案 §9：分页摘要不回全部正文）。
+    private static func summary(_ task: AgentTask) -> [String: Any] {
+        let head = String(task.text.prefix(80))
+        return ["id": task.id, "status": task.status.rawValue, "statusText": task.status.displayName,
+                "preview": head, "createdAt": task.createdAt, "updatedAt": task.updatedAt,
+                "hasResult": task.result != nil]
+    }
+
+    private static func pageBinding(from value: Any?) -> PageBinding? {
+        guard let dict = value as? [String: Any], let url = dict["url"] as? String, !url.isEmpty else { return nil }
+        return PageBinding(browser: dict["browser"] as? String ?? "",
+                           windowId: dict["windowId"] as? String,
+                           tabId: dict["tabId"] as? String,
+                           url: url,
+                           title: dict["title"] as? String ?? "",
+                           observedAt: (dict["observedAt"] as? Double) ?? Date().timeIntervalSince1970)
+    }
+
+    private static func queryValue(_ name: String, in rawPath: String) -> String? {
+        guard let queryPart = rawPath.components(separatedBy: "?").dropFirst().first else { return nil }
+        for pair in queryPart.components(separatedBy: "&") {
+            let parts = pair.components(separatedBy: "=")
+            if parts.first == name, parts.count > 1 { return parts[1].removingPercentEncoding ?? parts[1] }
+        }
+        return nil
+    }
+
+    /// 业务错误到状态码：冲突类一律 409，让手机能区分"重试"与"改内容再来"。
+    private static func statusFor(_ error: Error) -> Int {
+        if error is TaskStoreError { return 409 }
+        if let service = error as? TaskServiceError {
+            switch service {
+            case .busy, .supplementLimitReached, .revisionMismatch: return 409
+            default: return 400
+            }
+        }
+        return 400
     }
 }

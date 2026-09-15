@@ -16,7 +16,9 @@ multi_image_browser.py: 覆盖 Canvas 不可用时长图 JPEG 预览/上传原�
 
 model-config.test.swift: 隔离验证 `ModelConfigStore` 的纯函数——端点归一化（补尾缀、不重复拼接）与协议白名单（file/ftp/无 scheme 必须拒绝），以及脱敏视图：keyHint 只给首尾、`hasKey` 为真时视图里任何字段都不得出现 Key 主体、短 Key 只回「已保存」；另锁 `isConfigured` 要求三项齐全。不联网、不读写真实配置。
 
-m0-model-probe.cjs: M0 运行时验证探针（方案 §12 M0-A）。只发 HTTP，验证 OpenAI 兼容接口的五项真实能力——文本返回、工具调用闭环（模型请求→本地伪造结果回传→模型给出最终回答）、同上下文续接、请求可中止（中止后 5s 内必须真的结束，否则视为取消不可靠）、错误分类与 usage 是否可读；不支持的能力记 UNKNOWN 不记 PASS。凭证只从 `PD_MODEL_BASE_URL` / `PD_MODEL_API_KEY` / `PD_MODEL_NAME` 三个环境变量读取，不落盘、不进日志。`node tests/m0-model-probe.cjs` EXIT=0 表示无 FAIL。
+m0-model-probe.cjs: M0 运行时验证探针（方案 §12 M0-A）。
+task-store.test.swift: 任务存储的幂等与冲突（同 requestId 同内容回到同一任务、不同内容报 conflict）、事件 seq 单调与 after 增量补取、清理不删活动任务，以及接收者顺序的迁移语义（小精灵只插一次、不被重新置顶、未知引用清理）。经 `TaskStore.resetCache(directory:)` 指向临时目录，不碰用户真实数据。
+agent-client.test.cjs: 在 vm 沙箱里注入最小的 window/localStorage/fetch 替身执行 `Web/agent-client.js`，断言提交必带 requestId 与 Bearer、**回包丢失时先按同一 requestId 查账而不是新建任务**、查账也失败才抛服务端人话，以及轮询节奏常量（2s/1.5x/10s）。只发 HTTP，验证 OpenAI 兼容接口的五项真实能力——文本返回、工具调用闭环（模型请求→本地伪造结果回传→模型给出最终回答）、同上下文续接、请求可中止（中止后 5s 内必须真的结束，否则视为取消不可靠）、错误分类与 usage 是否可读；不支持的能力记 UNKNOWN 不记 PASS。凭证只从 `PD_MODEL_BASE_URL` / `PD_MODEL_API_KEY` / `PD_MODEL_NAME` 三个环境变量读取，不落盘、不进日志。`node tests/m0-model-probe.cjs` EXIT=0 表示无 FAIL。
 
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 

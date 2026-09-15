@@ -116,12 +116,21 @@ assert.ok(/function probeData\(/.test(motion), '必须有真实的有效数据�
 
 /* ---------- 页面引用（改过的资源必须换版本号，否则手机会用缓存） ---------- */
 
-for (const asset of ['app.js?v=3.0.25', 'settings.js?v=3.0.10', 'compose.js?v=3.0.27',
+for (const asset of ['app.js?v=3.0.26', 'settings.js?v=3.0.10', 'compose.js?v=3.0.28',
                      'motion-recognizer.js?v=3.1.0', 'motion-send.js?v=3.1.1',
                      'app-extras.css?v=3.0.9', 'screen.css?v=3.1.1']) {
   assert.ok(html.includes(asset), `index.html 应引用 ${asset}`);
 }
 assert.ok(server.includes('"compose.js"') && server.includes('"settings.js"') && server.includes('"motion-send.js"'),
   'Server.swift 静态白名单必须仍然放行这些脚本');
+// 小精灵的两个脚本：漏进白名单的表现是手机 404，整个入口静默失效且不报错。
+for (const script of ['agent-client.js', 'agent-panel.js']) {
+  assert.ok(html.includes(script), `index.html 应引用 ${script}`);
+  assert.ok(server.includes(`"${script}"`), `Server.swift 白名单必须放行 ${script}`);
+}
+// 小精灵入口不能在页面里退化成一句"AI"文案之外的东西：占位容器必须真实存在。
+for (const id of ['agent-panel', 'agent-status', 'agent-result', 'agent-page']) {
+  assert.ok(html.includes(`id="${id}"`), `index.html 缺少 #${id} 容器`);
+}
 
 console.log('live recovery: 冻结/只读探测/有界恢复/不重放正文、定位意图与代际隔离、免证书降级 全部通过');

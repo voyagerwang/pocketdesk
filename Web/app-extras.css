@@ -664,3 +664,105 @@ main.pad-mode .pad-title {
 .sheet-group .wrist-main { color: var(--fg-muted); font-size: var(--text-sm); font-weight: 600; letter-spacing: 0.04em; }
 .sheet-group .wrist-secondary { color: var(--fg-muted); font-size: var(--text-sm); font-weight: 400; }
 #wrist-sensitivity-row[hidden] { display: none; }
+
+/* ---------- 小精灵：任务卡、来源与当前网页绑定 ---------- */
+/* 沿用现有设计令牌，不引入游离色值；按钮命中区 ≥44px，状态不只靠颜色（方案 §2）。 */
+.agent-panel {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin: 0 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+.agent-status.is-failed { color: var(--danger); }
+.agent-status.is-succeeded { color: var(--fg); }
+/* 活动中的呼吸点：只做辅助，状态本身始终有文字，不靠颜色单打独斗。 */
+.agent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: agent-pulse 1.4s ease-in-out infinite;
+}
+@keyframes agent-pulse { 0%, 100% { opacity: .25 } 50% { opacity: 1 } }
+@media (prefers-reduced-motion: reduce) { .agent-dot { animation: none; opacity: .8 } }
+.agent-slow { font-weight: 500; color: var(--fg-faint); }
+.agent-hint { margin: 0; font-size: 13px; color: var(--fg-faint); }
+.agent-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 42vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.agent-text.is-error { color: var(--danger); }
+.agent-sources { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; }
+.agent-sources-title { color: var(--fg-faint); }
+.agent-source {
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: var(--accent-soft);
+  max-width: 70vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.agent-btn {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+.agent-btn:active { background: var(--surface-3); }
+/* 当前网页绑定：一行摘要 + 解绑，不把正文搬到手机上。 */
+.agent-page {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 8px 10px 8px 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.agent-page-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#agent-page-label { display: flex; gap: 4px; min-width: 0; }
+.agent-page-domain { color: var(--fg-faint); }
+#agent-page-clear {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--fg-faint);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+/* 小精灵图标：四角星，与既有应用图标同尺寸同选中态。 */
+.sprite-icon svg { width: 60%; height: 60%; fill: var(--accent); }
+.target-sprite.selected .sprite-icon svg { fill: var(--accent-ink); }

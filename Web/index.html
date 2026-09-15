@@ -49,6 +49,20 @@
         </div>
       </section>
 
+      <section id="agent-panel" class="agent-panel" aria-label="小精灵当前任务" hidden>
+        <div id="agent-status" class="agent-status" role="status"></div>
+        <div id="agent-result" class="agent-result"></div>
+        <div id="agent-sources" class="agent-sources"></div>
+        <div class="agent-actions">
+          <button id="agent-abandon" class="agent-btn" type="button" hidden>放弃并保留草稿</button>
+          <button id="agent-new" class="agent-btn" type="button" hidden>新任务</button>
+        </div>
+      </section>
+      <div id="agent-page" class="agent-page" hidden>
+        <span id="agent-page-label"></span>
+        <button id="agent-page-clear" type="button" aria-label="不再附带这个网页">×</button>
+      </div>
+
       <section class="compose" aria-label="要输入的文本" data-page-node-id="0ZcVuev8NMMuOPyD02o9O6">
         <textarea id="text" rows="7" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="点这里，用手机键盘或听写输入…"></textarea>
         <div id="history-panel" class="history-panel" hidden data-page-node-id="LNyuhfSQtQRqKlrfGvAsUc">
@@ -169,11 +183,13 @@
       </div>
     </dialog>
     <script src="/device-info.js?v=2"></script>
-    <script src="/app.js?v=3.0.25"></script>
+    <script src="/agent-client.js?v=1"></script>
+    <script src="/agent-panel.js?v=1"></script>
+    <script src="/app.js?v=3.0.26"></script>
     <script src="/pad.js?v=3.0.12"></script>
     <script src="/settings.js?v=3.0.10"></script>
     <script src="/compose-queue.js?v=3.0.17"></script>
-    <script src="/compose.js?v=3.0.27"></script>
+    <script src="/compose.js?v=3.0.28"></script>
     <script src="/screen-geometry.js?v=3.0.2"></script>
     <script src="/screen-gestures.js?v=3.0.12"></script>
     <script src="/screen-pip.js?v=3.0.0"></script>
