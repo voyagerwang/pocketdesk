@@ -116,9 +116,9 @@ assert.ok(/function probeData\(/.test(motion), '必须有真实的有效数据�
 
 /* ---------- 页面引用（改过的资源必须换版本号，否则手机会用缓存） ---------- */
 
-for (const asset of ['app.js?v=3.0.25', 'settings.js?v=3.0.7', 'compose.js?v=3.0.27',
-                     'motion-recognizer.js?v=3.1.0', 'motion-send.js?v=3.1.0',
-                     'app-extras.css?v=3.0.7', 'screen.css?v=3.1.1']) {
+for (const asset of ['app.js?v=3.0.25', 'settings.js?v=3.0.10', 'compose.js?v=3.0.27',
+                     'motion-recognizer.js?v=3.1.0', 'motion-send.js?v=3.1.1',
+                     'app-extras.css?v=3.0.9', 'screen.css?v=3.1.1']) {
   assert.ok(html.includes(asset), `index.html 应引用 ${asset}`);
 }
 assert.ok(server.includes('"compose.js"') && server.includes('"settings.js"') && server.includes('"motion-send.js"'),
