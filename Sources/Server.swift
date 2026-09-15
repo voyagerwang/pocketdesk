@@ -529,26 +529,12 @@ final class Server {
         respond(connection, status: 200, data: png, contentType: "image/png", cacheControl: "public, max-age=86400")
     }
 
-    /// 决定手动选中后该把光标点向哪里来聚焦输入：
-    /// - AX 能检出主输入框（原生 app 可靠）→ 返回该中心点，method="ax"；
-    /// - 检不到（Electron/Chromium 等 AX 不稳定、或后台态不吐树）→ 回退到窗口底部中央，method="heuristic"。
-    /// 聊天 / Agent 工具的撰写框几乎都在窗口底部中央，这个回退对 WorkBuddy / 飞书这类 Electron 应用有效。
-    private static func focusPoint(pid: pid_t, window: CGRect) -> (CGPoint?, String) {
-        if let inputBox = TargetWindowLocator.findInputBoxCenter(pid: pid) {
-            return (inputBox, "ax")
-        }
-        // 窗口底部上方一点（避开最下缘的 resize/状态栏），水平居中——典型的聊天撰写框落点。
-        let y = window.maxY - min(30, max(16, window.height * 0.12))
-        let x = window.midX
-        guard x > window.minX, y > window.minY, y < window.maxY else { return (nil, "none") }
-        return (CGPoint(x: x, y: y), "heuristic")
-    }
-
-    /// 应用选择后的鼠标就位：先**移动到**目标窗口可见区；若 AX 能检出主输入框（聊天 / Agent 工具的撰写框），
-    /// 再**移到输入框并单击聚焦**——这样手动选中聊天/Agent 类工具后可直接开始打字。
-    /// 检不到输入框（非输入类应用、或应用无辅助功能权限）时回退为只移动，行为不变。
-    /// 几何在 PointerGeometry（纯函数）里算，注入只经 PointerExecutor（与其它指针命令同一条队列），
-    /// 回执区分 moved / unchanged / skipped（附原因）——不能用命令预期伪造手机光标。
+    /// 应用选择后的鼠标就位与**输入框聚焦**：先把光标移到目标窗口可见区，再把焦点落进输入框并核验。
+    /// 这两步是分开的职责——旧版把聚焦点击绑在"光标移动"之后，且光标已在窗口内时整条短路：
+    /// 窗口铺满主屏的应用（WorkBuddy/微信这类）鼠标几乎总在窗口矩形里，于是唤醒后从不点输入框，
+    /// 表现为"唤醒了但输入框没激活"，时好时坏完全取决于鼠标当时是否恰好落在窗口外。
+    /// 现在无论光标是否已在位，只要定位意图在（手动选择），聚焦点击这一步都会执行；
+    /// 点击后用 AX 探测核验焦点是否真的落进可输入控件，核不出来的如实回执，不再一律宣称"可开始输入"。
     private func performLocate(pid: pid_t?, generation: UInt64, anchor: CGPoint?, completion: @escaping ([String: Any]) -> Void) {
         guard let pid, pid > 0 else {
             completion(["ok": true, "locate": "skipped", "locateReason": "no-target-process"]); return
@@ -557,35 +543,148 @@ final class Server {
             completion(["ok": true, "locate": "skipped", "locateReason": "no-window"]); return
         }
         let screens = PointerGeometry.activeDisplayRects()
-        // 光标已经在目标窗口的可见区域内且未被遮挡：保持原位，不做任何注入。
+        // 光标已在目标窗口可见区内且未被遮挡：跳过移动，但**不跳过**聚焦输入框。
+        let cursorSettled: Bool
         if let current = CGEvent(source: nil)?.location,
            PointerGeometry.isCursorSettled(at: current, window: resolution.rect, screens: screens, occluders: resolution.occluders) {
-            completion(["ok": true, "locate": "unchanged"]); return
+            cursorSettled = true
+        } else {
+            cursorSettled = false
+        }
+        guard let pointer = pointerExecutor else {
+            completion(["ok": true, "locate": "skipped", "locateReason": "pointer-unavailable"]); return
+        }
+        if cursorSettled {
+            focusAndVerify(pid: pid, window: resolution.rect, pointer: pointer, anchor: anchor) { focus in
+                completion(["ok": true, "locate": "unchanged"].merging(focus) { _, new in new })
+            }
+            return
         }
         switch PointerGeometry.landing(window: resolution.rect, screens: screens, occluders: resolution.occluders) {
         case .failure(let reason):
             completion(["ok": true, "locate": "skipped", "locateReason": reason.rawValue])
         case .success(let point):
-            guard let pointer = pointerExecutor else {
-                completion(["ok": true, "locate": "skipped", "locateReason": "pointer-unavailable"]); return
-            }
             pointer.locate(to: point, generation: generation, anchor: anchor) { outcome in
                 switch outcome {
                 case .moved(let landed):
-                    // 手动选中聊天 / Agent 工具时，把光标落到输入框并单击聚焦，让用户直接开始打字。
-                    // 优先用 AX 精确找输入框（原生 app 可靠）；Electron 等 AX 不稳定场景下回退到窗口底部中央
-                    // （聊天/Agent 工具的撰写框几乎都在这个位置），保证 WorkBuddy / 飞书这类也能点进输入框。
-                    let (inputPoint, method) = Self.focusPoint(pid: pid, window: resolution.rect)
-                    if let p = inputPoint { pointer.click(at: p) }
-                    completion(["ok": true, "locate": "moved", "x": Double(landed.x), "y": Double(landed.y),
-                                "clickedInput": inputPoint != nil, "inputMethod": method])
+                    self.focusAndVerify(pid: pid, window: resolution.rect, pointer: pointer, anchor: anchor) { focus in
+                        completion(["ok": true, "locate": "moved", "x": Double(landed.x), "y": Double(landed.y)]
+                            .merging(focus) { _, new in new })
+                    }
                 case .unchanged:
-                    completion(["ok": true, "locate": "unchanged"])
+                    // 定位点已在位同样是"光标就位但没点过输入框"，聚焦步骤照走。
+                    self.focusAndVerify(pid: pid, window: resolution.rect, pointer: pointer, anchor: anchor) { focus in
+                        completion(["ok": true, "locate": "unchanged"].merging(focus) { _, new in new })
+                    }
                 case .skipped(let reason):
                     completion(["ok": true, "locate": "skipped", "locateReason": reason])
                 }
             }
         }
+    }
+
+    /// 把焦点点进输入框并核验。三段都是有界的：
+    /// ①找点：AX 优先；Electron 刚激活时 AX 树可能还没建成（findInputBoxCenter 走空树返回 nil），
+    ///   先经 InputFocus.focusedElement 触发 AXManualAccessibility 并轮询等待，再找一次；
+    ///   仍没有才用启发式落点（窗口底部中央）。
+    /// ②点击：真实单击落焦点（mousedown 抢焦点，40ms 间隔与 tap 同款时序）。
+    /// ③核验：probeFocus 看焦点是否真是可输入控件。unknown（Electron 盲应用读不出）时再触发一次
+    ///   AXManualAccessibility 后重探；notEditable 且第一击用的是 AX 点时，换启发式点补一击——
+    ///   AX 树对 Chromium"能读到但坐标/角色对不上"的场景实测存在，不能一票否决。
+    /// 全程最多两击，结束把结论（focused yes/no/unknown + 人话 note）交回回执并写动作日志，
+    /// 让控制台"最近动作"能看到聚焦到底成没成——不再有静默失败。
+    private func focusAndVerify(pid: pid_t, window: CGRect, pointer: PointerExecutor,
+                                anchor: CGPoint?, completion: @escaping ([String: Any]) -> Void) {
+        let appName = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "(未知应用)"
+        // 等待激活期间用户动了鼠标就不补这一击：不能在用户手势进行中突然把光标拉去点输入框。
+        if let anchor, let current = CGEvent(source: nil)?.location,
+           hypot(current.x - anchor.x, current.y - anchor.y) > 3 {
+            completion(["clickedInput": false, "inputFocused": "unknown",
+                        "inputNote": "用户正在使用鼠标，未点击输入框"])
+            return
+        }
+        func clickAndProbe(_ point: CGPoint, method: String, then finish: @escaping ([String: Any]) -> Void) {
+            pointer.click(at: point) { clicked in
+                guard clicked else {
+                    finish(["clickedInput": false, "inputFocused": "unknown", "inputNote": "锁屏或拖动中，未执行点击"])
+                    return
+                }
+                var probe = InputFocus.probeFocus(pid: pid)
+                if probe.verdict == .unknown {
+                    // Electron 盲应用：激活 AXManualAccessibility 并等树建成后再探一次。
+                    _ = InputFocus.focusedElement(pid: pid)
+                    probe = InputFocus.probeFocus(pid: pid)
+                }
+                switch probe.verdict {
+                case .editable:
+                    finish(["clickedInput": true, "inputMethod": method, "inputFocused": "yes",
+                            "inputNote": probe.note])
+                case .notEditable:
+                    finish(["clickedInput": true, "inputMethod": method, "inputFocused": "no",
+                            "inputNote": probe.note])
+                case .unknown:
+                    finish(["clickedInput": true, "inputMethod": method, "inputFocused": "unknown",
+                            "inputNote": probe.note])
+                }
+            }
+        }
+        var axPoint = TargetWindowLocator.findInputBoxCenter(pid: pid)
+        if axPoint == nil {
+            // 树没建成的典型时刻：激活回执一到就走这里。触发 AXManualAccessibility（内部有界轮询）再试一次。
+            _ = InputFocus.focusedElement(pid: pid)
+            axPoint = TargetWindowLocator.findInputBoxCenter(pid: pid)
+        }
+        if let axPoint {
+            clickAndProbe(axPoint, method: "ax") { first in
+                if first["inputFocused"] as? String == "no" {
+                    // AX 检出的点没把焦点放进去（读到的元素未必是用户面前的撰写框）：换启发式点补一击再核验。
+                    let (fallback, fallbackMethod) = Self.focusPointFallback(window: window)
+                    if let fallback {
+                        self.focusClickLog(appName: appName, payload: first)
+                        clickAndProbe(fallback, method: fallbackMethod) { second in
+                            self.focusClickLog(appName: appName, payload: second)
+                            completion(second)
+                        }
+                        return
+                    }
+                }
+                self.focusClickLog(appName: appName, payload: first)
+                completion(first)
+            }
+        } else {
+            let (fallback, method) = Self.focusPointFallback(window: window)
+            guard let fallback else {
+                completion(["clickedInput": false, "inputFocused": "unknown", "inputNote": "窗口几何无效，无落点"])
+                return
+            }
+            clickAndProbe(fallback, method: method) { payload in
+                self.focusClickLog(appName: appName, payload: payload)
+                completion(payload)
+            }
+        }
+    }
+
+    /// 启发式落点：与 focusPoint 的 AX 路径解开的独立入口（不重复跑一遍树遍历）。
+    private static func focusPointFallback(window: CGRect) -> (CGPoint?, String) {
+        let y = window.maxY - min(30, max(16, window.height * 0.12))
+        let x = window.midX
+        guard x > window.minX, y > window.minY, y < window.maxY else { return (nil, "none") }
+        return (CGPoint(x: x, y: y), "heuristic")
+    }
+
+    /// 聚焦结论写进动作日志：控制台第 5 面板按"绿/琥珀/红"三色展示，聚焦失败不再只能靠用户肉眼看手机提示。
+    private func focusClickLog(appName: String, payload: [String: Any]) {
+        let focused = payload["inputFocused"] as? String ?? "unknown"
+        let note = payload["inputNote"] as? String ?? ""
+        let detail: String
+        switch focused {
+        case "yes": detail = "已点进 \(appName) 的输入框。"
+        case "no": detail = "点击了输入框但焦点没落进去（\(note)）。"
+        default: detail = "已尝试点击输入框，无法确认焦点（\(note)）。"
+        }
+        ExecutionLog.shared.append(kind: "focus", label: "聚焦输入框",
+                                   outcome: focused == "yes" ? .delivered : focused == "no" ? .failed : .sent,
+                                   detail: detail, frontApp: appName)
     }
 
     private func respond(_ connection: NWConnection, status: Int, json: Any) {

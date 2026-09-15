@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 AppKit Accessibility 与 Util 前台观测。
  * [OUTPUT]: 提供 InputFocus 三态焦点探测、带 PID/聚焦窗口/WebArea 校验的安全鼠标锚点、有界查找、显式聚焦及无正文诊断（字符数量、占位文本相等关系与选区）。
  * [POS]: Sources 的焦点能力边界；InputExecutor 决定是否允许聚焦，全屏绑定输入只读探测。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md。focusedElement 读不到焦点时对 Electron 应用写 AXManualAccessibility（附 AXEnhancedUserInterface）激活其 AX 树：先 false 再 true 强制状态变化、按 pid 1s 节流可重写，异步开树有界轮询，使清空等可核验路径对 AX 盲的 Electron 应用生效；不改变"读不到控件不盲删"的红线
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md。focusedElement 读不到焦点时对 Electron 应用写 AXManualAccessibility（附 AXEnhancedUserInterface）激活其 AX 树：先 false 再 true 强制状态变化，使清空等可核验路径对 AX 盲的 Electron 应用生效；但**树确认存活过（成功读到过焦点元素）的 pid 不因瞬时读抖动重写激活属性**——重写会强制 Chromium 重建整棵树、作废全部已捕获 AX 引用（实时输入第二字冻结/清空连败的元凶），活树 pid 只做 300ms 有界重试，确需重写时冷却拉长到 10s；撞节流不放弃而是继续等待重读。另提供 focusedApplicationPID（系统级键盘焦点归属，打字落点真值，激活核验与逐键门禁用；窗口 z 序仅供界面展示）。不改变"读不到控件不盲删"的红线
  */
 import AppKit
 
@@ -145,11 +145,22 @@ enum InputFocus {
     // AXManualAccessibility=true 是 Electron 官方的开启方式；开树是异步的，激活后有界轮询等待。
     // 每个 pid 只主动激活一次：真正的盲应用不应在每次聚焦查询时反复付这几百毫秒。
     static func focusedElement(pid: pid_t) -> AXUIElement? {
-        if let element = readFocusedElement(pid: pid) { return element }
-        guard activateManualAccessibility(pid: pid) else { return nil }
+        if let element = readFocusedElement(pid: pid) { noteTreeAlive(pid); return element }
+        // 树确认存活过的 pid：读不到焦点多半是瞬时抖动（Chromium 忙、树刷新中），有界重试即可。
+        // 绝不为此重写激活属性——AXManualAccessibility false→true 会强制 Chromium 重建整棵 AX 树，
+        // 把本轮已捕获的全部 AX 引用作废（实时输入在第二个字冻结、清空连败的直接元凶）。
+        if treeAlivePids.contains(pid) {
+            for _ in 0..<3 {
+                usleep(100_000)
+                if let element = readFocusedElement(pid: pid) { return element }
+            }
+        }
+        // 从未见过树，或活树判定连 300ms 都救不回来：才走激活写入（内部按 pid 节流）。
+        // 撞节流也不直接放弃——写入已在路上，树正在异步构建，继续等待重读。
+        _ = activateManualAccessibility(pid: pid)
         for _ in 0..<6 {
             usleep(100_000)
-            if let element = readFocusedElement(pid: pid) { return element }
+            if let element = readFocusedElement(pid: pid) { noteTreeAlive(pid); return element }
         }
         return nil
     }
@@ -167,16 +178,37 @@ enum InputFocus {
         return nil
     }
 
+    /// 系统级键盘焦点归属的 pid：CGEvent 键入的内容会落进谁，以它为准。
+    /// 与 Util.frontmostApp 的分工：那是"用户看到哪个窗口在最上"（窗口 z 序），用于界面展示；
+    /// 这里是"谁的应用拿着键盘焦点"，用于激活核验与逐键门禁。后台 agent 激活 Electron 应用
+    /// 常出现"窗口抬到最上、活跃应用还是别人"的半激活态（实测飞书），两者在那一刻分叉。
+    static func focusedApplicationPID() -> pid_t? {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(),
+                                            kAXFocusedApplicationAttribute as CFString, &raw) == .success,
+              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(raw as! AXUIElement, &pid) == .success, pid > 0 else { return nil }
+        return pid
+    }
+
     private static var manualAccessibilityAttempts: [pid_t: TimeInterval] = [:]
     private static let activationLock = NSLock()
+    /// 至少成功读到过一次焦点元素的 pid：AX 树确认存活过。激活属性对这些 pid 不再轻易重写。
+    private static var treeAlivePids: Set<pid_t> = []
+    private static func noteTreeAlive(_ pid: pid_t) {
+        activationLock.lock(); defer { activationLock.unlock() }
+        treeAlivePids.insert(pid)
+    }
     /// 返回 true 表示本次真的写入了激活属性（调用方需等待树构建后重试）；1 秒内已写过则返回 false。
-    /// 刻意**不永久缓存失败**：激活写入可能被应用丢失或在其重启 AX 状态后被吞（实测 ZCode 出现过
-    /// 写入后长时间不开树、重写才生效），按 1s 节流反复补写，代价对真正的盲应用也只是每次聚焦
-    /// 查询多一次属性写 + 600ms 有界等待，且这些调用点（建轮/清空/探测）都是用户动作频次。
+    /// 树存活过的 pid 冷却拉长到 10 秒：短冷却 + 每次查询都可能重写，会把"一次读抖动"放大成
+    /// "整棵树重建"，正在进行的实时输入与清空校验会被连环作废（实测飞书）。重写保留自愈能力，
+    /// 只是代价被限制在"树真的死了"的频率上。
     private static func activateManualAccessibility(pid: pid_t) -> Bool {
         activationLock.lock(); defer { activationLock.unlock() }
         let now = ProcessInfo.processInfo.systemUptime
-        if let last = manualAccessibilityAttempts[pid], now - last < 1.0 { return false }
+        let cooldown: TimeInterval = treeAlivePids.contains(pid) ? 10.0 : 1.0
+        if let last = manualAccessibilityAttempts[pid], now - last < cooldown { return false }
         manualAccessibilityAttempts[pid] = now
         let app = AXUIElementCreateApplication(pid)
         // Chromium 侧识别这两个属性并开始构建 AX 树：AXManualAccessibility 是 Electron 官方开关，

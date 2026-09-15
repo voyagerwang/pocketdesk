@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 Foundation 的 FileManager/Codable 与 AppKit 的 NSWorkspace；消费 Models 的 TargetConfig/ShortcutConfig/ShortcutKeys。
  * [OUTPUT]: 对外提供 TargetStore（targets.json/shortcuts.json 读写、目标解析、appURL 定位、自定义图标路径与孤儿图标清理、旧 shortcuts.json 到 hotkey 语义串的迁移与启动时别名归一化回写）。
  * [POS]: Sources 的配置持久化层；Server 把它暴露为 /api/targets 等端点，InputExecutor 用 resolve/appURL 定位应用。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: save 对只有 path 的目标按路径反查回填 bundleID（历史遗留的身份缺口在每次保存时自愈）；变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 import Foundation
@@ -32,13 +32,21 @@ final class TargetStore {
     }
 
     func save(_ list: [TargetConfig]) {
-        targets = list
+        // 只带 path 不带 bundleID 的目标（控制台"添加应用"的历史遗留）按路径反查回填：
+        // 前台判定/激活定位对 bundleID 的依赖远多于路径，路径字符串一变身份就失配。
+        let repaired = list.map { config -> TargetConfig in
+            guard config.bundleID == nil, let path = config.path else { return config }
+            var next = config
+            next.bundleID = Bundle(url: URL(fileURLWithPath: path))?.bundleIdentifier
+            return next
+        }
+        targets = repaired
         try? FileManager.default.createDirectory(at: TargetStore.supportDirectory, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(list) {
+        if let data = try? JSONEncoder().encode(repaired) {
             try? data.write(to: TargetStore.configFile, options: .atomic)
         }
         // 清理已删除目标遗留的自定义图标。
-        let live = Set(list.map { $0.id })
+        let live = Set(repaired.map { $0.id })
         if let files = try? FileManager.default.contentsOfDirectory(atPath: TargetStore.iconDirectory.path) {
             for file in files where file.hasSuffix(".png") && !live.contains(String(file.dropLast(4))) {
                 try? FileManager.default.removeItem(at: TargetStore.iconDirectory.appendingPathComponent(file))

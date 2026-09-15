@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Sources/ImagePastePolicy.swift 的纯时序决策。
- * [OUTPUT]: 验证 UU 文字粘贴在 Cmd+V 前留出剪贴板同步时间、Chrome 多图每张 Cmd+V 前后采用保守间隔，其他应用保持既有节奏。
+ * [OUTPUT]: 验证 UU 文字粘贴在 Cmd+V 前留出剪贴板同步时间、Chrome 多图每张 Cmd+V 前后采用保守间隔，其他应用保持既有节奏，画布多图的方向键分离节奏合法。
  * [POS]: tests 的图片粘贴策略隔离回归；不访问剪贴板、不注入按键、不连接真实飞书。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -22,6 +22,12 @@ enum ImagePastePolicyTests {
             rolesFromFocused: ["AXTextArea", "AXGroup", "AXWebArea"]) == 0)
         precondition(ImagePastePolicy.boundClickScopeIndex(
             rolesFromFocused: ["AXButton", "AXToolbar", "AXWindow"]) == nil)
+
+        // 画布退化路径：白板没有输入框可锚定，相邻图片用方向键（右/下）把刚粘贴的
+        // 选中元素挪开，避免连续粘贴都落在视口中心完全重叠。
+        precondition(!ImagePastePolicy.canvasNudgeKeycodes.isEmpty)
+        precondition(ImagePastePolicy.canvasNudgeKeycodes.allSatisfy { $0 == 124 || $0 == 125 })
+        precondition(ImagePastePolicy.canvasNudgeGapMicros > 0)
 
         let chromeSingle = ImagePastePolicy.timing(bundleIdentifier: "com.google.Chrome", imageCount: 1)
         precondition(chromeSingle == ImagePasteTiming(clipboardSettleMicros: 0, consumptionMicros: 1_000_000,

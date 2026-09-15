@@ -2,7 +2,8 @@
  * [INPUT]: 消费首页 DOM、HTTP 配置/状态与逐图上传接口、浏览器文件读取/图片解码和本地存储；合规 JPEG 保留原始字节，其他图片经 Canvas 转换。
  * [OUTPUT]: 提供配对鉴权、目标选择（显式点击委托输入层开启隔离的新草稿轮次）、历史/快捷键，以及最多 8 张图片的原生多选追加、横向预览、逐张删除、批次幂等上传和处理完成门闩。
  *           快捷键按钮条对 action 为 draft.clear 的项走本地分支：调 window.pocketdeskClearDraft()，不投递按键；
- *           该全局缺失时如实报错，不做静默 no-op。
+ *           该全局缺失时如实报错，不做静默 no-op。唤醒回执按服务端聚焦核验结论分级提示
+ *           （clickedInput/inputFocused：已点进输入框 / 请点一下输入框 / 未能确认聚焦），不再一律说"可开始输入"。
  * [POS]: Web 首页编排与共享状态；输入委托 compose.js，控制连接委托 pad.js，全屏委托 screen.js。
  * [PROTOCOL]: boot() 对齐前台目标后主动 activateTarget 一次，使手机“默认选中”与实际桌面绑定就绪对齐（与手动点目标等价，不移动鼠标、不重置草稿）；变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -172,8 +173,17 @@ async function activateTarget(targetId, locate = false) {
     if (!response.ok) throw new Error(result.error || '无法唤醒应用。');
     // 迟到的回执：这次选择已经不是最新的了，就此止步，不改动任何界面状态或草稿。
     if (generation !== selectGeneration) return false;
+    // 回执如实分级：旧版只要 200 就说"可开始输入"，焦点没落进去时用户只看到一次"没反应"，
+    // 每次都误以为又坏了。locate=unchanged 也可能点了输入框（光标本就在窗口内），
+    // 所以以 clickedInput / inputFocused 为准，不以移动结论为准。
+    let tail = '';
+    if (result.clickedInput) {
+      if (result.inputFocused === 'yes') tail = '已点进输入框，可直接输入。';
+      else if (result.inputFocused === 'no') tail = '没能把焦点放进输入框，请在电脑上点一下输入框再输入。';
+      else tail = '已尝试点击输入框，未能确认聚焦；打字无效时请点一下电脑输入框。';
+    }
     // 激活结果与鼠标结果分开：定位跳过不等于应用没唤醒，这里只用 note 说明"窗口在另一块屏"这类事实。
-    message(`${target ? target.name : targetId} 已置于电脑前台，可开始输入。${result.note ? '（' + result.note + '）' : ''}`);
+    message(`${target ? target.name : targetId} 已置于电脑前台。${tail}${result.note ? '（' + result.note + '）' : ''}`);
     // 按应用偏好切面板：触控板型应用直接展开触控板（收起键盘），输入型保持输入区。
     // 只在手动激活时切——前台自动跟随不切，避免被动抢走用户正打字的键盘。
     if (target?.openPanel === 'pad') enterPadMode(); else exitPadMode();

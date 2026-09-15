@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 Foundation 的 FileManager 与 AppKit 的 NSWorkspace.displayName；消费 Models 的 TargetConfig。
  * [OUTPUT]: 对外提供 AppDiscovery（安装应用扫描——含 .app 平铺与 X.localized 包装两种形态、名称/路径搜索、新增目标的安全 slug 生成）。
  * [POS]: Sources 的应用发现层；Server 的 /api/apps 搜索与 /api/targets 的 id 补齐逻辑依赖它。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: search 结果随应用路径带出 bundleID（控制台"添加应用"只消费这里的字段，缺了它目标身份只剩路径字符串）；变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 import Foundation
@@ -51,7 +51,15 @@ enum AppDiscovery {
         let matched = trimmed.isEmpty ? apps : apps.filter {
             $0.name.localizedCaseInsensitiveContains(trimmed) || $0.path.localizedCaseInsensitiveContains(trimmed)
         }
-        return matched.prefix(limit).map { ["name": $0.name, "path": $0.path] }
+        return matched.prefix(limit).map { app -> [String: Any] in
+            // bundleID 必须随结果带出：控制台"添加应用"只拿这里的字段建目标，缺了它
+            // 目标身份就只剩一个路径字符串（换目录/别名路径即失配，前台判定跟着误报）。
+            var entry: [String: Any] = ["name": app.name, "path": app.path]
+            if let bundleID = Bundle(url: URL(fileURLWithPath: app.path))?.bundleIdentifier {
+                entry["bundleID"] = bundleID
+            }
+            return entry
+        }
     }
 
     static func makeID(forName name: String, existing: [TargetConfig]) -> String {
