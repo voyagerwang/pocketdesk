@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 JSONSerialization/JSONEncoder，消费 ModelConfigStore 与 ModelClient。
- * [OUTPUT]: 对外提供 AgentHTTP.handle——承接 /api/v1 下「本机管理类」端点：模型服务配置的读写与连通性实测。
+ * [OUTPUT]: 建任务时传递控制会话以便执行核验；对外提供 AgentHTTP.handle——承接 /api/v1 下「本机管理类」端点：模型服务配置的读写与连通性实测。
  * [POS]: Sources 的 Agent 路由层；Server 只做一行委托，避免它继续膨胀越过 800 行红线。
  *        这些端点**只允许回环访问**（本机控制台），与手机侧的任务接口（M1 的 /api/v1/tasks/…）分开：
  *        任务接口面向配对手机、必须带 Bearer；本文件的管理端点面向本机浏览器，靠回环判定。
@@ -254,7 +254,7 @@ enum AgentHTTP {
         }
         do {
             let task = try TaskService.submit(subject: subject, requestId: requestId, text: text,
-                                              context: pageBinding(from: json["context"]))
+                                              context: pageBinding(from: json["context"]), controlSession: json["controlSession"] as? String)
             respond(200, ["task": task.json()])
         } catch {
             respond(statusFor(error), ["error": error.localizedDescription])

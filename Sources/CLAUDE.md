@@ -32,7 +32,7 @@ NetworkPeer.swift: 基于真实远端地址判断回环，控制与画面握手�
 AgentModels.swift: 任务领域模型——TaskStatus（accepted/running/needsInput/succeeded/failed/**abandoned**/verifying）、TaskMessage、PageBinding、TaskUsage、AgentTask、TaskEvent。abandoned 是刻意的命名：M1 的 runtime 不支持真正取消，用户点「放弃」只表示手机不再等待，任务仍会在 Mac 上跑完，叫「已停止」就是谎报。PageBinding 的 tabId **可选**（自有 AX 拿不到标签页 ID），漂移校验以 URL + 标题为准。用量读不到时整体 unknown，不允许拿 0 冒充。
 TaskStore.swift: 任务与事件的唯一权威存储——`tasks.json`（原子整体写）+ `events.jsonl`（append-only，逐行解析跳过半行）+ `dedupe.json`（主体 + requestId 去重）。claim 是幂等接受：同键同内容回到同一任务，同键不同内容抛 conflict（绝不派第二个）。写失败必须抛出，静默吞掉会让手机以为任务接住了。schema 不认识就弃用并留 .bak，不猜着解析。目录与三个文件路径可替换，测试指向临时目录。
 TaskService.swift: 生命周期与状态机唯一决定处——submit/supplement/abandon/能力报告/当前网页绑定。串行一个活动任务；supplement 上限 5 轮、软超时 5 分钟（只提示）、硬超时 10 分钟；单条输入 16 KiB。abandon 不叫停止，回包里明确写「Mac 上已发出的这次调用可能仍会跑完」。
-AgentRunner.swift: 模型 ↔ 本地工具的循环，**工具执行权始终在 PocketDesk 侧**：模型只能发起 read_page，本文件本地执行后把结果回传，模型不能直接操作电脑。工具集写死在代码里，不接受请求体自定义工具（防止模型给自己发工具）。最多 6 轮；读不到页面不判失败，把原因写进上下文让模型如实说明。
+AgentRunner.swift: 模型 ↔ 本地工具的循环，**工具执行权始终在 PocketDesk 侧**：模型发起网页、应用与飞书工具请求，本文件核验租约并本地执行后回传，模型不能直接操作电脑。工具集写死在代码里，不接受请求体自定义工具（防止模型给自己发工具）。最多 12 轮；读不到页面不判失败，把原因写进上下文让模型如实说明。
 PageReader.swift: BrowserAdapter 的自有实现，用 AX 读前台浏览器的 URL/标题/正文，**只做只读**——不点击、不填表、不执行脚本。节点/深度/字符三重预算，截断如实上报。M1 用它替代 tt-bridge：后者 CC BY-NC 许可与内置分发冲突且未实测；接口一致，替换实现不动 TaskService。
 RecipientOrder.swift: 小精灵与普通应用的统一接收者顺序（`recipients.json`）。小精灵**不写进 TargetStore 的应用列表**——它不是有 bundleID 的 macOS 应用，混进去会被 /api/activate 与 AX 绑定当成真应用。归一化清理未知/重复引用、补齐新增应用；小精灵缺失时只在首位插一次（迁移语义），之后用户排到哪就保持在哪，不得每次读取重新置顶。
 ScreenStream.swift: ScreenCaptureKit 持续采样目标 30fps、1280/1920 宽 JPEG；只保留最新待编码帧，捕获器确认 idle 时复用静态画面，不落盘。
@@ -42,6 +42,8 @@ InputActivity.swift: 进程级"正在输入"活动闸（`InputActivity.shared` +
 
 LiveDraft.swift: 单轮文本事务 + **五态判定机**（`DraftState`）：active / interrupted（焦点暂时丢失）/ recoverable（原目标与原编辑位置都回来且电脑内容仍等于最后确认状态）/ needsUserFocus（目标回来了但证不明是原位置）/ committed（本轮已封闭，新输入必须新建草稿）。空框接管、全文/UTF-16 选区核验、replace/selection/deferred 固定模式、冲突停止、显式重试核验原文/上次尝试值与提交封闭，系统访问依赖 DraftEditor 或选区写入回调。恢复链的关键约束：`probe()` 是**只读**的——它只核验绑定、前台与内容，命中 recoverable 时通过 `noteProbe` 重新对齐基线，**绝不写入任何字符**，续接交给调用方按公共前缀发差量；`classify()` 里"写入结果未知但编辑元素仍聚焦"判定为 interrupted（可自愈）而不是 needsUserFocus，避免把一次短暂读回延迟升级成"必须用户点一下"。另有 `clear(performClear:)`——清空是**冻结态的唯一出路**：它不比旧基线（基线被快捷键通道或应用自身重建编辑器打乱后就永久分叉，而清空的结果与当前内容无关，属幂等写入，放宽这条没有重复输入风险），`performClear` 必须自己证明"删干净了"才推进状态（纸面放宽不换取凭空认账），成功后清正文、解冻、回到 active 让同一轮继续输入；唯一的例外是**结果未知的停止**（图片已粘贴、提交未确认）不给清空开后门，否则会把可能已生效的内容抹掉。
 AXDraftEditor.swift: 纯文本 AX 适配；首版限定 TextEdit 已保存的 .txt 空白文档，整值写入并读回，其他应用不能只凭可写标记开放。
+
+KeyboardDraftWriter 的 Electron 局部读回例外：WorkBuddy 整页 AXValue 在输入框之外同时漂移时，仅在总长度不变、光标严格命中、且光标前恰为本次非空插入片段时以当前快照接管基线；删除不走此放宽，仍须严格读回，防止误删被当成成功。
 
 KeyboardDraftWriter.swift: 通用实时输入；已有正文和插入选区作为边界，追加立即输入，修订一次选中本轮旧尾部再替换；AX 可读时核验前后文/选区，否则仅有绑定及有序键流证据，回执不能声称已核验；核验恢复只接受原控件已落入尝试全文，或明确未落键且基线相符的状态，不把旧读数视为未输入证明；失败通过 diagnostic 提供阶段、正文是否相等、UTF-16 长度和选区，不记录正文，由 InputExecutor 写入既有动作日志。跨弹窗恢复直接复用它既有的**公共前缀差量**算法：只补"最后确认状态"之后的部分，不是整段重放。`update` 删除三级降级且全部读回门控：①AX 选区一次选中差量（连败退避制——失败不再一票否决永久禁用，连败 3 次本会话才放弃、成功即清零；旧版一次读回迟滞就把听写会话打进逐字退格）；②键盘路径先试 **Cmd+A 单和弦整框全选**（仅限旧文恰为整个输入框、光标在文末无选区、start==0，读回确认选区后交由注入覆盖；没立住先按 Right 还原光标并读回确认，还原不了如实失败，绝不盲删）；③都没立住才逐字 Backspace。空替换只补一次退格删选区，逐字路径已删净不再补刀（旧版在此多发一次退格把共同前缀多删一字，读回永远对不上目标而冻结草稿——听写时"边说边删"的帮凶之一）。选区"立住"后落键读回仍对不上即视为 AX 读数说谎，AX 与 Cmd+A 本会话一并停用。另有 `clearAll()`（整段清空）与 `update` 的两点关键差别，都是为"清空之后再不同步"这个死法准备的：①**不校验创建时的基线**（基线是捕获那一刻按 prefix/suffix 算的，被快捷键通道或应用重建编辑器打乱后永久分叉，拿它当门槛就永远过不去；清空幂等故可放宽）；②**用当前实际内容算选区**，不拿旧的 prefix/suffix 反推"本轮那一段"——实况里"清空后每次还剩第一个字"就出在旧 `update` 从 `start`（捕获时光标位）起算选区，长度却按全量算，首位那截永远删不到。两条执行路径，成功判据始终是"**读回为空**"，证明不了就如实失败：①AX 设全选并读回确认选区，落位才按一次退格；②①读不回选区或"落了却删不净"（Chromium 对 AX 写选区"报告成功却不落 DOM"，实测 ZCode 选区读回通过、退格却删不动）时，改发**真实键盘 Cmd+A + 退格**并按结果核验（焦点受同一绑定与可编辑角色约束，读得到快照才进得来），两轮删不动即停手如实失败、保留正文。
 
@@ -54,3 +56,20 @@ SecureTransport.swift: 从本机私有 DER 证书与私钥在**内存**中装配
 LockScreenInput.swift: 锁屏专用一次性挑战与物理按键执行；绑定租约和会话代际，取消/解锁失效，不经草稿与日志，不自动重试。
 
 DeviceConnections.swift: 已鉴权浏览器心跳的设备描述与连接记录；45 秒超时、30 天/500 条保留、重启不恢复在线态。描述不能作为身份依据，GET /api/devices 仅回环来源可读，控制态经服务端租约校验。
+
+AppOperator.swift: 「打开本机应用」执行器（路径 B）——受信任目录白名单（/System/Applications、/Applications、/Applications/Utilities、~/Applications）内的 `.app` 才能启动，中文别名表（飞书→lark/feishu、微信→wechat…）把模型给的中文名映到包名/标识符关键字，`resolve` 按显示名/包名/包标识精确或包含匹配打分，`open` 走 `NSWorkspace.open`。与 BrowserOperator（路径 A 开网页）对称，由 AgentRunner 核验控制租约后调用。tt-bridge（CC BY-NC）只覆盖浏览器、不启动应用，故本能力为原生自研、未嵌入其代码。
+BrowserOperator.swift: 「打开网页」执行器——只接受 http(s) 绝对地址，其余一律拒绝，由默认浏览器新标签页打开。与 PageReader（只读）对称，写入前由 AgentRunner 核验控制租约。
+AgentAppDispatch.swift: Agent 派单适配层——把「让某个 Agent 做件事」落到现有输入事务上（不另起第二套键盘执行器）。只支持控制台已配置的 Cola / Codex / ZCode / WorkBuddy / ChatGPT，且**不支持聊天联系人发信**；要求目标应用可激活、前台是它、焦点在可编辑控件。投递前先 `clearComposerForAgentDispatch` 做 **Cmd+A + Delete 清空**，再交 `executor.mirror(text, submit:true)` 写入并提交。**刻意不校验「输入框必须为空」**：WorkBuddy 等 Chromium 应用的 AXValue 读到的是**占位提示**（「今天帮你做些什么？ @ 引用对话文件，/ 调用技能与指令」，且每次读都不一样），空框时也永远非空，该判据在这些应用上恒为假、派单会被永久拒绝。投递前持久写一条 `dispatch_to_app` 工具消息，保证模型不会自动重复提交。回执区分 committed（提交动作已发出，不代表对方已完成）与待核对，失败一律如实上报、不重试。
+
+派单接续契约（2026-09-18）：AgentModels 的可选 handoffTargetId/name/requested 保持旧任务解码兼容，HTTP 只暴露接续事实，不暴露控制会话。AgentRunner 从 switchAfter 保存明确切换意图；AgentAppDispatch 仅 committed 后持久保存配置中的精确目标 ID/name，手机不解析模型文字猜接收者。
+
+应用解析修正：Server 将当前 TargetStore 配置注入 AgentRunner.resolveApp，AppOperator 优先匹配配置名称/ID，再以本地化显示名、包名、文件名、bundle ID 查找；忽略空格，UU/UU远程 映射 UURemote。最高分多候选时拒绝猜测。
+
+FeishuCLI.swift: 固定 argv 的本机 CLI 执行器，继承当前用户授权，显式 user 身份；超时终止、限量读取、脱敏错误，不暴露凭证或任意 shell。
+FeishuMessaging.swift: 个人/群聊纯文本发送适配，联系人查询唯一才发送，同名候选存任务并等待 supplement；发送前持久标记、稳定幂等键、回执持久化，结果不明不重试。AgentRunner 的 feishu_message 工具直接按回执结束本轮；TaskService 将候选请求落为 needsInput。
+
+FeishuGateway.swift: 全 CLI 业务域的能力发现与按帮助执行；读取真实授权 scopes、命令/Schema/嵌入规范，固定 user 身份及 argv 参数；写操作按参数摘要持久去重，高风险经过新一轮用户确认才附 --yes。凭证、profile、CLI 管理不暴露给模型。
+
+派单焦点恢复：AgentAppDispatch 激活后沿用 InputFocus 的 AX 聚焦；未确认时使用 TargetWindowLocator（排除搜索/下拉）定位可见输入框，再经共享 PointerExecutor 点击并延迟核验。未找到、被遮挡、用户移动鼠标、失去租约或焦点未确认均不清空/提交；不使用窗口底部猜测坐标。派单去重检查与持久标记先于清空，防止重复调用擦除草稿。Server 仅注入已有指针执行器，普通手动选应用保留原定位策略。
+
+Codex 派单身份修订：AgentAppDispatch 除配置名称外识别 com.openai.codex（可安装为 ChatGPT.app），路径的真实 bundle ID 优先于旧配置；多候选仍拒绝。Server 静态白名单新增 recipients.js。

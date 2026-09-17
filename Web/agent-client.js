@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 消费 localStorage 的配对 token、/api/v1 的任务接口与事件流；
  *          依赖 app.js 的 message() 提示（缺失时降级为静默，不阻塞任务链路）。
- * [OUTPUT]: 提供 window.pocketdeskAgent——小精灵任务的提交、追问、放弃、有界轮询与状态订阅。
+ * [OUTPUT]: 提供 window.pocketdeskAgent——小精灵任务的终态后直接新建、待补充续接、提交、追问、放弃、有界轮询、状态订阅与刷新后活动任务找回。
  * [POS]: Web 的小精灵任务客户端；只管与 Mac 的任务 API 对话，不碰输入区、不执行工具、不发桌面输入。
  *        轮询策略按方案 §9：2s 起、连续无事件按 1.5 倍退避至上限 10s；事件到来立即回到 2s。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -13,6 +13,7 @@
   var POLL_START = 2000;
   var POLL_MAX = 10000;
   var POLL_FACTOR = 1.5;
+  // 与 Sources/AgentModels.TaskStatus.isActive 保持同构。
   var ACTIVE = { accepted: 1, running: 1, needsInput: 1, verifying: 1 };
 
   var state = {
@@ -94,7 +95,9 @@
 
   async function refresh() {
     if (!state.task) return null;
-    var res = await api('/api/v1/tasks/' + encodeURIComponent(state.task.id));
+    var taskId = state.task.id;
+    var res = await api('/api/v1/tasks/' + encodeURIComponent(taskId));
+    if (!state.task || state.task.id !== taskId) return state.task;
     state.task = res.task || null;
     notify('refresh');
     if (!isActive(state.task)) state.interval = POLL_START;
@@ -126,7 +129,7 @@
   async function submit(text, context) {
     var requestId = state.pendingRequestId || newRequestId();
     state.pendingRequestId = requestId;
-    var body = { requestId: requestId, text: text };
+    var body = { requestId: requestId, text: text, controlSession: window.pocketdeskControlInfo?.().session || "" };
     if (context) body.context = context;
     var res;
     try {
@@ -161,6 +164,13 @@
     return state.task;
   }
 
+  // 完成后下一句话就是新任务；只有明确待补充时沿用旧任务。
+  async function send(text) {
+    if (state.task && state.task.status === 'needsInput') return followUp(text);
+    if (isActive(state.task)) throw new Error('正在执行，请稍候。');
+    return submit(text, state.page);
+  }
+
   async function abandon() {
     if (!state.task) return null;
     var res = await api('/api/v1/tasks/' + encodeURIComponent(state.task.id) + '/actions', {
@@ -188,6 +198,18 @@
       if (res.task) { adopt(res.task); return state.task; }
     } catch (e) { /* 查不到就当作没有任务 */ }
     return null;
+  }
+
+  /// 页面刷新/重连后从服务端找回最新活动任务。任务事实源在 Mac，不把正文落进 localStorage。
+  async function recoverActive() {
+    try {
+      var res = await api('/api/v1/tasks?cursor=0');
+      var summaries = res.tasks || [];
+      var active = summaries.find(function (task) { return isActive(task); });
+      return active ? resume(active.id) : null;
+    } catch (e) {
+      return null;
+    }
   }
 
   /// 「新任务」：只解除手机与旧任务的关联，不删除历史、不取消旧任务、不调用电脑清空接口（方案 §5）。
@@ -225,9 +247,11 @@
 
   window.pocketdeskAgent = {
     submit: submit,
+    send: send,
     followUp: followUp,
     abandon: abandon,
     resume: resume,
+    recoverActive: recoverActive,
     detach: detach,
     refresh: refresh,
     executors: executors,

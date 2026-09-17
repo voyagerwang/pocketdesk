@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 只读 Web/*.js、Web/index.html 与 Sources/Server.swift 的静态文本，不起服务、不连电脑。
  * [OUTPUT]: 静态结构回归，验证跨弹窗恢复协议（冻结态只发只读探测、恢复上限有界、绝不重放正文、翻腕门禁）、
- *           应用选择定位意图（locate/generation 与迟到回执隔离）、以及证书四步向导（下载/安装/完全信任/真探测）都已落地。
+ *           recipients.js 应用选择定位意图（locate/generation 与迟到回执隔离）、以及证书四步向导（下载/安装/完全信任/真探测）都已落地。
  * [POS]: tests 的前端契约回归；真实弹窗与真机行为另行验收。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -13,7 +13,7 @@ const root = path.join(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 
 const compose = read('Web/compose.js');
-const app = read('Web/app.js');
+const app = read('Web/app.js') + read('Web/recipients.js');
 const settings = read('Web/settings.js');
 const motion = read('Web/motion-send.js');
 const html = read('Web/index.html');
@@ -116,15 +116,21 @@ assert.ok(/function probeData\(/.test(motion), '必须有真实的有效数据�
 
 /* ---------- 页面引用（改过的资源必须换版本号，否则手机会用缓存） ---------- */
 
-for (const asset of ['app.js?v=3.0.26', 'settings.js?v=3.0.10', 'compose.js?v=3.0.28',
-                     'motion-recognizer.js?v=3.1.0', 'motion-send.js?v=3.1.1',
-                     'app-extras.css?v=3.0.9', 'screen.css?v=3.1.1']) {
-  assert.ok(html.includes(asset), `index.html 应引用 ${asset}`);
+// 版本号只在"资源被改动"时才该变，而这一点没法从静态文本判断。所以这里锁**可验证的不变量**：
+// 每个资源引用都必须带 ?v=（没有就是真会踩缓存的硬伤），数字本身不钉死。
+// 2026-09-17/18 两个 agent 交替改 Web/*（app.js 3.0.26→3.0.30、compose.js 3.0.28→3.0.30、
+// agent-panel v1→v3、app-extras.css 3.0.9→3.0.10），钉死数字只制造假红灯，拦不住任何真问题。
+const versioned = ['app.js', 'recipients.js', 'settings.js', 'compose.js', 'motion-recognizer.js', 'motion-send.js',
+                   'app-extras.css', 'screen.css', 'style.css', 'agent-client.js', 'agent-panel.js'];
+for (const asset of versioned) {
+  const esc = asset.replace('.', '\\.');
+  const hit = html.match(new RegExp('/' + esc + '\\?v=[0-9.]+'));
+  assert.ok(hit, `index.html 必须给 ${asset} 带 ?v= 版本号（否则手机拿到的是缓存副本）`);
 }
 assert.ok(server.includes('"compose.js"') && server.includes('"settings.js"') && server.includes('"motion-send.js"'),
   'Server.swift 静态白名单必须仍然放行这些脚本');
 // 小精灵的两个脚本：漏进白名单的表现是手机 404，整个入口静默失效且不报错。
-for (const script of ['agent-client.js', 'agent-panel.js']) {
+for (const script of ['agent-client.js', 'agent-panel.js', 'recipients.js']) {
   assert.ok(html.includes(script), `index.html 应引用 ${script}`);
   assert.ok(server.includes(`"${script}"`), `Server.swift 白名单必须放行 ${script}`);
 }

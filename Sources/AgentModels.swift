@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation；不依赖 AX、Network 或任何运行时——本文件只描述任务事实的形状。
- * [OUTPUT]: 对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
+ * [OUTPUT]: 可选派单接续目标、飞书个人/群候选及通用操作去重/确认记录； 任务保存控制会话用于执行租约核验；对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
  *           AgentTask、TaskEvent，以及 AgentTask 与字典互转的 json/alternative 方法。
  * [POS]: Sources 的 Agent 领域模型层；HTTP 层只做字典与它的互转，任务语义不散落到路由里。
  *        与系统注入解耦：本文件可单独编译，供 tests 直接引用。
@@ -148,6 +148,28 @@ struct PageBinding: Codable, Equatable {
     }
 }
 
+// MARK: 飞书联系人选择与发送证据
+
+struct FeishuContact: Codable, Equatable {
+    var id: String
+    var name: String
+    var department: String
+}
+struct FeishuChoice: Codable, Equatable {
+    var contacts: [FeishuContact]
+    var text: String
+    var supplement: Int
+    var kind: String?
+}
+struct FeishuConfirmation: Codable, Equatable {
+    var key: String
+    var supplement: Int
+}
+struct FeishuDelivery: Codable, Equatable {
+    var recipient: String
+    var messageId: String?
+}
+
 // MARK: 任务
 
 struct AgentTask: Codable, Equatable {
@@ -177,6 +199,19 @@ struct AgentTask: Codable, Equatable {
     /// 软/硬超时到点的时刻，供轮询侧提示与停止等待。
     var softDeadline: Double?
     var hardDeadline: Double?
+    /// 模型对话原文（OpenAI 消息数组）的 JSON 序列化串。resume 时直接回灌，
+    /// 避免自己重造带 tool_calls 的结构。nil 表示这是一次全新运行。
+    var transcriptJSON: String?
+    /// 提交时的控制会话；只用于执行时验证租约，不向模型传递。
+    var controlSession: String?
+    var feishuChoice: FeishuChoice?
+    var feishuDelivery: FeishuDelivery?
+    var feishuOperations: [String: String]?
+    var feishuConfirmation: FeishuConfirmation?
+    /// 仅真实提交成功才设置接续目标，手机不从模型文案猜应用。
+    var handoffTargetId: String?
+    var handoffTargetName: String?
+    var handoffRequested: Bool?
 
     init(schemaVersion: Int = AgentTask.currentSchemaVersion,
          id: String = UUID().uuidString,
@@ -196,7 +231,8 @@ struct AgentTask: Codable, Equatable {
          attempt: Int = 1,
          supplementCount: Int = 0,
          softDeadline: Double? = nil,
-         hardDeadline: Double? = nil) {
+         hardDeadline: Double? = nil,
+         transcriptJSON: String? = nil) {
         self.schemaVersion = schemaVersion
         self.id = id
         self.subject = subject
@@ -216,6 +252,7 @@ struct AgentTask: Codable, Equatable {
         self.supplementCount = supplementCount
         self.softDeadline = softDeadline
         self.hardDeadline = hardDeadline
+        self.transcriptJSON = transcriptJSON
     }
 
     // MARK: 字典互转
@@ -235,6 +272,10 @@ struct AgentTask: Codable, Equatable {
             "supplementCount": supplementCount,
             "canFollowUp": status.acceptsFollowUp,
         ]
+        if let handoffTargetId { dict["handoffTargetId"] = handoffTargetId }
+        if let handoffTargetName { dict["handoffTargetName"] = handoffTargetName }
+        if let handoffRequested { dict["handoffRequested"] = handoffRequested }
+        if let delivery = feishuDelivery, delivery.messageId != nil { dict["deliveryRecipient"] = delivery.recipient }
         if let result { dict["result"] = result }
         if let error { dict["error"] = error }
         if let softDeadline { dict["softDeadline"] = softDeadline }

@@ -1,8 +1,8 @@
 /**
  * [INPUT]: 依赖 Foundation，消费 TaskStore、AgentRunner、ModelConfigStore、PageReader。
- * [OUTPUT]: 对外提供任务生命周期：submit/supplement/abandon/snapshot、当前网页绑定查询、执行器能力报告。
+ * [OUTPUT]: 提交幂等查账并保存执行控制会话；对外提供任务生命周期：submit/supplement/abandon/snapshot、当前网页绑定查询、执行器能力报告。
  * [POS]: Sources 的 Agent 服务层：唯一决定任务状态如何流转的地方，HTTP 层不做状态判断。
- *        首版串行执行一个活动任务；M1 只开放只读能力，状态里没有「已停止」这种会骗人的说法。
+ *        首版串行执行一个活动任务；飞书候选选择通过 needsInput 续接，状态里没有「已停止」这种会骗人的说法。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import Foundation
@@ -24,7 +24,7 @@ enum TaskServiceError: LocalizedError {
         case .notConfigured: return "还没有配置模型服务：请在这台 Mac 的控制台「小精灵 · 模型服务」里填好并测试通过。"
         case .busy(let taskId): return "已有任务在执行中（\(taskId)），请先等它结束或放弃它。"
         case .notFound: return "找不到这个任务。"
-        case .notFollowUp(let status): return "任务当前状态是「\(status.displayName)」，暂时不能追问。"
+        case .notFollowUp(let status): return "任务当前状态是「\(status.displayName)」，暂时不能做这个操作。"
         case .supplementLimitReached(let limit): return "这个任务已经补充 \(limit) 轮，请开一个新任务。"
         case .revisionMismatch: return "任务已被更新，请刷新后再操作。"
         }
@@ -43,18 +43,34 @@ enum TaskService {
 
     private static let queue = DispatchQueue(label: "dev.voicedeck.agent.tasks")
     private static var activeTaskId: String?
+    private static let submissionLock = NSLock()
+
+    /// 当前主体是否仍有任务在推进。
+    /// 用按主体扫描替代不可靠的 activeTaskId 内存标记：execute 的串行队列会让
+    /// activeTaskId 在异步 run 启动后立即被 defer 清空，单看它无法拦住并发提交。
+    private static func blockingActiveTask(excluding taskId: String? = nil, subject: String) -> AgentTask? {
+        TaskStore.all().first { $0.subject == subject && $0.status.isActive && (taskId == nil || $0.id != taskId) }
+    }
 
     // MARK: 提交与执行
 
-    static func submit(subject: String, requestId: String, text: String, context: PageBinding?) throws -> AgentTask {
+    static func submit(subject: String, requestId: String, text: String, context: PageBinding?, controlSession: String? = nil) throws -> AgentTask {
+        submissionLock.lock(); defer { submissionLock.unlock() }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw TaskServiceError.emptyText }
         guard trimmed.utf8.count <= maxInputBytes else { throw TaskServiceError.textTooLarge(limit: maxInputBytes) }
         guard ModelConfigStore.load().isConfigured else { throw TaskServiceError.notConfigured }
-        if let activeTaskId, let running = TaskStore.task(id: activeTaskId), running.status.isActive {
-            throw TaskServiceError.busy(taskId: activeTaskId)
+        // 同一请求重试直接查账，不能重新排入执行队列。
+        if let existing = TaskStore.task(subject: subject, requestId: requestId) {
+            guard existing.text == trimmed && existing.context == context else { throw TaskServiceError.revisionMismatch }
+            return existing
         }
-        let task = try TaskStore.claim(subject: subject, requestId: requestId, text: trimmed, context: context)
+        if let blocking = blockingActiveTask(subject: subject) {
+            throw TaskServiceError.busy(taskId: blocking.id)
+        }
+        var task = try TaskStore.claim(subject: subject, requestId: requestId, text: trimmed, context: context)
+        task.controlSession = controlSession
+        try TaskStore.save(task)
         queue.async { execute(taskId: task.id) }
         return task
     }
@@ -69,8 +85,8 @@ enum TaskService {
         guard task.status.acceptsFollowUp else { throw TaskServiceError.notFollowUp(status: task.status) }
         guard task.supplementCount < supplementLimit else { throw TaskServiceError.supplementLimitReached(supplementLimit) }
         guard ModelConfigStore.load().isConfigured else { throw TaskServiceError.notConfigured }
-        if let activeTaskId, activeTaskId != taskId, let running = TaskStore.task(id: activeTaskId), running.status.isActive {
-            throw TaskServiceError.busy(taskId: activeTaskId)
+        if let blocking = blockingActiveTask(excluding: taskId, subject: task.subject) {
+            throw TaskServiceError.busy(taskId: blocking.id)
         }
         let now = Date().timeIntervalSince1970
         task.text = trimmed
@@ -83,6 +99,10 @@ enum TaskService {
         task.softDeadline = now + softTimeoutSeconds
         task.hardDeadline = now + hardTimeoutSeconds
         task.messages.append(TaskMessage(role: .user, text: trimmed))
+        if var transcript = task.transcript {
+            transcript.append(["role": "user", "content": trimmed])
+            task.transcript = transcript
+        }
         try TaskStore.save(task)
         var event = TaskEvent(seq: 0, taskId: taskId, kind: .status, status: .accepted)
         try? TaskStore.append(&event)
@@ -122,12 +142,12 @@ enum TaskService {
         let trusted = PageReader.isTrusted
         return [
             "agent": ["available": modelConfigured,
-                      "capabilities": ["read_page"],
-                      "writes": false],
+                      "capabilities": ["read_page", "open_page", "open_app", "dispatch_to_app", "feishu_message", "feishu_help", "feishu_execute"],
+                      "writes": true],
             "browser": ["available": trusted,
                         "adapter": "ax",
-                        "capabilities": ["read_page"],
-                        "writes": false],
+                        "capabilities": ["read_page", "open_page", "open_app", "dispatch_to_app", "feishu_message", "feishu_help", "feishu_execute"],
+                        "writes": true],
             "model": ["configured": modelConfigured,
                       "model": config.model,
                       "host": ModelConfigStore.endpoint(for: config.baseURL)?.host ?? ""],
@@ -163,13 +183,13 @@ enum TaskService {
         // 硬超时由 URLSession 的单次超时兜底（AgentRunner 每轮 90s、最多 6 轮），
         // 这里不再起额外计时器：起一个又取消不掉的计时器等于制造假象。
         AgentRunner.run(config: config, task: task) { outcome in
-            var updated = TaskStore.task(id: taskId) ?? task
+            guard var updated = TaskStore.task(id: taskId), updated.status == .running else { return }
             updated.revision += 1
             updated.updatedAt = Date().timeIntervalSince1970
             updated.usage = outcome.usage
             updated.messages.append(TaskMessage(role: .assistant, text: outcome.content ?? outcome.error ?? ""))
             if let content = outcome.content {
-                updated.status = .succeeded
+                updated.status = outcome.needsInput ? .needsInput : .succeeded
                 updated.result = content
                 updated.error = nil
                 // 漂移如实标注：读到的页面和提交时绑定的不是同一页，必须让人知道。

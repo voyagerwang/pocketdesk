@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 app.js 的草稿/目标/历史与多图处理门闩、ComposeQueue、原生 IME、全屏输入区。
- * [OUTPUT]: 提供可见输入栏、手机全文同步与图文提交；发送等待图片处理、补传完整批次并冻结附件编辑，失败保留草稿及附件；用户显式切换目标时保留内容并开启隔离的新草稿轮次。
+ * [OUTPUT]: 接收者观察到前台身份变化时允许强制作废旧绑定（含未配置应用间切换）； 小精灵任务确认接收后写入统一发送历史，历史保存失败不影响发送收尾；小精灵甩送独立于桌面同步冻结，但复用发送锁和稳定门禁； 小精灵终态后直接派发新任务、待补充时续接；提供可见输入栏、手机全文同步与图文提交；发送等待图片处理、补传完整批次并冻结附件编辑，失败保留草稿及附件；用户显式切换目标时保留内容并开启隔离的新草稿轮次。
  *           另提供 clearDraft（注册为 window.pocketdeskClearDraft）：发带 clear:true 的幂等请求，
  *           **先让电脑侧确认删净、成功后才清手机**——反过来的话一次没生效的删除就吃掉了用户草稿；
  *           文档类目标的豁免原因由服务端原样带回提示。
@@ -54,8 +54,8 @@ let liveTimer = null;
 
 // 切换目标或失败后重选当前应用，都以电脑此刻的前台与输入位置开始新一轮；
 // 正文与附件仍保留，旧失败/执行状态及队列不得穿越目标。
-function beginDraftForExplicitTarget(targetId) {
-  if (!targetId || (targetId === selected && !livePaused)) return false;
+function beginDraftForExplicitTarget(targetId, force = false) {
+  if (!force && (!targetId || (targetId === selected && !livePaused))) return false;
   clearTimeout(liveTimer);
   stopRecovery();
   liveQueue.clear('已切换目标，旧目标的未发送同步已取消');
@@ -121,6 +121,7 @@ function makeLiveQueue() {
 }
 let liveQueue = makeLiveQueue();
 function pushLive(text, submit = false, withImage = false, retry = false, reconcileOnFailure = false) {
+  if (selected === SPRITE_ID) return Promise.resolve(null); // AI 草稿绝不进入桌面输入队列
   liveTarget ??= selected || FRONTMOST_ID;
   const command = { draftId: liveDraftId, text, submit, retry, reconcileOnFailure, usePendingImage: withImage, imageBatchId: withImage && pendingImages.length ? imageBatchId : undefined, imageIds: withImage && pendingImages.length ? pendingImages.map(item => item.id) : undefined, targetId: liveTarget, contextPromise: fullComposeOpen() ? contextPromise : null };
   const task = liveQueue.push(command).then(result => {
@@ -239,7 +240,7 @@ async function probeLive() {
 }
 
 function scheduleLive(reconcileOnFailure = false) {
-  if (!selected || livePaused || liveMode === 'deferred' || sendEl.disabled || submittingDraft) return;
+  if (!selected || selected === SPRITE_ID || livePaused || liveMode === 'deferred' || sendEl.disabled || submittingDraft) return;
   clearTimeout(liveTimer);
   liveTimer = setTimeout(() => {
     if (!livePaused && liveMode !== 'deferred' && !submittingDraft) pushLive(liveValue(), false, false, false, reconcileOnFailure).catch(() => {});
@@ -626,6 +627,7 @@ window.pocketdeskFocusCompose = () => {
 async function sendToSprite() {
   if (submittingDraft) return;
   if (liveComposing) { message('请先结束听写或确认输入法候选，再发送。', true); return; }
+  const submittedDraftId = liveDraftId;
   submittingDraft = true;
   sendEl.disabled = true;
   textEl.readOnly = true; kbProxy.readOnly = true;
@@ -637,16 +639,18 @@ async function sendToSprite() {
     if (!text) throw new Error('先输入一点想让小精灵做的事。');
     const agent = window.pocketdeskAgent;
     if (!agent) throw new Error('小精灵组件还没加载好，请刷新页面重试。');
-    const task = agent.current();
-    // 执行中不接受新输入：不暗中并行两个任务（方案 §7）。
-    if (task && !task.canFollowUp) throw new Error('上一个任务还在进行中，等它结束或先放弃它。');
-    message(task ? '正在追问小精灵…' : '已交给小精灵…');
-    // 提交瞬间固定正文快照：等待期间切走目标也不改变本次去向。
-    if (task) await agent.followUp(text);
-    else await agent.submit(text, agent.currentPage());
+    // 终态不依赖“新任务”按钮；待补充才继续旧任务。
+    await agent.send(text);
+    // 历史表示小精灵已接收，不等待下游任务完成；接收者固定，避免迟到回执记到切换后的应用。
+    let historyNote = '';
+    try { pushHistory(text, '小精灵'); }
+    catch { historyNote = '已交给小精灵，但本机历史未能保存。'; }
     // 服务端确认持久接收后才清草稿；失败时正文保留，让人看清原因再决定（方案 §5）。
-    clearCompose();
+    if (selected === SPRITE_ID && liveDraftId === submittedDraftId) {
+      clearCompose({ preserveImages: true });
+    }
     window.pocketdeskAgentPanel?.render();
+    if (historyNote) message(historyNote, 'warn');
     haptic([12]);
   } catch (error) {
     message(error.message, true);
@@ -664,14 +668,17 @@ window.pocketdeskHasDraft = () => Boolean(textEl.value || pendingImages.length);
 window.pocketdeskCanMotionSend = () => {
   if (!selected || sendEl.disabled || submittingDraft || liveComposing) return false;
   // 中断冻结中、恢复探测进行中、上一轮提交收尾中，一律不发：迟到候选不得提交新一轮草稿。
-  if (livePaused || liveProbing) return false;
+  if (selected === SPRITE_ID) {
+    const task = window.pocketdeskAgent?.current();
+    if (!liveValue().trim() || (window.pocketdeskAgent?.isActive() && task?.status !== 'needsInput')) return false;
+  } else if (livePaused || liveProbing) return false;
   // 300ms：说完话后的第一次翻腕（起翻+停稳约 300–500ms）即可命中门禁；
   // 原 700ms 会把说完就翻的候选静默丢掉，用户只能等冷却后再翻一次，体感延迟 1.5s+。
   if (!(window.pocketdeskInputSettled && window.pocketdeskInputSettled(300))) return false; // 仍在输入/听写中
   return true;
 };
 
-function clearCompose() {
+function clearCompose({ preserveImages = false } = {}) {
   const keyboardFocused = document.activeElement === kbProxy;
   stopRecovery();
   liveDraftId = newDraftId(); liveMode = null; liveTarget = null; livePaused = false;
@@ -686,7 +693,9 @@ function clearCompose() {
   clearTimeout(liveTimer);
   liveQueue.clear('本次输入已结束');
   paintLive('off');
-  imageGeneration += 1; pendingImages = []; imageBatchId = newImageId(); imagePreparationError = null;
+  if (!preserveImages) {
+    imageGeneration += 1; pendingImages = []; imageBatchId = newImageId(); imagePreparationError = null;
+  }
   renderPendingImages();
 }
 

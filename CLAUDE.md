@@ -2,8 +2,8 @@
 Swift + Network + Quartz Event Services，搭配零依赖手机 Web 页面；局域网直连或经 Tailscale 私网跨网连接，macOS 先行，命令协议为 Windows helper 保留稳定边界。
 
 <directory>
-Sources/ - HTTP、控制/光标与持续画面三通道；应用配置、焦点/输入上下文、草稿快照、图片批次、输入活动闸、指针几何与窗口定位及系统输入执行，模型服务配置/客户端与 Agent 路由，以及小精灵的任务模型/存储/服务/执行/网页读取/接收者顺序（39 个 Swift 文件）
-Web/ - 手机首页、全屏工作台与电脑控制台，零依赖经典脚本按职责拆分；含小精灵的任务客户端与任务卡（21 个静态文件）
+Sources/ - HTTP、控制/光标与持续画面三通道；应用配置、焦点/输入上下文、草稿快照、图片批次、输入活动闸、指针几何与窗口定位及系统输入执行，模型服务配置/客户端与 Agent 路由，以及小精灵的任务模型/存储/服务/执行/网页读取/接收者顺序（45 个 Swift 文件）
+Web/ - 手机首页、全屏工作台与电脑控制台，零依赖经典脚本按职责拆分；含小精灵的任务客户端与任务卡（22 个静态文件）
 Resources/ - 独立 macOS App 的 bundle 元数据与应用图标 (plist + icns + iconset)
 scripts/ - 应用安装、图标生成、焦点与锁屏通道探针（7 个脚本）
 SessionProbe/ - 独立用户级会话验证应用，比较预登录标记下的锁屏帧状态与显式测试按键；不是生产解锁服务
@@ -34,7 +34,7 @@ LIVE_INPUT_REVISION.md - 已确认的语音纠正无回删方案、适配边界�
 FULLSCREEN_POINTER_PROPOSAL.md - 全屏手机操控优化建议：绝对定位、单/双击协议、手势仲裁、权威光标、画面延迟与 UU 对照验收（方案）
 FULLSCREEN_WORKSPACE_PLAN.md - 全屏改造主方案：基于 v2.9.23 的缺陷复核、UU 官方交互参考、触屏/指针工作台、键盘视口与持续画面链路、分阶段执行和验收；覆盖旧全屏方案的重叠决策（已落地首版，真机及性能验收待完成）
 FULLSCREEN_IMPLEMENTATION.md - 全屏首版效果、实现范围、协议、验证记录及真机待验收项
-docs/sprite-agent-implementation-plan.md - 小精灵入口完整实施方案（未实现）：应用同行可排序目标、键盘与轻甩、草稿隔离、真实 Agent 回传和人工接管验收
+docs/sprite-agent-implementation-plan.md - 小精灵用户服务交付计划：记录已落地的接收者/任务/受控打开能力，v1.2 按真实交互审计重排 S0–S5，每阶段必须交付用户可用且可验证的完整服务
 AGENT_PRODUCT_ARCHITECTURE.md - Agent 整体产品设计：任务与记忆、规则路由、Workbench 集成契约、执行权限/接管、token 成本及分阶段验收（方案）
 AGENT_MODE_PLAN.md - 口述办事一期：意图底座与确定性动作（P1）、窗口摆放与一键布局（P2）、给应用发消息（P3）的分步方案与验收（方案）
 </config>
