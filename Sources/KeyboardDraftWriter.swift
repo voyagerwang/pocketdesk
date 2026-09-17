@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 InputFocus 的真实焦点、DraftSnapshot、AppKit AX；按键和文本事件由 InputExecutor 注入。
- * [OUTPUT]: 提供 KeyboardDraftWriter；追加实时输入、选区修订及不含正文的失败诊断，失败后只依据原控件快照或未落键证据恢复。
+ * [OUTPUT]: 提供 KeyboardDraftWriter；追加实时输入、选区修订及不含正文的失败诊断；Electron 整页 AX 文本在非编辑区漂移时，以本次插入片段+光标的局部证据认账。
  * [POS]: Sources 的通用编辑器兼容通道；可读 AX 时校验原文和选区，未知编辑器沿用绑定和有序键流，不伪造读回。
  * [PROTOCOL]: update 的删除路径三级降级且全部读回门控：AX 选区仍是首选（连败退避制——失败不再一票否决永久禁用，连败 3 次才放弃）；键盘路径先试 Cmd+A 单和弦整框全选（仅限“旧文本恰为整个输入框且光标在文末”，读回确认选区后交由注入覆盖，没立住先按 Right 还原光标并读回确认）；都没立住才逐字 Backspace（不依赖选区、每次独立删光标前一字）。空替换只补一次退格删选区，逐字路径已删净不再补刀（旧版多发一次退格把共同前缀多删一字，读回永远对不上目标而冻结草稿）。落键读回与 confirmedText 均以“电脑实际内容 == 手机目标”为权威成功判据；选区“立住”后读回仍对不上即视为 AX 读数说谎，AX 与 Cmd+A 本会话一并停用。clearAll 以“读回为空”为唯一成功判据：AX 设全选读回确认后一次退格，选区假成功或“落了却删不净”时改发真实键盘 Cmd+A + 退格并按结果核验（实测 ZCode），证明不了就如实失败；变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -130,6 +130,16 @@ final class KeyboardDraftWriter {
                 // 以内容相等为最终裁决，可断掉这条冻结链；只有确实没落到 new 才继续等待/失败。
                 if actual?.text == new { expected = .end(of: new); uncertainWrite = false; diagnostic = ""; return true }
                 if actual == desired { expected = desired; uncertainWrite = false; diagnostic = ""; return true }
+                // WorkBuddy 等 Electron 编辑器把整个会话 WebArea 暴露为一个 AXValue：
+                // 输入框已落字时，输入框之外的时间/状态文字也可能同时改变，全文比较因此假失败。
+                // 放宽只接受可证明的局部写入：总长度不变、光标精确落在预期位置、
+                // 且光标前恰好是本次非空插入片段。删除不走此分支，避免把“没删掉”误认成成功。
+                if let actual, Self.matchesLocalWrite(actual: actual, desired: desired, inserted: replacement) {
+                    expected = actual
+                    uncertainWrite = false
+                    diagnostic = ""
+                    return true
+                }
                 diagnostic = Self.describe("落键后读回", expected: desired, actual: actual)
                 usleep(15_000)
             }
@@ -268,6 +278,15 @@ final class KeyboardDraftWriter {
     private static func describe(_ stage: String, expected: DraftSnapshot, actual: DraftSnapshot?) -> String {
         guard let actual else { return "\(stage)：原控件快照不可读" }
         return "\(stage)：textEqual=\(actual.text == expected.text)，utf16=\(actual.text.utf16.count)/\(expected.text.utf16.count)，selection=\(actual.location):\(actual.length)/\(expected.location):\(expected.length)"
+    }
+    private static func matchesLocalWrite(actual: DraftSnapshot, desired: DraftSnapshot, inserted: String) -> Bool {
+        let insertedLength = inserted.utf16.count
+        guard insertedLength > 0,
+              actual.text.utf16.count == desired.text.utf16.count,
+              actual.location == desired.location, actual.length == desired.length,
+              actual.location >= insertedLength else { return false }
+        let range = NSRange(location: actual.location - insertedLength, length: insertedLength)
+        return (actual.text as NSString).substring(with: range) == inserted
     }
     private func waitForSelection(_ range: CFRange) -> Bool {
         guard let readSnapshot, let expected else { return false }

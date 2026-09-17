@@ -1,9 +1,11 @@
 /**
  * [INPUT]: 消费首页 DOM、HTTP 配置/状态与逐图上传接口、浏览器文件读取/图片解码和本地存储；合规 JPEG 保留原始字节，其他图片经 Canvas 转换。
- * [OUTPUT]: 提供配对鉴权、目标选择（显式点击委托输入层开启隔离的新草稿轮次）、历史/快捷键，以及最多 8 张图片的原生多选追加、横向预览、逐张删除、批次幂等上传和处理完成门闩。
+ * [OUTPUT]: 提供原始完整球球图标、接收者常驻标识与服务端回执驱动的应用接续入口； 应用/小精灵共享当前正文，切换仅重建目标绑定并失效旧选择回执；提供配对鉴权、目标选择（显式点击委托输入层开启隔离的新草稿轮次）、小精灵活动任务启动找回、历史/快捷键，以及最多 8 张图片的原生多选追加、横向预览、逐张删除、批次幂等上传和处理完成门闩。
  *           快捷键按钮条对 action 为 draft.clear 的项走本地分支：调 window.pocketdeskClearDraft()，不投递按键；
  *           该全局缺失时如实报错，不做静默 no-op。唤醒回执按服务端聚焦核验结论分级提示
  *           （clickedInput/inputFocused：已点进输入框 / 请点一下输入框 / 未能确认聚焦），不再一律说"可开始输入"。
+ *           心跳失败按原因分流（配对失效 / 手机离线 / 电脑端 HTTP 异常 / 页面脚本出错 / 真断链）：
+ *           先琥珀色示警并 1.2 秒补拍，连续不通≥15 秒才升红并给出该原因的下一步，恢复时报出中断时长。
  * [POS]: Web 首页编排与共享状态；输入委托 compose.js，控制连接委托 pad.js，全屏委托 screen.js。
  * [PROTOCOL]: boot() 对齐前台目标后主动 activateTarget 一次，使手机“默认选中”与实际桌面绑定就绪对齐（与手动点目标等价，不移动鼠标、不重置草稿）；变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -39,7 +41,9 @@ function refreshConnectionBadge() {
     connectionEl.classList.add('warn');
     return;
   }
-  connectionEl.textContent = '已就绪';
+  // 挂上"多久前联系上过"：已经连上但数据在变旧时，这个数字是唯一能看出来的线索。
+  const age = lastContactAt ? Date.now() - lastContactAt : 0;
+  connectionEl.textContent = age >= 10000 ? `已就绪 · ${humanGap(age)}前` : '已就绪';
   connectionEl.classList.add('ready');
   connectionEl.classList.remove('warn');
 }
@@ -87,7 +91,6 @@ let frontmostLabel = null;  // 伪目标态的前台应用名：识别到什么�
 let manualUntil = 0;        // 手动滑动 Dock 期间暂停跟随，避免抢用户的操作
 const SPRITE_ID = '__sprite__';   // 内置接收者：小精灵不是应用，绝不走 activate / AX 输入绑定
 let recipientOrder = [];    // 服务端保存的接收者顺序；首次迁移把小精灵放在首位
-let agentDraft = '';        // 小精灵未发文字，与电脑应用草稿分开保存（方案 §5）
 
 /* ---------- 通用 ---------- */
 
@@ -103,206 +106,6 @@ function message(text, error = false) {
 function haptic(pattern) {
   if (navigator.vibrate) { try { navigator.vibrate(pattern); } catch (error) { /* 不支持震动则忽略 */ } }
 }
-
-/* ---------- 渲染 ---------- */
-
-// 接收者顺序来自服务端（控制台可拖拽排序并持久保存，方案 §3）。
-// 顺序里没有的项按原相对顺序追加；小精灵缺失时补到首位——这只在迁移时发生一次。
-function orderedRecipients() {
-  const byId = new Map(targets.map(item => [item.id, item]));
-  const list = [];
-  const seen = new Set();
-  for (const id of recipientOrder) {
-    if (id === SPRITE_ID) {
-      if (!seen.has(SPRITE_ID)) { list.push({ id: SPRITE_ID, name: '小精灵' }); seen.add(SPRITE_ID); }
-      continue;
-    }
-    const target = byId.get(id);
-    if (target && !seen.has(id)) { list.push(target); seen.add(id); }
-  }
-  targets.forEach(item => { if (!seen.has(item.id)) { list.push(item); seen.add(item.id); } });
-  if (!seen.has(SPRITE_ID)) list.unshift({ id: SPRITE_ID, name: '小精灵' });
-  return list;
-}
-
-// 小精灵图标用本地 SVG：不用 emoji、外部字体或 CDN（方案 §2）。
-function spriteButton() {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = `target target-sprite${selected === SPRITE_ID ? ' selected' : ''}`;
-  button.dataset.targetId = SPRITE_ID;
-  button.setAttribute('role', 'radio');
-  button.setAttribute('aria-checked', String(selected === SPRITE_ID));
-  button.tabIndex = selected === SPRITE_ID ? 0 : -1;
-  button.innerHTML = '<span class="target-icon sprite-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.2l2.05 5.23a2 2 0 0 0 1.13 1.13L20.4 11.6l-5.22 2.04a2 2 0 0 0-1.13 1.13L11.99 20l-2.06-5.23a2 2 0 0 0-1.13-1.13L3.6 11.6l5.2-2.04a2 2 0 0 0 1.13-1.13z"/><path d="M18.6 3.4l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg></span><small>小精灵</small>';
-  return button;
-}
-
-function renderTargets() {
-  row.innerHTML = '';
-  orderedRecipients().forEach(target => {
-    if (target.id === SPRITE_ID) { row.append(spriteButton()); return; }
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = `target${target.id === selected ? ' selected' : ''}`;
-    button.dataset.targetId = target.id;
-    button.setAttribute('role', 'radio');
-    button.setAttribute('aria-checked', String(target.id === selected));
-    // roving tabindex：整组只留一个 Tab 停靠点，就是当前选中项。
-    button.tabIndex = target.id === selected ? 0 : -1;
-    // 应用图标由服务端从系统取；img 加载失败才露出首字兜底（首字只给眼睛看，读屏念下方名称）。
-    button.innerHTML = `<span class="target-icon"><img src="/api/icon?id=${encodeURIComponent(target.id)}" alt="" draggable="false"><span class="target-initial" aria-hidden="true"></span></span><small></small>`;
-    const image = button.querySelector('img');
-    // 首字默认隐藏：加载中不闪文字，确认拿不到图标时才由 CSS 放出来。
-    const initial = button.querySelector('.target-initial');
-    initial.textContent = target.name.slice(0, 1).toUpperCase();
-    image.addEventListener('error', () => {
-      image.classList.add('missing');
-      initial.classList.add('visible');
-    });
-    button.querySelector('small').textContent = target.name;
-    row.append(button);
-  });
-}
-
-function markSelected() {
-  row.querySelectorAll('.target').forEach(element => {
-    const isSelected = element.dataset.targetId === selected;
-    element.classList.toggle('selected', isSelected);
-    element.setAttribute('aria-checked', String(isSelected));
-    element.tabIndex = isSelected ? 0 : -1;   // Tab 下次进来落在选中项上
-  });
-  // 快捷键组随选中态切换：选中目标有专属组就只显示那组，否则回退全局组。
-  syncShortcutsForSelected();
-  const front = targets.find(item => item.id === selected);
-  const isSprite = selected === SPRITE_ID;
-  // 没有目标时按钮置灰并明说：点了也不会有去向。
-  const hasTarget = Boolean(front) || selected === FRONTMOST_ID || isSprite;
-  sendEl.disabled = !hasTarget;
-  sendEl.classList.toggle('no-target', !hasTarget);
-  // 识别到什么就写什么：Dock 目标用配置名；伪目标用心跳识别出的前台应用名（frontmostLabel）。
-  const label = front ? front.name : (selected === FRONTMOST_ID ? (frontmostLabel || '当前前台') : (isSprite ? '小精灵' : null));
-  sendEl.textContent = label ? `发送给 ${label}` : '请先选择应用';
-  // 首版小精灵只收文字：切过去就收起图片入口，电脑应用的附件留在应用草稿里（方案 §5）。
-  const imageButton = document.querySelector('#image-btn');
-  if (imageButton) imageButton.hidden = isSprite;
-}
-
-/* ---------- 选中与唤醒 ---------- */
-
-// 选择代际：只有最新一次选择的定位才允许生效。快速点 A 再点 B 时，A 的迟到回执
-// 既不能挪动光标（服务端按代际拒绝），也不能改动面板、提示或草稿同步。
-let selectGeneration = 0;
-
-async function activateTarget(targetId, locate = false) {
-  lastActivateAt = Date.now();
-  const generation = ++selectGeneration;
-  const target = targets.find(item => item.id === targetId);
-  message(`正在唤醒 ${target ? target.name : targetId}…`);
-  try {
-    const session = window.pocketdeskControlInfo?.().session || '';
-    const response = await fetch('/api/activate', {
-      method: 'POST',
-      headers: { ...authHeaders(), 'X-PocketDesk-Session': session },
-      // locate 只在手动选择应用时为 true；定位由服务端在控制租约下执行，前端不自己挪光标。
-      body: JSON.stringify({ targetId, locate, generation }),
-    });
-    const result = await response.json();
-    if (response.status === 401) throw new Error('未配对：请在电脑端控制台重新扫码。');
-    if (response.status === 409) throw new Error(result.error || '控制权已变化，请先接管控制。');
-    if (!response.ok) throw new Error(result.error || '无法唤醒应用。');
-    // 迟到的回执：这次选择已经不是最新的了，就此止步，不改动任何界面状态或草稿。
-    if (generation !== selectGeneration) return false;
-    // 回执如实分级：旧版只要 200 就说"可开始输入"，焦点没落进去时用户只看到一次"没反应"，
-    // 每次都误以为又坏了。locate=unchanged 也可能点了输入框（光标本就在窗口内），
-    // 所以以 clickedInput / inputFocused 为准，不以移动结论为准。
-    let tail = '';
-    if (result.clickedInput) {
-      if (result.inputFocused === 'yes') tail = '已点进输入框，可直接输入。';
-      else if (result.inputFocused === 'no') tail = '没能把焦点放进输入框，请在电脑上点一下输入框再输入。';
-      else tail = '已尝试点击输入框，未能确认聚焦；打字无效时请点一下电脑输入框。';
-    }
-    // 激活结果与鼠标结果分开：定位跳过不等于应用没唤醒，这里只用 note 说明"窗口在另一块屏"这类事实。
-    message(`${target ? target.name : targetId} 已置于电脑前台。${tail}${result.note ? '（' + result.note + '）' : ''}`);
-    // 按应用偏好切面板：触控板型应用直接展开触控板（收起键盘），输入型保持输入区。
-    // 只在手动激活时切——前台自动跟随不切，避免被动抢走用户正打字的键盘。
-    if (target?.openPanel === 'pad') enterPadMode(); else exitPadMode();
-    return true;
-  } catch (error) {
-    // 失败也可能来自更早的一轮选择，同样不得覆盖最新一轮的提示。
-    if (generation !== selectGeneration) return false;
-    message(error.message, true);
-    return false;
-  }
-}
-
-async function selectTarget(button) {
-  const targetId = button.dataset.targetId;
-  if (targetId === SPRITE_ID) { selectSprite(); return; }
-  // 小精灵 → 应用：先存 AI 草稿，严禁把 AI 指令灌进目标输入框（方案 §5）。
-  if (selected === SPRITE_ID) agentDraft = textEl.value;
-  const rebuiltDraft = beginDraftForExplicitTarget(targetId);
-  selected = targetId;
-  markSelected();
-  // 手动选择才请求鼠标就位：用户随后可直接用手机触控板操作目标窗口。
-  const activated = await activateTarget(selected, true);
-  // 切换目标或失败后重选当前目标，代表用户要以此刻输入位置开始新一轮；已有正文
-  // 立即触发新绑定，纯图片发送时绑定。健康状态重复点击不重建，避免把全文再次追加。
-  if (activated && rebuiltDraft && textEl.value) scheduleLive();
-}
-
-// 选中内置接收者：不唤醒应用、不绑定 AX 输入、不移动鼠标（方案 §3/§4）。
-// 小精灵是手机端接收者，与 Mac 前台应用是两种状态，不共用一个变量表达。
-function selectSprite() {
-  if (selected === SPRITE_ID) {
-    // 已选中再点一次只回到输入并聚焦：不清草稿、不新建任务（方案 §4）。
-    window.pocketdeskFocusCompose?.();
-    return;
-  }
-  // 应用 → 小精灵：取消未发送的镜像队列与恢复定时器，封存应用草稿，恢复独立 AI 草稿。
-  // 已在途的写入不能假称撤回，电脑上的已有文字也不删除（方案 §5）。
-  beginDraftForExplicitTarget(SPRITE_ID);
-  selected = SPRITE_ID;
-  markSelected();
-  exitPadMode();
-  textEl.value = agentDraft;
-  // 只聚焦，不走 showKeyboard：后者会 refreshInputContext + scheduleLive，
-  // 等价于把还没发的 AI 指令同步到电脑（方案 §11 点名要绕开的桌面副作用）。
-  window.pocketdeskFocusCompose?.();
-}
-
-row.addEventListener('click', event => {
-  const button = event.target.closest('.target');
-  if (!button || button.parentElement !== row) return;
-  selectTarget(button);
-});
-
-row.addEventListener('contextmenu', event => {
-  if (event.target.closest('.target')) event.preventDefault();
-});
-
-// 键盘：方向键 / Home / End 移动选中与焦点（只改选中，不顺手唤醒应用）；回车或空格激活。
-row.addEventListener('keydown', event => {
-  const button = event.target.closest('.target');
-  if (!button) return;
-  const buttons = [...row.querySelectorAll('.target')];
-  const at = buttons.indexOf(button);
-  let to = -1;
-  if (event.key === 'ArrowRight') to = Math.min(buttons.length - 1, at + 1);
-  else if (event.key === 'ArrowLeft') to = Math.max(0, at - 1);
-  else if (event.key === 'Home') to = 0;
-  else if (event.key === 'End') to = buttons.length - 1;
-  else return;
-  event.preventDefault();
-  const next = buttons[to];
-  if (!next) return;
-  if (next !== button) {
-    selected = next.dataset.targetId;
-    markSelected();
-  }
-  next.focus();
-  next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-});
 
 /* ---------- 触控板卡片：轻点展开，滑动保留页面滚动，点输入框自动收起 ---------- */
 
@@ -658,26 +461,90 @@ trackScrollCue(document.querySelector('#shortcut-bar'));
 
 /* ---------- 连接与发送 ---------- */
 
-const HEARTBEAT_MS = 5000;
+const HEARTBEAT_MS = 5000;         // 正常节拍
+const HEARTBEAT_RETRY_MS = 1200;   // 失败后的补拍节拍：恢复要快，不让用户空等一个 5 秒周期
 let heartbeat = 0;
 let heartbeatFailures = 0;  // 连续失败计数：≥2 判定断连，成功即清零
+let heartbeatRetry = 0;     // 失败后的补拍定时器（同时最多一个，不叠加）
+let lastContactAt = 0;      // 最近一次心跳成功的本地时刻：算中断时长，徽标显示"多久前"
+
+// 网络层的失败必须和页面自身的脚本错误分开。两者都会落进同一个 catch，
+// 但只有前者是"连接"问题；不分开的话，页面里任何一个 TypeError 都会被说成
+// "与电脑断开"，把人引到查 Wi-Fi 的方向上去。
+function taggedFetch(input, init) {
+  return fetch(input, init).catch(error => {
+    const wrapped = new Error((error && error.message) || '网络错误');
+    wrapped.isNetwork = true;
+    throw wrapped;
+  });
+}
+
+function httpStatusError(status) {
+  const error = new Error(`HTTP ${status}`);
+  error.httpStatus = status;
+  return error;
+}
+
+// 中断时长的人话写法：3 秒 / 1 分 12 秒 / 4 分钟。
+function humanGap(ms) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`;
+}
+
+// 把失败翻译成用户能照着做的下一步。四种原因长得一模一样，解法却完全不同：
+// 配对失效要重新扫码 / 手机没网要回同一 Wi-Fi / 电脑端 HTTP 卡住只需等 /
+// 页面脚本出错要下拉刷新。一律说成"已断开"，等于把三件事都说成了一件。
+function heartbeatAdvice(error) {
+  if (error && error.httpStatus === 401) return '配对已失效：请重新扫码连接';
+  if (error && error.httpStatus) {
+    return `手机连得上电脑，是电脑端服务返回异常（HTTP ${error.httpStatus}）`;
+  }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return '手机当前没有网络：请连回与电脑同一个 Wi-Fi';
+  }
+  if (error && !error.isNetwork) {
+    return `页面内部出错（${error.name}: ${error.message}）：这不是网络问题，下拉刷新即可`;
+  }
+  // 心跳打不通但控制通道还活着 = 网络没断，是电脑端 HTTP 这一路卡住了。
+  const control = typeof window.pocketdeskControlState === 'function' ? window.pocketdeskControlState() : 'connecting';
+  if (control !== 'connecting') return '电脑端响应超时（控制通道仍在）';
+  return '手机可能不在同一 Wi-Fi，或电脑端已退出';
+}
+
+function scheduleHeartbeatRetry() {
+  if (heartbeatRetry) return;
+  heartbeatRetry = setTimeout(() => { heartbeatRetry = 0; heartbeatTick(); }, HEARTBEAT_RETRY_MS);
+}
+
+function cancelHeartbeatRetry() {
+  if (!heartbeatRetry) return;
+  clearTimeout(heartbeatRetry);
+  heartbeatRetry = 0;
+}
 
 // 心跳 + 前台跟随（边沿触发）：前台命中 Dock 目标时选中态跟过去一次；
 // 前台是非目标应用（如 Finder）则进入伪目标态，发送直接注入当前前台。
 // 手动滑动 Dock、刚手动激活的短时间内不跟随，之后可自由手动切换。
 async function heartbeatTick() {
   try {
-    const paired = await fetch('/api/pair', { method: 'POST', keepalive: true,
+    const paired = await taggedFetch('/api/pair', { method: 'POST', keepalive: true,
             headers: { ...authHeaders(), 'Content-Type': 'application/json' },
             body: JSON.stringify(window.pocketdeskDevice?.() || { userAgent: navigator.userAgent || '' }) });
-    if (!paired.ok) throw new Error('配对已失效');
-    const current = await fetch('/api/status').then(response => response.json());
+    if (!paired.ok) throw httpStatusError(paired.status);
+    const current = await taggedFetch('/api/status').then(response => response.json());
     window.pocketdeskAccessibility = current.accessibility;
-    // 连接恢复：无论此前断过几次，先把顶部状态拉回真实值。
+    // 连接恢复：无论此前断过几次，先把顶部状态拉回真实值；中断了多久一并说清，
+    // 否则用户会觉得"刚才其实没断、是页面在瞎报"。
     if (heartbeatFailures > 0) {
+      const gap = lastContactAt ? Date.now() - lastContactAt : 0;
       heartbeatFailures = 0;
-      message('已重新连接到电脑。');
+      cancelHeartbeatRetry();
+      message(gap >= 10000 ? `已重新连接到电脑（中断 ${humanGap(gap)}）。` : '已重新连接到电脑。');
     }
+    lastContactAt = Date.now();
     httpDown = false;
     lastAccessibility = current.accessibility;
     refreshConnectionBadge();
@@ -695,39 +562,24 @@ async function heartbeatTick() {
     applyTheme(current.theme);
     // 安全连接地址随之刷新，供设置面板在开启甩送时升级到 HTTPS 触发证书信任。
     window.pocketdeskSecureURL = current.secureURL || '';
-    const frontId = current.frontmostId;      // 命中 Dock 目标时的 id，否则 null
-    const frontName = current.frontmostName;  // 前台应用名（始终有值）
-    const key = frontId ?? frontName ?? null;
-    if (!key) return;
-    // 抑制期内不消费也不记录：lastSeenFront 保持原值，抑制结束后下一拍仍会应用这次切换。
-    if (Date.now() <= manualUntil || Date.now() - lastActivateAt < 2500) return;
-    // 边沿触发：只在电脑前台应用发生变化时跟随一次。
-    if (key === lastSeenFront) return;
-    lastSeenFront = key;
-    // 手动选中小精灵时不跟随前台（方案 §3）：手机接收者与 Mac 前台应用是两种状态，
-    // 电脑那边切了应用就把用户正在对话的小精灵切走，等于抢走他正在写的东西。
-    if (selected === SPRITE_ID) return;
-    if (frontId && targets.some(item => item.id === frontId)) {
-      selected = frontId;
-      frontmostLabel = null;   // Dock 目标态：名字由 markSelected 从 targets 取
-      markSelected();   // 统一出口：图标选中态与"发送到 X"文案同步更新
-      const name = (targets.find(item => item.id === frontId) || { name: frontId }).name;
-      message(`${name} 已在电脑前台，可直接输入。`);
-    } else if (frontName) {
-      selected = FRONTMOST_ID;
-      frontmostLabel = frontName;   // 识别到什么就叫什么：按钮直接显示该应用名
-      markSelected();
-      message(`已切到 ${frontName}（未添加），发送将直接输入到它。`);
-    }
-  } catch {
-    // 连续两拍失败才判定断连，避免单次网络抖动误报；顶部状态立即改口，不再挂假"已就绪"。
+    followFrontmost(current);
+
+  } catch (error) {
+    // 连续两拍失败才改口，避免单次抖动误报；顶部状态立即反映真实值，不挂假"已就绪"。
+    // 分级：刚失败按琥珀色示警（"在重试"），持续不通超过 15 秒才升红并带上具体原因——
+    // 一次 Wi-Fi 唤醒抖动不该吓人，但一直不通必须说清是哪一种不通。
     heartbeatFailures++;
+    const gap = lastContactAt ? Date.now() - lastContactAt : 0;
     if (heartbeatFailures >= 2) {
       httpDown = true;
       connectionEl.textContent = '未连接';
       connectionEl.classList.remove('ready', 'warn');
-      message('与电脑的连接已断开：请确认同一 Wi-Fi，或重新扫码。', true);
+      const hard = gap >= 15000;
+      const advice = heartbeatAdvice(error);
+      message(hard ? `${advice}。已中断 ${humanGap(gap)}，轻点此处立即重试` : `${advice}，正在自动重试…`,
+              hard ? true : 'warn');
     }
+    scheduleHeartbeatRetry();
   }
 }
 
@@ -739,7 +591,25 @@ function startHeartbeat(interval = HEARTBEAT_MS) {
 function stopHeartbeat() {
   clearInterval(heartbeat);
   heartbeat = 0;
+  cancelHeartbeatRetry();
 }
+
+// 系统层的网络事件是最准的一手信号，但只用它"提前补拍"，不跳过分级判定：
+// Android 在 Wi-Fi 唤醒/切换的瞬间会先报一两秒假离线，若拿它直接甩红色报错，
+// 就是从"漏报"换成了"误报"。断网原因由心跳分类器（navigator.onLine）如实说清。
+for (const event of ['online', 'offline']) {
+  window.addEventListener(event, () => {
+    cancelHeartbeatRetry();
+    heartbeatTick();
+  });
+}
+
+// 断连提示本身可点：等自动重试有时要好几秒，用户想立刻恢复的那股心气应该被接住。
+messageEl.addEventListener('click', () => {
+  if (!httpDown && heartbeatFailures === 0) return;
+  cancelHeartbeatRetry();
+  heartbeatTick();
+});
 
 // 浏览器进后台不完全停摆：UU 远程分屏等场景里页面仍"可见但无焦点"，
 // 完全停轮询会导致 Mac 前台切换不再同步到手机。后台降频到 15s，回前台立即补拍。
@@ -747,6 +617,8 @@ const BACKGROUND_HEARTBEAT_MS = 15000;
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
+    // 后台没人看屏幕，补拍没有意义：留着只会白耗电，也容易在唤醒瞬间堆积。
+    cancelHeartbeatRetry();
     startHeartbeat(BACKGROUND_HEARTBEAT_MS);
     return;
   }
@@ -768,25 +640,12 @@ async function boot() {
     renderTargets();
     applyTheme(status.theme);
     httpDown = false;
+    lastContactAt = Date.now();
     lastAccessibility = status.accessibility;
     refreshConnectionBadge();
     if (!status.accessibility) message('请先在电脑端控制台完成授权，页面仍可输入。', true);
-    // 刷新后立即对齐一次选中态：Mac 前台命中 Dock 目标就选它，否则进入伪目标并记住前台名，
-    // 保证底部"发送到 X"与 Dock 高亮始终反映真实状态，而不是上次会话的残留默认值。
-    // 新开首页默认选小精灵（方案 §1）：它是手机端主入口，不是"电脑上恰好在前台的那个应用"。
-    // 这里仍然记录当前前台作为边沿跟随的基线——心跳只在用户离开小精灵后才把选中带到应用上。
-    const frontId = status.frontmostId;
-    selected = SPRITE_ID;
-    lastSeenFront = frontId ?? status.frontmostName ?? null;
-    frontmostLabel = null;
-    markSelected();
-    // 小精灵不唤醒任何应用：它没有 bundleID，/api/activate 与 AX 绑定都对它无意义（方案 §3）。
-    // 进入即把前台目标唤醒到“已选中且已就绪”：默认高亮的只是 UI 提示，桌面绑定要等首键才建；
-    // 若 Mac 输入框没焦点，首键 establish 失败会冻结草稿、表现为“无反应”。主动唤醒一遍，
-    // 让手机“默认选中”与实际输入就绪对齐（与手动点一下目标等价，不移动鼠标、不重置草稿）。
-    if (selected && targets.some(item => item.id === selected)) {
-      activateTarget(selected).catch(() => {});
-    }
+    // 启动默认跟随真实前台；只确定接收者，不激活或移动电脑上的焦点。
+    applyFrontmost(status);
     startHeartbeat();
     // 控制租约走 WS 通道：服务端易主时下行 control/auth_ok，此时立即刷新徽标，
     // 不要等到下一拍（≤5s）HTTP 心跳才发现「已就绪」是假的。
@@ -801,6 +660,7 @@ async function boot() {
     // 小精灵面板：任务卡与当前网页绑定都由它自己渲染，失败不影响主流程。
     try {
       window.pocketdeskAgentPanel?.init();
+      await window.pocketdeskAgent?.recoverActive();
       window.pocketdeskAgent?.fetchPage();
     } catch { /* 面板缺失只影响小精灵，不拖垮首页 */ }
     // 安全连接地址（含正确主机，无 token）：供设置面板在开启甩送时升级到 HTTPS 触发证书信任。

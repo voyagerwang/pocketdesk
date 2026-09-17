@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 LiveInputReceipt 的草稿模式回执、InputBinding 的输入上下文、控制租约校验闭包与 ScreenCapture 的鉴权画面读取、Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
- * [OUTPUT]: 对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活与应用选择后鼠标就位/发送/图片预上传/快捷键触发/草稿实时同步与只读恢复探测、静态页面服务；非回环写请求强制 Bearer 校验）。
+ * [OUTPUT]: 注入小精灵共享输入/指针执行器与执行时控制租约核验；对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活与应用选择后鼠标就位/发送/图片预上传/快捷键触发/草稿实时同步与只读恢复探测、静态页面与 recipients.js 接收者路由服务；非回环写请求强制 Bearer 校验）。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的传输层；只翻译协议不做系统调用，与 WSServer（控制/光标）和 FrameServer（持续画面）并列。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -39,6 +39,20 @@ final class Server {
         self.webRoot = webRoot
         self.store = store
         self.executor = InputExecutor(store: store)
+        AgentRunner.resolveApp = { [weak self] name in
+            AppOperator.resolve(name, configured: self?.store.targets ?? [])
+        }
+        AgentRunner.canControl = { [weak self] taskId in
+            guard let task = TaskStore.task(id: taskId), task.status == .running,
+                  let session = task.controlSession else { return false }
+            return self?.controlAuthorized(session) == true
+        }
+        AgentRunner.dispatchToApp = { [weak self] app, text, taskId, done in
+            guard let self else { done("服务不可用。"); return }
+            AgentAppDispatch.send(app: app, text: text, taskId: taskId, store: self.store,
+                                  executor: self.executor, pointer: self.pointerExecutor, authorized: { AgentRunner.canControl(taskId) }, completion: done)
+        }
+
     }
 
     func start() throws {
@@ -514,13 +528,13 @@ final class Server {
             }
         case ("GET", "/"), ("GET", "/index.html"):
             serveFile("index.html", connection: connection)
-        case ("GET", let asset) where ["device-info.js", "agent-client.js", "agent-panel.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "style.css", "app-extras.css", "screen.css", "console-agent.js"].contains(String(asset.dropFirst())):
+        case ("GET", let asset) where ["device-info.js", "agent-client.js", "agent-panel.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "recipients.js", "style.css", "app-extras.css", "screen.css", "console-agent.js"].contains(String(asset.dropFirst())):
             serveFile(String(path.dropFirst()), connection: connection)
         default:
             // /api/v1 下的本机管理端点（模型服务配置与连通性实测）委托 AgentHTTP，
             // Server 保持一行转发，不把路由表继续堆在自己身上。
             if AgentHTTP.handle(method: method, path: path, body: bodyData, fromLoopback: fromLoopback,
-                                authorization: authorization,
+                                authorization: authorization, query: rawPath,
                                 queue: queue, respond: { status, json in self.respond(connection, status: status, json: json) }) { return }
             respond(connection, status: 404, json: ["error": "未找到资源。"])
         }

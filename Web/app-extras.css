@@ -699,6 +699,29 @@ main.pad-mode .pad-title {
 @media (prefers-reduced-motion: reduce) { .agent-dot { animation: none; opacity: .8 } }
 .agent-slow { font-weight: 500; color: var(--fg-faint); }
 .agent-hint { margin: 0; font-size: 13px; color: var(--fg-faint); }
+.agent-btn-primary {
+  flex: 1;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--accent-line);
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.agent-btn-primary:active { filter: brightness(0.95); }
+.agent-btn-ghost {
+  flex: 1;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-1);
+  color: var(--fg-muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+.agent-btn-ghost:active { background: var(--surface-3); }
 .agent-text {
   font-size: 14px;
   line-height: 1.6;
@@ -763,6 +786,3 @@ main.pad-mode .pad-title {
   line-height: 1;
   cursor: pointer;
 }
-/* 小精灵图标：四角星，与既有应用图标同尺寸同选中态。 */
-.sprite-icon svg { width: 60%; height: 60%; fill: var(--accent); }
-.target-sprite.selected .sprite-icon svg { fill: var(--accent-ink); }

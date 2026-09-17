@@ -264,6 +264,16 @@ final class InputExecutor {
         }
     }
 
+    /// 派单前的清空：Cmd+A 全选 + Delete 删净目标输入框，让随后写入的任务正文成为框内唯一内容。
+    /// 刻意**不做读回校验**——WorkBuddy 等 Chromium 应用的 AXValue 读到的是**占位提示**（且会变化），
+    /// 空框时也永远非空，"读回为空"这条判据在这些应用上根本不成立。清空是幂等的：框本来就空时
+    /// 这一对按键是无害的空操作。调用方必须已核验过前台应用与可编辑焦点。
+    func clearComposerForAgentDispatch() -> Bool {
+        guard postKey(0, flags: .maskCommand) else { return false }   // Cmd+A：整框全选
+        usleep(80_000)
+        return postDeleteKey()                                  // 只带 keycode，避免被当成向前删
+    }
+
     /// 建写入器：门禁（控制租约 + 绑定）与三个原语只此一份，"开新轮次"与"清空后重捕获"共用。
     private func makeLiveWriter(pid: pid_t, context: String) -> KeyboardDraftWriter {
         KeyboardDraftWriter(pid: pid,

@@ -7,6 +7,10 @@ workspace_browser.py: 覆盖慢请求在途时切换取消排队快照不冻结�
 runtime-smoke.cjs: 已安装服务的只读冒烟，验证控制握手隔离、真实 JPEG 元数据、ACK 背压和超时，不注入输入或保存画面。
 runtime_browser.py: 独立浏览器连接真实服务验证 JPEG 解码、四种视口按钮可见性和关闭停止；拦截远端输入。
 
+heartbeat_browser.py: 真实浏览器连接真实服务验证手机页心跳失败的分级与归因——失败 <15 秒只给琥珀色"正在自动重试…"，≥15 秒才升红并报出中断时长与"轻点此处立即重试"；手机离线（`navigator.onLine === false`）单独归因，不与电脑端问题混为一谈；恢复时必须报出中断时长；`heartbeatAdvice` 对 401 / 非 401 的 HTTP 失败 / 页面脚本错误 / 网络失败给出四句互不相同的话。只放行 GET 与 `/api/pair`，其余写接口全部拦截，不注入任何桌面输入。
+
+WorkBuddy 整页 AXValue 漂移回归：`live-draft.test.swift` 证明非编辑区同长变化时，本次插入片段+精确光标可认账；删除结果不等于目标时仍必须失败。`agent-client.test.cjs` 另锁住终态后 `send()` 直接新建（不是旧任务补充）、执行中拒绝再派、刷新找回活动任务，以及任务卡父层的 `hidden` 解除路径。
+
 live-draft.test.swift: 隔离编辑器验证整值替换、Unicode 光标、暂存不落字、桌面修改/焦点/选区冲突和失败停止、提交封闭；选区替换保留原有前后文，连续纠正零退格；读回延迟恢复及应用切回后当前焦点续发均不重复写入，未知写入/冲突/提交阶段停止不可重放。`update` 删除降级链独立断言块：受控输入框（AX 设不上）按「AX 连败退避（连败 3 次停用、成功清零，一次读回迟滞不再永久逐字）→ Cmd+A 单和弦整框全选（旧文恰为整框且光标在文末时读回确认后一次覆盖；Cmd+A 被吞直接退逐字；送达没落 DOM 先按 Right 还原光标再逐字）→ 逐字 Backspace」降级；空替换不补刀回归锁在此（旧版多发一次退格多删前缀一字且冻结草稿）。清空另有独立断言块：按**当前实际内容**整段删净（不比旧基线，故能修掉"清空后每次还剩第一个字"）、只发一次删除键、已空幂等不再多按；成功判据始终是"读回为空"——AX 设选区**假成功**（select 声称成功却不落 DOM，ZCode 实况）与**设不了选区**都自动退到真实键盘 Cmd+A 兜底删净，退格被吞删不动时两轮后如实失败并保留正文；门禁失效/控件不可读照样拒绝；基线被外部改动而冻结后，清空能破冰并把同一轮续写接上，删不干净则保留正文停在冻结态，结果未知的停止不给清空开后门。配套内存替身 `FakeField` 刻意让**插入落在光标处**（否则 `start` 偏移那类 bug 复现不出来），退格无选区时吃光标前一个字，并提供 `selectLies`（AX 选区假成功）、`backspaceNoop`（退格被吞）、`keyboardSelectAll`（Cmd+A 吞键）、`keyboardSelectAllNoop`（Cmd+A 送达没生效）四个故障注入开关与 `selectAttempts`（AX 尝试计数，验证连败退避）。
 
 image-batch-store.test.swift: 隔离验证不同批次隔离、多图身份幂等、重复提交身份拒绝、显式顺序、缺图整批拒绝、8 张/8MiB 上限、成功消费与损坏图片拒绝。
@@ -41,3 +45,20 @@ pointer-geometry.test.swift: 隔离验证 `PointerGeometry`（纯几何）与 `T
 输入追加回归：workspace_browser.py 验证暂停后删空携原 ID 核验、删空后继续输入及电脑原文不反填；screen-core.test.js 验证失败回执晚到时保留同草稿删除，跨草稿仍拒绝恢复。
 
 提交清空回归：workspace_browser.py 验证有草稿的回车快捷键只提交一次并清空、空草稿回车仍走原接口、旧编辑元素迟到事件不回填或重发、历史配额异常不阻断已确认提交的收尾；失败保留与显式重试仍覆盖。
+
+agent-runner.test.swift: 无桌面副作用验证直接打开、派单、控制租约与失败状态，注入模型和执行器替身；重复派单使用临时任务记录，要求在激活/清空前同步拒绝。
+sprite-flow.test.py: Playwright 模拟任务与应用接口，验证小精灵成功接收写入历史、未接收保留草稿且不记历史、存储失败不阻断发送收尾，并覆盖甩送发送门禁、连续任务、简洁状态、手动/明确意图自动接续、迟到不抢新草稿及球球加载；截图位于 /tmp。
+
+sprite-flow.test.py 追加：小精灵切应用保留正文并同步，切回小精灵不产生桌面写入；待机/执行动效与减少动态偏好验证。
+
+agent-runner.test.swift 追加只读应用解析：本机存在 UU 时验证 UU远程/UU 远程/uu/UURemote、自定义配置名和歧义拒绝；不打开真实应用。
+
+feishu-messaging.test.swift: 临时存储与 CLI 替身验证唯一联系人、同名补充、用户选择轮次、纯文本 argv、幂等/未知不重发/租约；--live 仅查本人资料以验证复用授权，绝不真实发信。
+
+feishu-gateway.test.swift: 模拟风险帮助与业务执行验证各域入口、参数值不成为 CLI 开关、固定身份、写去重、高风险确认和群聊 chat-id；--live 仅验证授权、群列表和命令帮助。
+
+sprite-flow.test.py 动效断言更新为分层 SVG、待机转头、执行扫视、点按正视及减少动态；正视截图写入 /tmp/pocketdesk-orb-facing.png。
+
+球球回退验收：sprite-flow.test.py 验证原始整图加载、待机/执行动效、无独立变形眼层及减少动态；截图 /tmp/pocketdesk-orb-restored.png。
+
+sprite-flow.test.py 新增启动前台/未配置应用之间的绑定隔离、草稿/IME/提交期间延迟跟随、小精灵往返无桌面写入及 320/390/1024 宽度检查；live-recovery.test.cjs 的选择契约从 recipients.js 读取并验证静态资源注册。agent-runner.test.swift 覆盖 Codex 包身份别名、普通 ChatGPT 不误认与候选歧义。

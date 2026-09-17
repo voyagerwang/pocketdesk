@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 读取 Web/agent-client.js 源码，在 vm 沙箱里注入最小 window/localStorage/fetch 替身。
- * [OUTPUT]: 断言小精灵任务客户端的提交去重、失败查账与轮询退避——这些都是纯逻辑，必须可断言。
+ * [OUTPUT]: 断言终态直接新建、待补充续接、旧回执隔离及小精灵任务客户端的提交去重、失败查账、轮询退避、待确认活动态与刷新找回，并静态锁住任务面板会解除父层 hidden。
  * [POS]: tests 的 Web 客户端测试；不启动浏览器、不连真实服务。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -11,6 +11,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'Web', 'agent-client.js'), 'utf8');
+const panelSource = fs.readFileSync(path.join(__dirname, '..', 'Web', 'agent-panel.js'), 'utf8');
+const indexSource = fs.readFileSync(path.join(__dirname, '..', 'Web', 'index.html'), 'utf8');
 
 function makeClient(handler) {
   const calls = [];
@@ -27,7 +29,7 @@ function makeClient(handler) {
     },
     localStorage: { getItem: () => 'test-token', setItem: () => {} },
     location: { href: 'https://phone.local/' },
-    window: {},
+    window: { pocketdeskControlInfo: () => ({ session: "controller-test" }) },
   };
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox);
@@ -99,6 +101,71 @@ async function main() {
     await agent.submit('x', null);
     assert.strictEqual(agent.isActive(), true, 'accepted 属于活动状态');
   }
+
+  // 6) 结果待核对仍是活动任务：不能停轮询，也不能允许并行新建。
+  {
+    const { agent } = makeClient(() => okJSON({ task: { id: 'verify', status: 'verifying', revision: 3 } }));
+    await agent.submit('open', null);
+    assert.strictEqual(agent.isActive(), true, 'verifying 必须属于活动状态');
+  }
+
+  // 7) 页面刷新后从 Mac 任务事实源找回最新活动任务，再拉完整快照。
+  {
+    const { agent, calls } = makeClient((url) => {
+      if (url === '/api/v1/tasks?cursor=0') return okJSON({ tasks: [
+        { id: 'done', status: 'succeeded' },
+        { id: 'pending', status: 'running' }
+      ] });
+      if (url === '/api/v1/tasks/pending') return okJSON({ task: { id: 'pending', status: 'running' } });
+      throw new Error('unexpected ' + url);
+    });
+    const task = await agent.recoverActive();
+    assert.strictEqual(task.id, 'pending', '应找回进行中任务');
+    assert.ok(calls.some(c => c.url === '/api/v1/tasks/pending'), '必须拉完整快照');
+  }
+
+  // 终态之后直接发送必须创建新任务，不能进入旧任务的补充次数限制。
+  for (const status of ['succeeded', 'failed', 'abandoned']) {
+    const { agent, calls } = makeClient((url) => url === '/api/v1/tasks/old'
+      ? okJSON({ task: { id: 'old', status } })
+      : okJSON({ task: { id: 'new', status: 'accepted' } }));
+    await agent.resume('old');
+    await agent.send('打开 Codex');
+    assert.equal(calls[1].url, '/api/v1/tasks');
+    assert.equal(JSON.parse(calls[1].options.body).controlSession, 'controller-test');
+  }
+  {
+    const { agent, calls } = makeClient(() => okJSON({ task: { id: 'old', status: 'running' } }));
+    await agent.resume('old');
+    await assert.rejects(agent.send('第二项'), /正在执行/);
+    assert.equal(calls.length, 1, '执行中不能产生第二条请求');
+  }
+  {
+    const { agent, calls } = makeClient(() => okJSON({ task: { id: 'old', status: 'needsInput', revision: 2 } }));
+    await agent.resume('old');
+    await agent.send('选择第一个');
+    assert.equal(calls[1].url, '/api/v1/tasks/old/actions', '待补充继续原任务');
+  }
+  {
+    let release;
+    const { agent } = makeClient((url) => {
+      if (url === '/api/v1/tasks') return okJSON({ task: { id: 'new', status: 'accepted' } });
+      if (release) return new Promise(resolve => { release.resolve = resolve; });
+      return okJSON({ task: { id: 'old', status: 'succeeded' } });
+    });
+    await agent.resume('old');
+    release = {};
+    const refreshing = agent.refresh();
+    await agent.send('新任务');
+    release.resolve(okJSON({ task: { id: 'old', status: 'succeeded' } }));
+    await refreshing;
+    assert.equal(agent.current().id, 'new', '旧查询不能覆盖新任务');
+  }
+  assert.ok(!indexSource.includes('id="agent-new"'), '无需新任务按钮');
+
+  // 8) 父层面板默认 hidden 时，渲染必须有显式解除路径；只显示内层 approval 没用。
+  assert.match(indexSource, /id="agent-panel"[^>]*hidden/, 'HTML 启动时默认隐藏任务卡');
+  assert.match(panelSource, /el\.panel\.hidden\s*=\s*!task/, '渲染任务后必须显式解除父层 hidden');
 }
 
 main().then(() => {

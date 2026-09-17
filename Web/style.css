@@ -1,6 +1,6 @@
 /*
  * [INPUT]: 消费首页语义结构。
- * [OUTPUT]: 提供经典蓝基础主题令牌、Dock、输入区和触控板样式，按展开状态区分页面/电脑滚动。
+ * [OUTPUT]: 首页/全屏接收者往返入口与球球状态样式； 提供经典蓝基础主题令牌、Dock、输入区和触控板样式，按展开状态区分页面/电脑滚动。
  * [POS]: Web 设计令牌来源；app-extras.css 补充首页辅助控件与米白覆盖，screen.css 承载全屏工作台。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -657,3 +657,56 @@ main:not(.pad-mode) .pad-hint {
 /* 收起时允许滑动页面；展开后手势在起点归属触控板。 */
 main:not(.pad-mode) #pad { touch-action: pan-y; }
 main.pad-mode #pad { touch-action: none; overscroll-behavior: contain; }
+
+/* 工作台球球复用静态 SVG；任务信息保持状态、说明两级。 */
+.sprite-icon img { width: 100%; height: 100%; object-fit: contain; }
+/* ---------- 接收者往返：首页与全屏共用 ---------- */
+.recipient-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+.compose-recipient {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+.recipient-toggle {
+  flex: none;
+  min-height: var(--control-size);
+  padding: 0 var(--s-2);
+  border: 0;
+  border-radius: var(--r-field);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.recipient-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.recipient-toggle:hover { background: var(--surface-2); }
+.agent-brief { color: var(--fg-muted); font-size: 13px; line-height: 1.5; }
+.agent-result details, .agent-sources details { font-size: 12px; color: var(--fg-muted); }
+.agent-result summary, .agent-sources summary { cursor: pointer; padding: 8px 0; }
+.agent-actions:has(button:not([hidden])) { display: flex; }
+.agent-actions:not(:has(button:not([hidden]))) { display: none; }
+
+/* 恢复整颗球的轻动效，眼睛与身体保持原始比例。 */
+.sprite-icon img { transform-origin: 50% 75%; animation: sprite-idle 4.8s ease-in-out infinite; }
+.target-sprite.is-working .sprite-icon img { animation: sprite-working 1.6s ease-in-out infinite; }
+@keyframes sprite-idle {
+  0%, 100% { transform: translateY(0) rotate(-3deg) scale(1); }
+  50% { transform: translateY(-3px) rotate(3deg) scale(1.035); }
+}
+@keyframes sprite-working {
+  0%, 100% { transform: translateY(0) rotate(-7deg); }
+  50% { transform: translateY(-4px) rotate(7deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sprite-icon img, .target-sprite.is-working .sprite-icon img { animation: none; transform: none; }
+}

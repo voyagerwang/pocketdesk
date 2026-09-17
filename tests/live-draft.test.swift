@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 LiveDraft 的纯状态机、隔离 DraftEditor 与内存输入框替身 FakeField，不读取真实桌面。
- * [OUTPUT]: 验证整值/选区替换、Unicode、冲突停止、显式重试核验与当前焦点续发均不重复写入、未知结果拒绝恢复、提交封闭；手机已有全文与连续删空保留电脑前后文；
+ * [OUTPUT]: 验证整值/选区替换、Unicode、冲突停止、显式重试核验与当前焦点续发均不重复写入、未知结果拒绝恢复、提交封闭；WorkBuddy 整页 AX 文本的非编辑区漂移可由“插入片段+光标”局部证据认账，删除仍禁止宽松认账；手机已有全文与连续删空保留电脑前后文；
  *           update 删除按「AX 连败退避（连败 3 次停用、成功清零）→ Cmd+A 整框全选（旧文恰为整框且光标在文末，读回确认后一次覆盖）→ 逐字 Backspace」降级，全选没落 DOM 先按 Right 还原光标再逐字，空替换不补刀（旧版多发一次退格冻结草稿的回归锁在此）；
  *           清空按当前实际内容整段删净且幂等，成功判据始终是"读回为空"；AX 设选区假成功/设不了选区时退到真实键盘 Cmd+A 兜底，删不动（退格被吞）两轮后如实失败并保留正文，门禁失效/不可读照样拒绝，基线分叉后可破冰续写。
  * [POS]: tests 的输入事务回归；真实 AX 控件另行验收。
@@ -226,6 +226,29 @@ final class FakeField {
         let trimWriter = trimField.writer()
         assert(trimWriter.update(from: "电脑已有正文", to: "电脑已有"), "手机侧删两个字的差量应成功")
         assert(trimField.text == "电脑已有" && trimField.deletes == 2, "逐字删除恰好删到位，不再补刀")
+
+        // WorkBuddy 实况：AXValue 是整个会话 WebArea。输入框落字的同时，别处状态文字正好变了，
+        // 总长度与光标都正确但全文不等。本次插入片段恰好在光标前即可证明已落字。
+        var workBuddySnapshot = DraftSnapshot(text: "甲乙丙丁", location: 2, length: 0)
+        let workBuddyWriter = KeyboardDraftWriter(read: { workBuddySnapshot }, select: nil,
+            valid: { true }, key: { _,_ in false }, insert: { inserted in
+                let current = workBuddySnapshot.text as NSString
+                var changed = current.replacingCharacters(in: NSRange(location: 2, length: 0), with: inserted)
+                changed = (changed as NSString).replacingCharacters(in: NSRange(location: 0, length: 1), with: "戊")
+                workBuddySnapshot = DraftSnapshot(text: changed, location: 2 + inserted.utf16.count, length: 0)
+                return true
+            })
+        assert(workBuddyWriter.update(from: "", to: "请打开百度"),
+            "非编辑区漂移时，本次片段与光标都命中应认账")
+
+        // 删除没有可核验的非空插入片段，绝不能因“长度/光标看起来对”就放行。
+        var deleteSnapshot = DraftSnapshot.end(of: "甲乙")
+        let unsafeDelete = KeyboardDraftWriter(read: { deleteSnapshot }, select: nil,
+            valid: { true }, key: { code,_ in
+                if code == 51 { deleteSnapshot = DraftSnapshot.end(of: "甲丙") }
+                return true
+            }, insert: { _ in false })
+        assert(!unsafeDelete.update(from: "甲乙", to: "甲"), "删除结果不等于目标时仍必须失败")
 
         // 读取延迟导致失败：稍后确认目标文本已落入，只恢复基线，不再注入一次。
         let snapshot = DraftSnapshot.end(of: "")

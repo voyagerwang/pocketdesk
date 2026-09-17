@@ -1,6 +1,6 @@
 <!--
  [INPUT]: 依赖 app/pad/compose 的首页、多图批次和输入能力，以及 screen 系列模块的画面工作台。
- [OUTPUT]: 提供首页 Dock、原生多图文件选择与缩略图容器、触控板、草稿和 PiP/全屏工作台。
+ [OUTPUT]: 简洁任务卡、接续动作、首页和全屏共享的小精灵往返入口及输入接收者标识； 小精灵完成后直接输入下一项，无独立新任务按钮；提供首页 Dock、原生多图文件选择与缩略图容器、触控板、草稿和 PiP/全屏工作台。
  [POS]: Web 唯一手机入口；只收集文本与手势，听写由手机输入法提供。
  [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -20,8 +20,8 @@
         } catch (e) { /* 无属性 = 经典蓝 */ }
       })();
     </script>
-    <link rel="stylesheet" href="/style.css?v=3.0.13" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
-    <link rel="stylesheet" href="/app-extras.css?v=3.0.9">
+    <link rel="stylesheet" href="/style.css?v=1.3.0.13" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
+    <link rel="stylesheet" href="/app-extras.css?v=1.3.0.13">
     <link rel="stylesheet" href="/screen.css?v=3.1.1">
   </head>
   <body data-page-node-id="2eqrPm23J7ToUXDDq0CibO">
@@ -54,8 +54,8 @@
         <div id="agent-result" class="agent-result"></div>
         <div id="agent-sources" class="agent-sources"></div>
         <div class="agent-actions">
+          <button id="agent-continue" class="agent-btn" type="button" hidden></button>
           <button id="agent-abandon" class="agent-btn" type="button" hidden>放弃并保留草稿</button>
-          <button id="agent-new" class="agent-btn" type="button" hidden>新任务</button>
         </div>
       </section>
       <div id="agent-page" class="agent-page" hidden>
@@ -64,6 +64,10 @@
       </div>
 
       <section class="compose" aria-label="要输入的文本" data-page-node-id="0ZcVuev8NMMuOPyD02o9O6">
+        <div class="recipient-bar">
+          <span id="compose-recipient" class="compose-recipient"></span>
+          <button class="recipient-toggle" data-recipient-toggle type="button">回到小精灵</button>
+        </div>
         <textarea id="text" rows="7" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="点这里，用手机键盘或听写输入…"></textarea>
         <div id="history-panel" class="history-panel" hidden data-page-node-id="LNyuhfSQtQRqKlrfGvAsUc">
           <div class="hist-head" data-page-node-id="nOYbSHqR3XF4fusuuaEo3W">
@@ -130,6 +134,10 @@
       </section>
       <div id="screen-context" class="screen-context" hidden><button id="screen-context-right" type="button">此处右键</button><button id="screen-context-drag" type="button">从此处拖动</button><button id="screen-context-cancel" type="button">取消</button></div>
       <section id="screen-compose" class="screen-compose" aria-label="输入到电脑" hidden>
+        <div class="recipient-bar">
+          <span id="screen-recipient" class="compose-recipient"></span>
+          <button class="recipient-toggle" data-recipient-toggle type="button">回到小精灵</button>
+        </div>
         <div class="screen-compose-bar">
           <div id="screen-compose-editor"><textarea id="kb-proxy" class="kb-proxy" rows="1" enterkeyhint="enter" autocomplete="off" autocapitalize="sentences" spellcheck="false" aria-label="输入到电脑" placeholder="输入文字…"></textarea></div>
           <button id="screen-send" type="button" aria-label="发送文字" title="发送文字" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
@@ -183,13 +191,14 @@
       </div>
     </dialog>
     <script src="/device-info.js?v=2"></script>
-    <script src="/agent-client.js?v=1"></script>
-    <script src="/agent-panel.js?v=1"></script>
-    <script src="/app.js?v=3.0.26"></script>
+    <script src="/agent-client.js?v=2"></script>
+    <script src="/agent-panel.js?v=5"></script>
+    <script src="/app.js?v=3.0.34"></script>
+    <script src="/recipients.js?v=1"></script>
     <script src="/pad.js?v=3.0.12"></script>
     <script src="/settings.js?v=3.0.10"></script>
     <script src="/compose-queue.js?v=3.0.17"></script>
-    <script src="/compose.js?v=3.0.28"></script>
+    <script src="/compose.js?v=3.0.33"></script>
     <script src="/screen-geometry.js?v=3.0.2"></script>
     <script src="/screen-gestures.js?v=3.0.12"></script>
     <script src="/screen-pip.js?v=3.0.0"></script>

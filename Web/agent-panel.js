@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 agent-client.js 的任务快照与事件、index.html 的 #agent-* 容器。
- * [OUTPUT]: 提供 window.pocketdeskAgentPanel——渲染当前任务卡、结果/来源、当前网页绑定与可用动作。
+ * [OUTPUT]: 提供 window.pocketdeskAgentPanel——状态、简短任务说明与成功接续入口，完整结果按需展开，渲染当前任务卡、结果/来源、当前网页绑定与可用动作。
  * [POS]: Web 的小精灵展示层：**只呈现，不执行工具、不发任何桌面输入**。
  *        所有文本一律 textContent 落地，模型或网页返回的 HTML/脚本不会被解析（方案 §9 安全呈现）。
  *        M1 的按钮是「放弃并保留草稿」而不是「停止」——runtime 不支持真中断，叫停止就是谎报（方案 §2）。
@@ -11,6 +11,7 @@
 
   var el = {};
   var lastRenderedStatus = null;
+  var handedOff = new Set();
 
   function $(id) { return document.getElementById(id); }
 
@@ -20,7 +21,11 @@
     el.result = $('agent-result');
     el.sources = $('agent-sources');
     el.abandon = $('agent-abandon');
-    el.newTask = $('agent-new');
+    el.continue = $('agent-continue');
+    if (el.continue) el.continue.addEventListener('click', function () {
+      var task = window.pocketdeskAgent.current();
+      if (task && task.handoffTargetId) window.pocketdeskContinueInApp?.(task.handoffTargetId);
+    });
     el.page = $('agent-page');
     el.pageLabel = $('agent-page-label');
     el.pageClear = $('agent-page-clear');
@@ -35,12 +40,6 @@
         }).then(function () {
           el.abandon.disabled = false;
         });
-      });
-    }
-    if (el.newTask) {
-      el.newTask.addEventListener('click', function () {
-        window.pocketdeskAgent.detach();
-        render();
       });
     }
     if (el.pageClear) {
@@ -74,7 +73,7 @@
     el.status.className = 'agent-status is-' + task.status;
     var label = document.createElement('span');
     label.className = 'agent-status-label';
-    label.textContent = task.statusText || task.status;
+    label.textContent = task.deliveryRecipient ? '已发送' : task.handoffTargetId && task.status === 'succeeded' ? '已交给 ' + task.handoffTargetName : (task.statusText || task.status);
     el.status.append(label);
 
     if (window.pocketdeskAgent.isActive()) {
@@ -95,31 +94,37 @@
   function renderResult(task) {
     el.result.textContent = '';
     if (!task) return;
-    var body = task.result || (task.status === 'failed' ? task.error : '') || '';
-    if (!body) {
-      // 阶段消息按实际事件产生，不用倒计时假装进度（方案 §7）。
-      if (window.pocketdeskAgent.isActive()) {
-        var hint = document.createElement('p');
-        hint.className = 'agent-hint';
-        hint.textContent = '小精灵正在处理，结果会直接出现在这里。';
-        el.result.append(hint);
-      }
-      return;
+    var brief = document.createElement('div');
+    brief.className = 'agent-brief';
+    var text = (task.text || '').replace(/\s+/g, ' ').trim();
+    brief.textContent = text.length > 44 ? text.slice(0, 44) + '…' : text;
+    el.result.append(brief);
+    var body = task.result || task.error || '';
+    if (task.status === 'needsInput') {
+      var question = document.createElement('div');
+      question.textContent = body;
+      el.result.append(question);
+    } else if (body) {
+      var details = document.createElement('details');
+      var summary = document.createElement('summary');
+      summary.textContent = task.status === 'failed' ? '查看原因' : '查看结果';
+      var full = document.createElement('div');
+      full.className = 'agent-text';
+      full.textContent = body;
+      details.append(summary, full);
+      el.result.append(details);
     }
-    var pre = document.createElement('div');
-    pre.className = task.status === 'failed' ? 'agent-text is-error' : 'agent-text';
-    // textContent 而非 innerHTML：回答里的标签一律当纯文本显示。
-    pre.textContent = body;
-    el.result.append(pre);
   }
 
   function renderSources(task) {
     el.sources.textContent = '';
     if (!task || !task.sources || !task.sources.length) return;
-    var title = document.createElement('span');
+    var disclosure = document.createElement('details');
+    el.sources.append(disclosure);
+    var title = document.createElement('summary');
     title.className = 'agent-sources-title';
-    title.textContent = '来源：';
-    el.sources.append(title);
+    title.textContent = '来源';
+    disclosure.append(title);
     task.sources.forEach(function (source) {
       var href = safeURL(source.url);
       var link = document.createElement(href ? 'a' : 'span');
@@ -131,7 +136,7 @@
       link.className = 'agent-source';
       link.textContent = source.domain || source.title || source.url;
       link.title = source.url;
-      el.sources.append(link);
+      disclosure.append(link);
     });
   }
 
@@ -157,12 +162,29 @@
   function render() {
     if (!el.panel) return;
     var task = window.pocketdeskAgent.current();
+    var orb = document.querySelector('.target-sprite');
+    if (orb) orb.classList.toggle('is-working', !!task && ['accepted', 'running', 'verifying'].includes(task.status));
+    // HTML 默认 hidden 避免启动闪烁；任务到达后必须在小精灵模式显式解除。
+    // 父层 hidden 不解开会让整个任务卡（含放弃按钮）永久不可见。
+    el.panel.hidden = !task || !(window.pocketdeskIsSpriteSelected && window.pocketdeskIsSpriteSelected());
     renderStatus(task);
     renderResult(task);
     renderSources(task);
     renderPage();
     if (el.abandon) el.abandon.hidden = !window.pocketdeskAgent.isActive();
-    if (el.newTask) el.newTask.hidden = !task;
+    if (el.continue) {
+      el.continue.hidden = !task || !task.handoffTargetId;
+      el.continue.textContent = task && task.handoffTargetName ? '继续聊 ' + task.handoffTargetName + ' →' : '';
+    }
+    if (task && task.handoffTargetId && task.handoffRequested && task.status === 'succeeded' && !handedOff.has(task.id)) {
+      handedOff.add(task.id);
+      var key = 'pd-handoff-' + task.id;
+      var seen = false;
+      try { seen = sessionStorage.getItem(key); sessionStorage.setItem(key, '1'); } catch (_) {}
+      // 已切离小精灵或开始写下一条时，不让迟到回执抢走用户正在输入的目标。
+      if (!seen && window.pocketdeskIsSpriteSelected?.() && !window.pocketdeskHasDraft?.())
+        window.pocketdeskContinueInApp?.(task.handoffTargetId);
+    }
     lastRenderedStatus = task ? task.status : null;
   }
 

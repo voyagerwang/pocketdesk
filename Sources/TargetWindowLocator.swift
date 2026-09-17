@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 AppKit/ApplicationServices 的 AXUIElement 窗口属性与 CoreGraphics 的 CGWindowListCopyWindowInfo。
- * [OUTPUT]: 提供 TargetWindowLocator.resolve(pid:)：目标应用的目标窗口矩形与位于其之上的其他应用遮挡窗口矩形，
+ * [OUTPUT]: findInputBoxCenter 可排除搜索/下拉控件供派单恢复焦点； 提供 TargetWindowLocator.resolve(pid:)：目标应用的目标窗口矩形与位于其之上的其他应用遮挡窗口矩形，
  *           优先 AX focused window、其次 AX main window、再退到该 PID 最前的普通可见窗口。
  * [POS]: Sources 的窗口解析层；只读窗口服务器与辅助功能属性，不移动光标、不改变焦点。与 PointerGeometry 组合使用。
  *        所有矩形都是 CoreGraphics 全局桌面点（左上原点），与 AXPosition 同坐标系，不做 NSScreen 翻转。
@@ -141,7 +141,8 @@ enum TargetWindowLocator {
     /// 只读 AX 树，不动光标、不改焦点。找不到（无辅助功能权限、窗口无文本框、或 AX 树过大超预算）时返回 nil，
     /// 调用方据此回退为只移动光标——这样非输入类应用完全不受影响，只有聊天/Agent/编辑器这类
     /// 能检出输入框的应用才会被点击聚焦。
-    static func findInputBoxCenter(pid: pid_t) -> CGPoint? {
+    /// 派单恢复焦点时关闭 includeSearchFields，排除搜索与下拉控件；手动选应用保留原策略。
+    static func findInputBoxCenter(pid: pid_t, includeSearchFields: Bool = true) -> CGPoint? {
         guard pid > 0 else { return nil }
         guard let window = axWindowElement(pid: pid) else { return nil }
 
@@ -153,8 +154,9 @@ enum TargetWindowLocator {
             guard depth < 28, budget > 0 else { return }
             budget -= 1
             let role = Self.role(of: element)
-            if let frame = Self.frame(of: element), frame.width >= 12, frame.height >= 8,
-               (role == "AXTextField" || role == "AXTextArea" || role == "AXSearchField"
+            if (includeSearchFields || (role != "AXSearchField" && role != "AXComboBox")),
+               let frame = Self.frame(of: element), frame.width >= 12, frame.height >= 8,
+               (role == "AXTextField" || role == "AXTextArea" || (includeSearchFields && role == "AXSearchField")
                 || (Self.isEditable(element) && frame.width >= 60 && frame.height >= 20)) {
                 // 面积越大越可能是主撰写框；同面积时偏下（聊天输入框通常在底部）。
                 let score = frame.width * frame.height + frame.maxY * 0.01
