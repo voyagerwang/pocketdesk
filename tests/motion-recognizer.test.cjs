@@ -38,6 +38,62 @@ function ramp(t0, beta0, t1, beta1, step, extra = {}) {
   return out;
 }
 
+test('侧握 45/60 度前翻不因起始侧倾被拒绝', () => {
+  for (const gamma of [-60, -45, 45, 60]) {
+    const result = run(ramp(0, 20, 300, 55, 20, { gamma }));
+    assert.strictEqual(result.fired, 1, '侧握 ' + gamma);
+  }
+});
+
+test('横屏两方向沿屏幕前翻轴触发，反向不触发', () => {
+  for (const angle of [90, 270]) {
+    for (const forward of [true, false]) {
+      const r = makeRecognizer();
+      let fired = 0;
+      for (let t = 0; t <= 800; t += 20) {
+        const tilt = t < 400 ? 0 : Math.min(35, (t - 400) * 0.12);
+        const result = r.push({ t, beta: 20, gamma: tilt * (angle === 90 ? -1 : 1) * (forward ? 1 : -1), alpha: 0, accel: 9.8, screenAngle: angle });
+        fired += Number(result.fired);
+      }
+      assert.strictEqual(fired, forward ? 1 : 0);
+    }
+  }
+});
+
+test('侧握静止和慢速换握姿不触发', () => {
+  assert.strictEqual(run(ramp(0, 20, 1000, 20, 20, { gamma: 60 })).fired, 0);
+  assert.strictEqual(run(ramp(0, 20, 3000, 55, 20, { gamma: 60 })).fired, 0);
+});
+
+test('转屏中作废动作，不把换轴当成前甩', () => {
+  const r = makeRecognizer();
+  for (let t = 0; t <= 400; t += 20) r.push({ t, beta: 20, gamma: 60, alpha: 0, accel: 9.8, screenAngle: 0 });
+  const result = r.push({ t: 420, beta: 20, gamma: 60, alpha: 0, accel: 9.8, screenAngle: 90 });
+  assert.strictEqual(result.fired, false);
+  assert.ok(result.events.some(e => e.reason === 'screen'));
+});
+
+test('手机整体向前甩的短促加速度脉冲可以触发', () => {
+  const r = makeRecognizer(); let fired = 0;
+  for (let t = 0; t <= 900; t += 20) {
+    let accel = 9.8;
+    if (t >= 420 && t <= 500) accel = 14.5;
+    if (t > 500 && t <= 560) accel = 11.5;
+    const result = r.push({ t, beta: 20, gamma: 55, alpha: 0, accel, screenAngle: 0 });
+    fired += Number(result.fired);
+  }
+  assert.strictEqual(fired, 1);
+});
+
+test('普通步行级小幅振动不触发整体甩送', () => {
+  const r = makeRecognizer(); let fired = 0;
+  for (let t = 0; t <= 1200; t += 20) {
+    const accel = 9.8 + (t % 80 < 40 ? 1.2 : 0);
+    fired += Number(r.push({ t, beta: 20, gamma: 55, alpha: 0, accel, screenAngle: 0 }).fired);
+  }
+  assert.strictEqual(fired, 0);
+});
+
 test('正常翻腕：前倾并保持 → 触发一次', () => {
   const samples = [
     ...ramp(0, 0, 300, 30, 30),        // 0→30° 前翻

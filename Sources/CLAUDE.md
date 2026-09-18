@@ -1,4 +1,7 @@
 # Sources/
+打开回执恢复：AgentRunner 单独跟踪打开工具的失败，同任务后续打开工具成功回执消除此前打开失败；没有成功回执仍失败，其他桌面操作或控制权失败不被打开成功覆盖。
+自然名称打开：AgentRunner.open_target 先解析本机应用，再查询 ChromeBookmarks；唯一书签直接在 Chrome 打开，多候选先询问。书签匹配忽略首尾空白并统一 Unicode/大小写，无需用户指定“Chrome 书签”。
+ChromeBookmarks.swift：实时读取 Chrome Default/Profile 配置文件书签树，保留名称、文件夹路径、地址和配置文件唯一 ID；search_bookmarks 按需检索，open_bookmark 重新核对 ID 后在 Chrome 打开 http/https/file 地址，打开回执依据 NSWorkspace 回调，不声称网页已加载。
 > L2 | 父级: ../CLAUDE.md
 
 成员清单

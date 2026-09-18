@@ -30,8 +30,28 @@ import Foundation
         AgentRunner.openPage = { opened.append($0); return .success(()) }
         AgentRunner.resolveApp = { ($0, "/Applications/" + $0 + ".app") }
         AgentRunner.openApp = { opened.append($0); return .success(()) }
+        let savedResolve = AgentRunner.resolveApp
+        let savedRead = AgentRunner.readBookmarks
+        let savedOpenBookmark = AgentRunner.openBookmark
+        let bookmark = ChromeBookmarks.Entry(id: "Default:9", name: " 个人工作台", folders: ["工作"], url: "https://example.com", profile: "Default")
+        AgentRunner.readBookmarks = { [bookmark] }
+        AgentRunner.openBookmark = { id, done in opened.append(id); done("已提交书签请求") }
+        var targetResult = ""
+        AgentRunner.openTarget("个人工作台") { targetResult = $0 }
+        assert(opened == ["/Applications/个人工作台.app"], "同名应用优先于书签")
+        AgentRunner.resolveApp = { _ in nil }
+        AgentRunner.openTarget("个人工作台") { targetResult = $0 }
+        assert(opened.last == "Default:9" && targetResult == "已提交书签请求", "无应用时按去空白名称打开书签")
+        let beforeAmbiguous = opened.count
+        AgentRunner.readBookmarks = { [bookmark, bookmark] }
+        AgentRunner.openTarget("个人工作台") { targetResult = $0 }
+        assert(opened.count == beforeAmbiguous && targetResult.contains("多个书签"), "多个候选不得自动打开")
+        AgentRunner.resolveApp = savedResolve
+        AgentRunner.readBookmarks = savedRead
+        AgentRunner.openBookmark = savedOpenBookmark
+        opened.removeAll()
 
-        func run(_ tool: String, _ arguments: String, allowed: Bool = true, dispatchFailure: Bool = false, expectedMode: AgentConversationMode = .newTask, lockResult: Result<ExecutionFeedback, ShortcutError> = .success(.delivered("电脑已锁屏。")), extraLockCall: Bool = false, desktopResult: Result<ExecutionFeedback, ShortcutError> = .success(.delivered("已操作。"))) throws -> AgentRunner.Outcome {
+        func run(_ tool: String, _ arguments: String, allowed: Bool = true, dispatchFailure: Bool = false, expectedMode: AgentConversationMode = .newTask, lockResult: Result<ExecutionFeedback, ShortcutError> = .success(.delivered("电脑已锁屏。")), extraLockCall: Bool = false, desktopResult: Result<ExecutionFeedback, ShortcutError> = .success(.delivered("已操作。")), fallbackOpen: Bool = false) throws -> AgentRunner.Outcome {
             var task = try TaskStore.claim(subject: "test", requestId: UUID().uuidString, text: "测试指令", context: nil)
             task.status = .running
             try TaskStore.save(task)
@@ -57,6 +77,9 @@ import Foundation
                     let call: [String: Any] = ["id": "c1", "type": "function", "function": ["name": tool, "arguments": arguments]]
                     let calls = extraLockCall ? [call, call] : [call]
                     done(.success(ModelTurn(toolCalls: calls, rawMessage: ["role": "assistant", "tool_calls": calls])))
+                } else if turns == 2 && fallbackOpen {
+                    let calls: [[String: Any]] = [["id": "c2", "type": "function", "function": ["name": "open_bookmark", "arguments": "{\"id\":\"Default:1390\"}"]]]
+                    done(.success(ModelTurn(toolCalls: calls, rawMessage: ["role": "assistant", "tool_calls": calls])))
                 } else {
                     assert(messages.last?["role"] as? String == "tool")
                     done(.success(ModelTurn(content: "已完成。", rawMessage: ["role": "assistant", "content": "已完成。"])))
@@ -75,6 +98,19 @@ import Foundation
             return outcome!
         }
         let lockTool = AgentRunner.tools.compactMap { $0["function"] as? [String: Any] }.first { $0["name"] as? String == "lock_computer" }
+        AgentRunner.resolveApp = { _ in nil }
+        AgentRunner.readBookmarks = { [] }
+        AgentRunner.openBookmark = { _, done in done("已向 Chrome 提交打开书签请求：API仪表盘") }
+        let recoveredOpen = try run("open_target", "{\"app\":\"编程猫 API 的仪表盘\"}", fallbackOpen: true)
+        assert(recoveredOpen.content != nil && recoveredOpen.error == nil, "首次查找失败后成功打开书签必须成功")
+        let unrecoveredOpen = try run("open_target", "{\"app\":\"不存在\"}")
+        assert(unrecoveredOpen.content == nil && unrecoveredOpen.error != nil, "没有成功回执时保留失败")
+        let unrelatedFailure = try run("desktop_action", "{\"action\":\"list_windows\"}", desktopResult: .failure(.message("菜单操作失败")), fallbackOpen: true)
+        assert(unrelatedFailure.error != nil, "打开成功不得掩盖其他桌面操作失败")
+        AgentRunner.resolveApp = savedResolve
+        AgentRunner.readBookmarks = savedRead
+        AgentRunner.openBookmark = savedOpenBookmark
+        opened.removeAll()
         assert(lockTool != nil, "模型必须能发现已有锁屏能力")
         let lockSuccess = try run("lock_computer", "{}", extraLockCall: true)
         assert(lockSuccess.content == "电脑已锁屏。" && lockSuccess.error == nil)

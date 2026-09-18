@@ -21,7 +21,7 @@ function surface() {
   };
 }
 
-async function fixture() {
+async function fixture(probeMode = 'normal') {
   let sends = 0, t = 100;
   const state = { settings: false, draft: true, allowed: true, settled: true };
   const window = Object.assign(surface(), {
@@ -34,7 +34,7 @@ async function fixture() {
     pocketdeskComposeSend: () => { sends++; }
   });
   const document = Object.assign(surface(), { readyState: 'loading', hidden: false });
-  const context = vm.createContext({ window, document, console, setTimeout, clearTimeout, Date });
+  const context = vm.createContext({ window, document, navigator: { userAgent: 'test', onLine: true }, console, setTimeout, clearTimeout, Date });
   for (const name of ['motion-recognizer.js', 'motion-send.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../Web', name), 'utf8'), context);
   }
@@ -47,6 +47,16 @@ async function fixture() {
   function tilt(from = 0, to = 30) { for (let i = 1; i <= 10; i++) sample(from + (to - from) * i / 10); }
   const enabled = window.pocketdeskMotion.enable();
   await Promise.resolve();
+  if (probeMode !== 'normal') {
+    window.dispatchEvent({ type: 'devicemotion', timeStamp: 120, accelerationIncludingGravity: { x: 0, y: 0, z: 9.8 } });
+    window.dispatchEvent({ type: 'devicemotion', timeStamp: 140, accelerationIncludingGravity: { x: 0, y: 0, z: 9.8 } });
+    assert.equal(window.pocketdeskMotion.status(), 'verifying', '只有加速度不得通过方向数据探测');
+    window.pocketdeskMotion[probeMode]('control-lost');
+    sample(0); sample(0);
+    assert.equal((await enabled).ok, false, '挂起或关闭取消在途探测');
+    assert.notEqual(window.pocketdeskMotion.status(), 'running');
+    return;
+  }
   sample(0); sample(0);
   assert.equal((await enabled).ok, true);
   return { window, document, state, sample, hold, tilt, sends: () => sends };
@@ -67,9 +77,14 @@ gateContext.liveComposing = false; gateContext.livePaused = true;
 assert.equal(gateWindow.pocketdeskCanMotionSend({ requireSettled: false }), false);
 
 (async () => {
+  await fixture('suspend');
+  await fixture('disable');
   const normal = await fixture();
   normal.hold(0); normal.tilt();
   assert.equal(normal.sends(), 1, '前翻过程中就经过统一发送入口，不等待停稳');
+  const timing = normal.window.pocketdeskMotion.diagnose().lastGesture;
+  assert.equal(timing.outcome, 'submitted');
+  assert.ok(timing.submittedAt - timing.recognizedAt < 50, '识别完成即调用提交，不定时等待');
   normal.hold(30, 1200); normal.tilt(30, 60); normal.hold(60);
   assert.equal(normal.sends(), 1, '保持倾斜不能再提交');
 
