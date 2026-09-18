@@ -7,6 +7,10 @@
 import AppKit
 
 final class SpriteFeedbackPanel: NSPanel {
+    private static let panelWidth: CGFloat = 720
+    private static let horizontalInset: CGFloat = 16
+    private static let textWidth = panelWidth - horizontalInset * 2
+    private static let orbSize: CGFloat = 176
     private let container = NSView()
     private let transcriptSurface = NSView()
     private let bubble = NSTextField(labelWithString: "")
@@ -25,7 +29,7 @@ final class SpriteFeedbackPanel: NSPanel {
 
     init(webRoot: URL) {
         orbView = SpriteOrbView(webRoot: webRoot)
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 360, height: 176),
+        super.init(contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.orbSize),
                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isOpaque = false
         backgroundColor = .clear
@@ -55,7 +59,7 @@ final class SpriteFeedbackPanel: NSPanel {
         bubble.alignment = .center
         bubble.lineBreakMode = .byWordWrapping
         bubble.maximumNumberOfLines = 6
-        bubble.preferredMaxLayoutWidth = 328
+        bubble.preferredMaxLayoutWidth = Self.textWidth
         answer.font = NSFont.systemFont(ofSize: 15)
         answer.textColor = .labelColor
         answer.isEditable = false
@@ -108,7 +112,10 @@ final class SpriteFeedbackPanel: NSPanel {
     }
 
     private func layoutContent() {
-        let width: CGFloat = 360, textWidth: CGFloat = 328
+        let width = Self.panelWidth
+        let textWidth = Self.textWidth
+        let horizontalInset = Self.horizontalInset
+        let orbSize = Self.orbSize
         func textHeight(_ text: String) -> CGFloat {
             ceil((text as NSString).boundingRect(with: NSSize(width: textWidth - 10, height: 100_000),
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
@@ -120,20 +127,20 @@ final class SpriteFeedbackPanel: NSPanel {
         let titleHeight: CGFloat = statusLine.isHidden ? 0 : min(textHeight(statusLine.stringValue) + 6, 48)
         let gap: CGFloat = titleHeight > 0 && answerHeight > 0 ? 8 : 0
         let hasText = questionHeight + answerHeight + titleHeight > 0
-        let textBottom: CGFloat = 176
+        let textBottom = orbSize
         let height = hasText ? textBottom + questionHeight + answerHeight + titleHeight + gap + 24 : textBottom
         // AppKit 改高度默认移动底边；显式保持原点，避免每个输入事件把球体挪走。
         let origin = frame.origin
         setContentSize(NSSize(width: width, height: height))
         setFrameOrigin(origin)
-        orbView.frame = NSRect(x: 92, y: 0, width: 176, height: 176)
-        connectionNotice.frame = NSRect(x: 16, y: 0, width: textWidth, height: 20)
-        statusLine.frame = NSRect(x: 16, y: height - 12 - titleHeight, width: textWidth, height: titleHeight)
-        answerScroll.frame = NSRect(x: 16, y: textBottom + 12, width: textWidth, height: answerHeight)
+        orbView.frame = NSRect(x: (width - orbSize) / 2, y: 0, width: orbSize, height: orbSize)
+        connectionNotice.frame = NSRect(x: horizontalInset, y: 0, width: textWidth, height: 20)
+        statusLine.frame = NSRect(x: horizontalInset, y: height - 12 - titleHeight, width: textWidth, height: titleHeight)
+        answerScroll.frame = NSRect(x: horizontalInset, y: textBottom + 12, width: textWidth, height: answerHeight)
         answer.setFrameSize(NSSize(width: textWidth, height: max(documentHeight, answerHeight)))
         answer.textContainer?.containerSize = NSSize(width: textWidth, height: .greatestFiniteMagnitude)
         answer.alignment = documentHeight < 50 ? .center : .left
-        bubble.frame = NSRect(x: 16, y: textBottom + 12 + answerHeight + gap, width: textWidth, height: questionHeight)
+        bubble.frame = NSRect(x: horizontalInset, y: textBottom + 12 + answerHeight + gap, width: textWidth, height: questionHeight)
         transcriptSurface.isHidden = !hasText
         transcriptSurface.frame = NSRect(x: 4, y: textBottom, width: width - 8, height: max(0, height - textBottom))
         setFrame(clamped(frame), display: true)

@@ -33,7 +33,8 @@ enum LockScreenInput { static var locked = false }
         panel.contentView?.layoutSubtreeIfNeeded()
         assert(panel.contentView?.layer?.backgroundColor?.alpha == 0, "容器透明")
         let transcript = panel.contentView!.subviews.compactMap { $0 as? NSTextField }.first { $0.stringValue == "测试问题" }!
-        assert(transcript.frame.height < 30 && transcript.frame.width > 300, "短句单行")
+        assert(panel.frame.width == 720 && transcript.frame.height < 30 && transcript.frame.width > 680,
+               "电脑反馈框宽度翻倍且短句单行")
         assert(panel.isVisible && !panel.canBecomeKey && !panel.canBecomeMain)
         if let bitmap = panel.contentView!.bitmapImageRepForCachingDisplay(in: panel.contentView!.bounds) {
             panel.contentView!.cacheDisplay(in: panel.contentView!.bounds, to: bitmap)
