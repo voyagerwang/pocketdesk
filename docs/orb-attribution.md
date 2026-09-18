@@ -132,3 +132,9 @@ to it.
 2026-09-18 动效适配：保留原始球体路径、眼睛路径与配色，将 SVG 内联分层；由 PocketDesk CSS 控制转头、眨眼和点按正视，不引入原动画引擎。
 
 转头适配已撤回：用户反馈眼形变形，现恢复完整原始 SVG 图像，只有整图轻动效，不单独变换眼睛。
+
+原版引擎恢复：Web/orb-rings、orb-emotions、orb-ball、orb-engine.js 复制自工作台 emotion-ball/js；保留原始表情与效果，engine 仅限制绘制约 30fps。orb-mobile.js 是 PocketDesk 生命周期适配器；原版文件适用本页原始声明与许可，不适用 MIT。
+
+电脑控制台静态形象（2026-09-18）：Web/console.html 复用原版引擎导出的左视 SVG，pool=[0]、eyes.both.lookX=-55、lookY=0、body.breathe=0；运行时不加载引擎、不运行动画。适用上方原始许可。
+
+桌面原生面板同步使用 Web/orb.svg 的同一原版左视静态帧，取消球体待机/忙碌循环动画。

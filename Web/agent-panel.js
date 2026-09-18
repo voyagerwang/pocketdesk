@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 agent-client.js 的任务快照与事件、index.html 的 #agent-* 容器。
- * [OUTPUT]: 提供 window.pocketdeskAgentPanel——状态、简短任务说明与成功接续入口，完整结果按需展开，渲染当前任务卡、结果/来源、当前网页绑定与可用动作。
+ * [OUTPUT]: 提供 window.pocketdeskAgentPanel——任务优先的球球表情刷新、状态、简短任务说明与成功接续入口，完整结果按需展开，渲染当前任务卡、结果/来源、当前网页绑定与可用动作。
  * [POS]: Web 的小精灵展示层：**只呈现，不执行工具、不发任何桌面输入**。
  *        所有文本一律 textContent 落地，模型或网页返回的 HTML/脚本不会被解析（方案 §9 安全呈现）。
  *        M1 的按钮是「放弃并保留草稿」而不是「停止」——runtime 不支持真中断，叫停止就是谎报（方案 §2）。
@@ -162,11 +162,13 @@
   function render() {
     if (!el.panel) return;
     var task = window.pocketdeskAgent.current();
+    if (typeof syncSpriteExpression === 'function') syncSpriteExpression();
     var orb = document.querySelector('.target-sprite');
     if (orb) orb.classList.toggle('is-working', !!task && ['accepted', 'running', 'verifying'].includes(task.status));
     // HTML 默认 hidden 避免启动闪烁；任务到达后必须在小精灵模式显式解除。
     // 父层 hidden 不解开会让整个任务卡（含放弃按钮）永久不可见。
-    el.panel.hidden = !task || !(window.pocketdeskIsSpriteSelected && window.pocketdeskIsSpriteSelected());
+    el.panel.hidden = !task || !(window.pocketdeskIsSpriteSelected && window.pocketdeskIsSpriteSelected())
+      || (!window.pocketdeskAgent.isActive() && typeof liveValue === 'function' && !!liveValue());
     renderStatus(task);
     renderResult(task);
     renderSources(task);

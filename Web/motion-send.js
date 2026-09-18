@@ -3,7 +3,7 @@
  *          与 compose.js/settings.js 暴露的 window.pocketdeskComposeSend / pocketdeskCanMotionSend /
  *          pocketdeskHasDraft / pocketdeskSettingsOpen / pocketdeskMotionEnabled。
  * [OUTPUT]: 注册 window.pocketdeskMotion（控制器）与 window.pocketdeskWristAvailable（能力门禁）。
- *           采集 DeviceMotion/Orientation 喂给识别器；触发候选时经门禁复用 pocketdeskComposeSend()。
+ *           三档仅控制角度；采集 DeviceMotion/Orientation 喂给识别器；每帧检查场景门禁，输入静默等待只在候选完成时核验；候选复用 pocketdeskComposeSend()。
  *           对外给出四级状态 status()：unsupported（环境）/ needs-permission（授权）/
  *           unverified（数据）/ running（运行），另加过渡态 verifying。
  *           另注册 pocketdeskMotionSuspend/Resume 供控制通道在断线与失去租约时停识别。
@@ -20,11 +20,11 @@
   var Motion = window.MotionRecognizer;
   if (!Motion) { console.error('[motion-send] MotionRecognizer 未加载'); return; }
 
-  // 灵敏度预设：只调两个最影响手感的量，其余保持默认。低=需明显前倾，高=轻动作即可。
+  // 灵敏度预设：只调前翻角度，不设置停稳时间。低=需明显前倾，高=轻动作即可。
   var PRESETS = {
-    low: { liftDeg: 30, holdMinMs: 320 },
-    medium: { liftDeg: 22, holdMinMs: 240 },
-    high: { liftDeg: 15, holdMinMs: 160 },
+    low: { liftDeg: 30 },
+    medium: { liftDeg: 22 },
+    high: { liftDeg: 15 },
   };
 
   // 数据层探测窗口：开启后最多等这么久，等真实传感器出数。3 秒是方案给的初值，待双机实测校准。
@@ -170,12 +170,16 @@
   /* ---------- 第四层：运行 ---------- */
 
   // 候选 → 发送：复用 compose.js 的 send()，并走统一门禁（不重复实现发送逻辑）。
+  function canRecognize(requireSettled) {
+    if (!active) return false;                                                       // 没在跑就不可能有候选
+    if (window.pocketdeskSettingsOpen && window.pocketdeskSettingsOpen()) return false;     // 设置期间不误发
+    if (!window.pocketdeskHasDraft || !window.pocketdeskHasDraft()) return false;           // 没内容不发
+    if (!window.pocketdeskCanMotionSend || !window.pocketdeskCanMotionSend({ requireSettled: requireSettled })) return false; // 输入中/提交中/组合态不发
+    return true;
+  }
+
   function candidateToSend() {
-    if (!active) return;                                                       // 没在跑就不可能有候选
-    if (window.pocketdeskSettingsOpen && window.pocketdeskSettingsOpen()) return;     // 设置期间不误发
-    if (!window.pocketdeskHasDraft || !window.pocketdeskHasDraft()) return;           // 没内容不发
-    if (!window.pocketdeskCanMotionSend || !window.pocketdeskCanMotionSend()) return; // 输入中/提交中/组合态不发
-    if (window.pocketdeskComposeSend) window.pocketdeskComposeSend();
+    if (canRecognize(true) && window.pocketdeskComposeSend) window.pocketdeskComposeSend();
   }
 
   // 运行态一变就广播：设置面板据此回填开关，避免"偏好是开、实际没跑"或反过来的显示错位。
@@ -190,6 +194,8 @@
     recognizer = Motion.makeRecognizer(params);
     stopListening = listen(function (sample, isOrientation) {
       if (!recognizer || !isOrientation) return;
+      // 设置、组合输入、空草稿或提交状态变化时作废整次动作，不留下迟到候选。
+      if (!canRecognize(false)) { recognizer.reset(); return; }
       var result = recognizer.push(sample);
       if (result.fired) candidateToSend();
     });

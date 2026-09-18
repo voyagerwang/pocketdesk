@@ -1,6 +1,6 @@
 /*
  * [INPUT]: 消费 style.css 的基础令牌与首页设置、历史、多图预览、快捷键节点。
- * [OUTPUT]: 提供首页辅助控件、横向可滚动的定尺寸多图缩略条及米白主题覆盖。
+ * [OUTPUT]: 提供小精灵实时转写浮层、首页辅助控件、横向可滚动的定尺寸多图缩略条及米白主题覆盖。
  * [POS]: Web 首页基础样式的后置补充；全屏布局另由 screen.css 提供。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -585,7 +585,7 @@ main.pad-mode .pad-title {
   box-shadow: inset 0 1px 0 var(--hairline-top);
 }
 
-:root[data-theme="muji"] .target.selected .target-icon {
+:root[data-theme="muji"] .target.selected:not(.target-sprite) .target-icon {
   filter: drop-shadow(var(--lift-tile));
 }
 
@@ -667,6 +667,16 @@ main.pad-mode .pad-title {
 
 /* ---------- 小精灵：任务卡、来源与当前网页绑定 ---------- */
 /* 沿用现有设计令牌，不引入游离色值；按钮命中区 ≥44px，状态不只靠颜色（方案 §2）。 */
+.sprite-transcript {
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-field);
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .agent-panel {
   background: var(--surface-1);
   border: 1px solid var(--border);

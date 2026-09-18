@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 app.js 的草稿/目标/历史与多图处理门闩、ComposeQueue、原生 IME、全屏输入区。
- * [OUTPUT]: 接收者观察到前台身份变化时允许强制作废旧绑定（含未配置应用间切换）； 小精灵任务确认接收后写入统一发送历史，历史保存失败不影响发送收尾；小精灵甩送独立于桌面同步冻结，但复用发送锁和稳定门禁； 小精灵终态后直接派发新任务、待补充时续接；提供可见输入栏、手机全文同步与图文提交；发送等待图片处理、补传完整批次并冻结附件编辑，失败保留草稿及附件；用户显式切换目标时保留内容并开启隔离的新草稿轮次。
+ * [OUTPUT]: 展示回执绑定本次提交票据；接收者观察到前台身份变化时允许强制作废旧绑定（含未配置应用间切换）； 小精灵任务确认接收后写入统一发送历史，历史保存失败不影响发送收尾；小精灵甩送独立于桌面同步冻结，但复用发送锁；动作采集可略过输入静默等待，实际提交仍强制稳定门禁； 小精灵终态后直接派发新任务、待补充时续接；更新草稿驱动的球球表情；提供可见输入栏、手机全文同步与图文提交；发送等待图片处理、补传完整批次并冻结附件编辑，失败保留草稿及附件；用户显式切换目标时保留内容并开启隔离的新草稿轮次。
  *           另提供 clearDraft（注册为 window.pocketdeskClearDraft）：发带 clear:true 的幂等请求，
  *           **先让电脑侧确认删净、成功后才清手机**——反过来的话一次没生效的删除就吃掉了用户草稿；
  *           文档类目标的豁免原因由服务端原样带回提示。
@@ -240,6 +240,7 @@ async function probeLive() {
 }
 
 function scheduleLive(reconcileOnFailure = false) {
+  syncSpriteExpression();
   if (!selected || selected === SPRITE_ID || livePaused || liveMode === 'deferred' || sendEl.disabled || submittingDraft) return;
   clearTimeout(liveTimer);
   liveTimer = setTimeout(() => {
@@ -323,6 +324,8 @@ function wireComposeIME(el, mirrorTo, recover = recoverIME) {
     pocketdeskMarkInput();
     if (mirrorTo) textEl.value = el.value;
     scheduleLive();
+    // 小精灵草稿上报：听写结束后同步最新整稿（与 input 事件共用同一节流）。
+    if (selected === SPRITE_ID) window.pocketdeskSpriteDraft?.();
   });
   el.addEventListener('input', event => {
     if (!current()) return;
@@ -333,6 +336,9 @@ function wireComposeIME(el, mirrorTo, recover = recoverIME) {
     if (!event.isComposing && liveComposing) liveComposing = false;
     // 全屏代理敲的字要同步回主页 textarea，直播同频才认得到。
     if (mirrorTo) textEl.value = el.value;
+    syncSpriteExpression();
+    // 小精灵草稿上报（150ms 节流 latest-only）：只做展示旁路，不影响直播同步与发送事务。
+    if (selected === SPRITE_ID) window.pocketdeskSpriteDraft?.();
     // 删除仍属于本轮草稿。空串立即排队；暂停时先核验原文，
     // 不丢弃草稿 ID，否则电脑残文会变成下一轮无法管理的“原文”。
     if (selected && !sendEl.disabled && el.value.length < was && (livePaused || el.value === '') && !submittingDraft) {
@@ -628,6 +634,7 @@ async function sendToSprite() {
   if (submittingDraft) return;
   if (liveComposing) { message('请先结束听写或确认输入法候选，再发送。', true); return; }
   const submittedDraftId = liveDraftId;
+  let spriteSubmission;
   submittingDraft = true;
   sendEl.disabled = true;
   textEl.readOnly = true; kbProxy.readOnly = true;
@@ -639,8 +646,12 @@ async function sendToSprite() {
     if (!text) throw new Error('先输入一点想让小精灵做的事。');
     const agent = window.pocketdeskAgent;
     if (!agent) throw new Error('小精灵组件还没加载好，请刷新页面重试。');
+    // 提交在途即上报：Mac 面板显示「正在提交」，草稿保留；不提前写已接收。
+    spriteSubmission = window.pocketdeskSpriteSubmitting?.(text);
     // 终态不依赖“新任务”按钮；待补充才继续旧任务。
-    await agent.send(text);
+    const task = await agent.send(text);
+    // 服务端已持久接收：回执给 Mac 投影任务事实；版本匹配的清空只清本轮正文。
+    window.pocketdeskSpriteSubmitted?.(task?.task?.id || task?.id, spriteSubmission);
     // 历史表示小精灵已接收，不等待下游任务完成；接收者固定，避免迟到回执记到切换后的应用。
     let historyNote = '';
     try { pushHistory(text, '小精灵'); }
@@ -653,6 +664,8 @@ async function sendToSprite() {
     if (historyNote) message(historyNote, 'warn');
     haptic([12]);
   } catch (error) {
+    // 提交失败：Mac 面板结束「正在提交」，草稿继续保留展示。
+    window.pocketdeskSpriteSubmitFailed?.(spriteSubmission);
     message(error.message, true);
     haptic([28, 50, 28]);
   } finally {
@@ -665,7 +678,7 @@ async function sendToSprite() {
 window.pocketdeskComposeSend = send;
 window.pocketdeskInputSettled = (ms = 300) => Date.now() - lastInputAt >= ms;
 window.pocketdeskHasDraft = () => Boolean(textEl.value || pendingImages.length);
-window.pocketdeskCanMotionSend = () => {
+window.pocketdeskCanMotionSend = ({ requireSettled = true } = {}) => {
   if (!selected || sendEl.disabled || submittingDraft || liveComposing) return false;
   // 中断冻结中、恢复探测进行中、上一轮提交收尾中，一律不发：迟到候选不得提交新一轮草稿。
   if (selected === SPRITE_ID) {
@@ -674,7 +687,7 @@ window.pocketdeskCanMotionSend = () => {
   } else if (livePaused || liveProbing) return false;
   // 300ms：说完话后的第一次翻腕（起翻+停稳约 300–500ms）即可命中门禁；
   // 原 700ms 会把说完就翻的候选静默丢掉，用户只能等冷却后再翻一次，体感延迟 1.5s+。
-  if (!(window.pocketdeskInputSettled && window.pocketdeskInputSettled(300))) return false; // 仍在输入/听写中
+  if (requireSettled && !(window.pocketdeskInputSettled && window.pocketdeskInputSettled(300))) return false; // 仍在输入/听写中
   return true;
 };
 
@@ -686,6 +699,7 @@ function clearCompose({ preserveImages = false } = {}) {
   liveState = 'active';
   textEl.value = '';
   kbProxy.value = '';
+  syncSpriteExpression();
   // 提交封闭本轮原生编辑会话，旧输入法迟到的候选/input 不能把已发送文字填回来。
   textEl.readOnly = false; kbProxy.readOnly = false;
   recoverIME(textEl);

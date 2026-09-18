@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 LiveInputReceipt 的草稿模式回执、InputBinding 的输入上下文、控制租约校验闭包与 ScreenCapture 的鉴权画面读取、Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
- * [OUTPUT]: 注入小精灵共享输入/指针执行器与执行时控制租约核验；对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活与应用选择后鼠标就位/发送/图片预上传/快捷键触发/草稿实时同步与只读恢复探测、静态页面与 recipients.js 接收者路由服务；非回环写请求强制 Bearer 校验）。
+ * [OUTPUT]: 展示上报复用控制租约校验；注入输入框、指定窗口及应用动作适配；注入复用系统快捷操作的锁屏工具；注入小精灵 new/current 派单与共享输入/指针执行器与执行时控制租约核验；对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活与应用选择后鼠标就位/发送/图片预上传/快捷键触发/草稿实时同步与只读恢复探测、静态页面与 recipients.js 接收者路由服务；非回环写请求强制 Bearer 校验）。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的传输层；只翻译协议不做系统调用，与 WSServer（控制/光标）和 FrameServer（持续画面）并列。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -39,6 +39,8 @@ final class Server {
         self.webRoot = webRoot
         self.store = store
         self.executor = InputExecutor(store: store)
+        // 展示写入与桌面操作共用控制租约，配对观看者不能覆盖控制者的反馈。
+        AgentHTTP.spriteAuthorized = { [weak self] session in self?.controlAuthorized(session) == true }
         AgentRunner.resolveApp = { [weak self] name in
             AppOperator.resolve(name, configured: self?.store.targets ?? [])
         }
@@ -47,9 +49,20 @@ final class Server {
                   let session = task.controlSession else { return false }
             return self?.controlAuthorized(session) == true
         }
-        AgentRunner.dispatchToApp = { [weak self] app, text, taskId, done in
+        AgentRunner.desktopAction = { [weak self] request, taskId, done in
+            guard let self else { done(.failure(.message("服务不可用。"))); return }
+            self.executor.performDesktopAction(request, authorized: { AgentRunner.canControl(taskId) }, completion: done)
+        }
+        AgentRunner.lockComputer = { [weak self] taskId, done in
+            guard let self else { done(.failure(.message("服务不可用。"))); return }
+            let action = ShortcutAction.lockScreen
+            let shortcut = ShortcutConfig(id: action.rawValue, label: action.label,
+                                          hotkey: action.hotkey(.current), action: action.rawValue)
+            self.executor.triggerShortcut(shortcut, authorized: { AgentRunner.canControl(taskId) }, completion: done)
+        }
+        AgentRunner.dispatchToApp = { [weak self] app, text, taskId, mode, done in
             guard let self else { done("服务不可用。"); return }
-            AgentAppDispatch.send(app: app, text: text, taskId: taskId, store: self.store,
+            AgentAppDispatch.send(app: app, text: text, taskId: taskId, mode: mode, store: self.store,
                                   executor: self.executor, pointer: self.pointerExecutor, authorized: { AgentRunner.canControl(taskId) }, completion: done)
         }
 
@@ -528,7 +541,7 @@ final class Server {
             }
         case ("GET", "/"), ("GET", "/index.html"):
             serveFile("index.html", connection: connection)
-        case ("GET", let asset) where ["device-info.js", "agent-client.js", "agent-panel.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "recipients.js", "style.css", "app-extras.css", "screen.css", "console-agent.js"].contains(String(asset.dropFirst())):
+        case ("GET", let asset) where ["orb-rings.js", "orb-emotions.js", "orb-ball.js", "orb-engine.js", "orb-mobile.js", "device-info.js", "agent-client.js", "agent-panel.js", "sprite-report.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "recipients.js", "style.css", "app-extras.css", "screen.css", "console-agent.js"].contains(String(asset.dropFirst())):
             serveFile(String(path.dropFirst()), connection: connection)
         default:
             // /api/v1 下的本机管理端点（模型服务配置与连通性实测）委托 AgentHTTP，

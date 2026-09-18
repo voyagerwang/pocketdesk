@@ -1,6 +1,6 @@
 """
 [INPUT]: 依赖 Playwright、Pillow 与本地 Web 文件，以模拟 HTTP/WS 隔离真实桌面。
-[OUTPUT]: 另验证启动前台跟随、草稿/IME/提交保护、小精灵往返无桌面写入和迟到识别隔离； 验证小精灵甩送入口、连续任务、简短呈现、接续切换与迟到回执保护；发送历史覆盖成功、拒绝及存储失败。
+[OUTPUT]: 验证选择与草稿进入桌面展示上报链路；验证柔光选中、主题无框与减少动态效果；另验证启动前台跟随、草稿/IME/提交保护、置顶应用栏选择及首页/全屏无冗余切换按钮； 验证小精灵甩送入口、连续任务、简短呈现、接续切换与迟到回执保护；发送历史覆盖成功、拒绝及存储失败。
 [POS]: tests 的浏览器集成验证；手机软键盘和实际捕获性能仍需真机验证。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -21,6 +21,7 @@ with sync_playwright() as p:
     # 明确使用 Android UA，才能真正覆盖下方 Gboard 专属的编辑会话自愈路径。
     page = browser.new_page(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True, device_scale_factor=2, user_agent='Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36')
     errors, writes, key_writes = [], [], []
+    sprite_reports = []
     flags = {"frame_failed": False, "locked": False, "fail_submit": False, "fail_live": False, "mode": "selection"}
     page.on('pageerror', lambda e: errors.append(str(e)))
     page.add_init_script('window.testJpeg = ' + json.dumps(base64.b64encode(jpeg).decode()) + ';')
@@ -68,7 +69,9 @@ with sync_playwright() as p:
             r.fulfill(body=jpeg2 if display_id == '2' else jpeg, content_type='image/jpeg'); return
         if path.startswith('/api/'):
             data = {'ok': True}
-            if path == '/api/recipients':
+            if path == '/api/v1/sprite/session':
+                sprite_reports.append(r.request.post_data_json)
+            elif path == '/api/recipients':
                 data = {'order':['__sprite__','wb']}
             elif path == '/api/v1/tasks' and r.request.method == 'POST':
                 writes.append(r.request.post_data_json)
@@ -114,32 +117,17 @@ with sync_playwright() as p:
     before = page.evaluate('liveDraftId')
     page.evaluate("followFrontmost({frontmostName:'Another editor'})")
     assert page.evaluate('liveDraftId') != before, '未配置应用之间也必须隔离绑定'
-    page.locator('[data-recipient-toggle]').first.click()
+    assert page.locator('[data-recipient-toggle]').count() == 0
+    page.locator('[data-target-id="__sprite__"]').click()
     assert page.locator('#compose-recipient').inner_text() == '发给 小精灵'
     page.evaluate("followFrontmost({frontmostId:'wb',frontmostName:'WorkBuddy'})")
     assert page.locator('#compose-recipient').inner_text() == '发给 小精灵'
     page.locator('#text').fill('保留的小精灵指令')
-    count = len(writes)
-    page.locator('[data-recipient-toggle]').first.click()
-    assert page.locator('#compose-recipient').inner_text() == '发给 小精灵'
+    page.locator('[data-target-id="__sprite__"]').click()
     assert page.locator('#text').input_value() == '保留的小精灵指令'
-    page.locator('#text').fill('')
-    page.locator('[data-recipient-toggle]').first.click()
-    page.wait_for_timeout(200)
-    assert page.locator('#compose-recipient').inner_text() == '发给 Test editor'
-    assert len(writes) == count, '往返入口不得注入桌面文字'
-    page.locator('[data-recipient-toggle]').first.click()
-    # 前台请求晚到，不能覆盖用户再次选小精灵的动作。
-    page.evaluate("""() => {
-      window.realFetch = window.fetch;
-      window.fetch = () => new Promise(resolve => { window.finishFrontQuery = resolve; });
-      window.pendingFrontQuery = resumeFrontmost();
-      selectSprite();
-      finishFrontQuery({ok:true,json:async()=>({frontmostName:'Late editor'})});
-      window.fetch = realFetch;
-    }""")
-    page.evaluate('pendingFrontQuery')
-    assert page.locator('#compose-recipient').inner_text() == '发给 小精灵'
+    page.wait_for_timeout(400)
+    assert any(x['action'] == 'select' for x in sprite_reports), '点击必须上报桌面显示意图'
+    assert any(x['action'] == 'draft' and x['text'] == '保留的小精灵指令' for x in sprite_reports), '草稿必须进入桌面展示链路'
     page.locator('#text').fill('整理需求')
     page.wait_for_timeout(350)
     assert page.evaluate('pocketdeskCanMotionSend()'), '小精灵支持甩送'
@@ -195,7 +183,7 @@ with sync_playwright() as p:
     page.evaluate("taskFixture = {...taskFixture,id:'late'}; pocketdeskAgentPanel.render()")
     assert page.locator('#compose-recipient').inner_text() == '发给 小精灵'
     assert page.locator('#text').input_value() == '尚未发送的新任务'
-    assert page.locator('.sprite-icon img').evaluate('(el)=>el.complete && el.naturalWidth > 0')
+    assert page.locator('.sprite-engine svg').count() == 1
     page.evaluate("selectTarget({dataset:{targetId:'wb'}})")
     page.wait_for_timeout(700)
     assert page.locator('#text').input_value() == '尚未发送的新任务'
@@ -206,16 +194,46 @@ with sync_playwright() as p:
     page.locator('#text').fill('只给小精灵的新文字')
     page.wait_for_timeout(600)
     assert len(writes) == count, '小精灵输入不得同步到桌面'
-    assert page.locator('.sprite-icon img').evaluate('(el)=>getComputedStyle(el).animationName') == 'sprite-idle'
+    assert page.locator('.target-sprite').get_attribute('data-expression') == 'listening'
+    page.locator('#text').fill('')
+    assert page.locator('.target-sprite').get_attribute('data-expression') == 'idle'
+    assert page.locator('.sprite-engine svg path').count() >= 3
+    before_motion = page.locator('.sprite-engine').inner_html()
+    page.wait_for_timeout(1200)
+    assert page.locator('.sprite-engine').inner_html() == before_motion
+    assert page.locator('.sprite-original').is_visible()
+    page.evaluate('pocketdeskOrb.wake()')
+    assert page.locator('.sprite-original').is_visible()
+    assert page.locator('.sprite-engine').evaluate('(el)=>el.getAnimations().length') == 1
+    page.wait_for_timeout(600)
+    assert page.locator('.sprite-engine').evaluate('(el)=>el.getAnimations().length') == 0
+    assert page.locator('.sprite-original').is_visible()
+    page.screenshot(path='/tmp/pocketdesk-happy-empty.png')
+    page.evaluate("window.pocketdeskOrb.update(document.querySelector('.sprite-engine'), false, 'mobile-idle')")
+    stopped = page.locator('.sprite-engine').inner_html()
+    page.wait_for_timeout(200)
+    assert page.locator('.sprite-engine').inner_html() == stopped
+    page.evaluate('syncSpriteExpression()')
+    page.locator('#text').fill('继续输入')
+    assert page.locator('.target-sprite').get_attribute('data-expression') == 'listening'
     page.wait_for_timeout(1500)
     page.evaluate("taskFixture = {...taskFixture,status:'running'}; pocketdeskAgentPanel.render()")
-    assert page.locator('.sprite-icon img').evaluate('(el)=>getComputedStyle(el).animationName') == 'sprite-working'
+    assert page.locator('.sprite-engine svg').count() == 1
+    assert page.locator('.target-sprite').get_attribute('data-expression') == 'working'
     assert page.locator('.sprite-gaze, .sprite-blink').count() == 0
+    # 两种主题都不画选中框，柔光与真实选中状态保持一致。
+    for theme in ['classic', 'muji']:
+        page.evaluate('(theme)=>document.documentElement.dataset.theme=theme', theme)
+        assert page.locator('.sprite-icon').evaluate('(el)=>getComputedStyle(el).boxShadow') == 'none'
+        assert page.locator('.sprite-icon').evaluate('(el)=>getComputedStyle(el).borderTopColor') == 'rgba(0, 0, 0, 0)'
+        assert page.locator('.sprite-icon').evaluate('(el)=>getComputedStyle(el).filter') == 'none'
+        assert page.locator('.sprite-icon').evaluate('(el)=>getComputedStyle(el,"::before").opacity') == '1'
+        assert page.locator('.sprite-engine svg').count() == 1
+        page.screenshot(path=f'/tmp/pocketdesk-glow-{theme}.png')
     page.locator('#text').fill('')
     for width, height in [(320,568),(390,844),(1024,768)]:
         page.set_viewport_size({'width':width,'height':height})
-        toggle = page.locator('[data-recipient-toggle]').first
-        assert toggle.bounding_box()['height'] >= 44
+        assert page.locator('[data-recipient-toggle]').count() == 0
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         page.screenshot(path=f'/tmp/pocketdesk-recipient-{width}.png')
     page.set_viewport_size({'width':390,'height':844})
@@ -226,12 +244,28 @@ with sync_playwright() as p:
       testScreenDialog.classList.add('fullscreen');
       document.querySelector('#screen-compose').hidden = false;
     }""")
-    assert page.locator('#screen-compose [data-recipient-toggle]').is_visible()
+    assert page.locator('#screen-compose [data-recipient-toggle]').count() == 0
     page.screenshot(path='/tmp/pocketdesk-recipient-fullscreen.png')
     page.evaluate("testScreenDialog.close(); document.querySelector('#screen-compose').hidden = true")
     page.screenshot(path='/tmp/pocketdesk-orb-restored.png')
     page.emulate_media(reduced_motion='reduce')
-    assert page.locator('.sprite-icon img').evaluate('(el)=>getComputedStyle(el).animationName') == 'none'
+    assert page.locator('.sprite-engine svg').count() == 1
+    assert page.locator('.sprite-icon').evaluate('(el)=>getComputedStyle(el).transitionDuration') == '0s'
     assert not errors, errors
+    page.wait_for_timeout(100)
+    snapshot = page.locator('.sprite-engine').inner_html()
+    page.wait_for_timeout(200)
+    assert page.locator('.sprite-engine').inner_html() == snapshot
+    page.locator('[data-target-id="__sprite__"]').click()
+    page.locator('#text').fill('现在说的文字应当实时显示')
+    assert page.locator('#sprite-transcript').inner_text() == '现在说的文字应当实时显示'
+    for width in [320, 390]:
+        page.set_viewport_size({'width': width, 'height': 844})
+        page.screenshot(path=f'/tmp/pocketdesk-transcript-{width}.png')
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    page.locator('#text').fill('长句需要在宽度耗尽后自然换行。' * 12)
+    assert page.locator('#sprite-transcript').evaluate('(el) => el.scrollWidth <= el.clientWidth')
+    page.evaluate("selected = 'wb'; markSelected()")
+    assert page.locator('#sprite-transcript').is_hidden()
     browser.close()
     print('sprite flow: 甩送入口 / 连续派单 / 简短状态 / 手动接续 / 自动接续 / 迟到保护 / 球球图标 passed')
