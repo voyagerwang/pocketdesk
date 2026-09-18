@@ -91,10 +91,12 @@ final class KeyboardDraftWriter {
                    start == 0, offset == 0,
                    let expected, old == expected.text,
                    expected.location == expected.text.utf16.count, expected.length == 0 {
+                    // Swift 6.1 下 Bool? 的 `case true/false` 表达式模式不再被判为穷尽，
+                    // 显式写 .some/.none 保持与原语义一致。
                     switch selectAllByChord(text: expected.text) {
-                    case true: selectionLaid = true; chordFailStreak = 0
-                    case nil: chordFailStreak += 1        // 没立住但光标已确认还原，退回逐字
-                    case false: return false              // 光标还原不了，状态不明，如实失败
+                    case .some(true): selectionLaid = true; chordFailStreak = 0
+                    case .none: chordFailStreak += 1        // 没立住但光标已确认还原，退回逐字
+                    case .some(false): return false         // 光标还原不了，状态不明，如实失败
                     }
                 }
                 if !selectionLaid {

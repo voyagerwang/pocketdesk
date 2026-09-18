@@ -6,6 +6,7 @@
  *           三档仅控制角度；采集 DeviceMotion/Orientation 喂给识别器；每帧检查场景门禁，输入静默等待只在候选完成时核验；候选复用 pocketdeskComposeSend()。
  *           对外给出四级状态 status()：unsupported（环境）/ needs-permission（授权）/
  *           unverified（数据）/ running（运行），另加过渡态 verifying。
+ *           数据探测必须收到完整方向角；挂起与关闭取消探测，并作废迟到授权和启动回调。
  *           另注册 pocketdeskMotionSuspend/Resume 供控制通道在断线与失去租约时停识别。
  * [POS]: 翻腕发送的传感器侧；默认不自动发送，必须用户开启、授权且真的收到有效数据。
  *        不提供任何证书向导：非安全上下文由设置面板整组隐藏，用户走发送按钮。
@@ -41,6 +42,9 @@
   var recognizer = null;
   var stopListening = null;
   var lastAccel = 9.8;
+  var generation = 0;
+  var cancelProbe = null;
+  var lastGesture = null;
 
   function sensorSupported() {
     // 优先看标准构造器；部分 WebView 仅暴露 on* 事件属性，退一步兼容。
@@ -107,6 +111,7 @@
       handleSample({
         t: event.timeStamp || Date.now(),
         beta: event.beta, gamma: event.gamma, alpha: event.alpha, accel: lastAccel,
+        screenAngle: window.screen && window.screen.orientation ? window.screen.orientation.angle : (window.orientation || 0),
       }, true);
     }
     window.addEventListener('devicemotion', onMotion, { passive: true });
@@ -152,6 +157,7 @@
       function finish(ok, code) {
         if (settled) return;
         settled = true;
+        cancelProbe = null;
         clearTimeout(timer);
         if (stopListening) { stopListening(); stopListening = null; }
         verifying = false;
@@ -159,8 +165,11 @@
         resolve({ ok: ok, code: code || '', samples: seen, elapsedMs: Date.now() - startedAt });
       }
       timer = setTimeout(function () { finish(false, 'no-sensor-data'); }, timeout);
-      stopListening = listen(function (sample) {
-        if (!Motion.isUsableSample(sample)) return;
+      cancelProbe = function () { finish(false, 'cancelled'); };
+      stopListening = listen(function (sample, isOrientation) {
+        if (!isOrientation || !['beta', 'gamma', 'alpha'].every(function (axis) {
+          return typeof sample[axis] === 'number' && isFinite(sample[axis]);
+        })) return;
         seen++;
         if (seen >= PROBE_MIN_SAMPLES) finish(true, 'ok');
       });
@@ -179,7 +188,14 @@
   }
 
   function candidateToSend() {
-    if (canRecognize(true) && window.pocketdeskComposeSend) window.pocketdeskComposeSend();
+    lastGesture = { recognizedAt: Date.now(), submittedAt: null, finishedAt: null, outcome: 'blocked' };
+    if (canRecognize(true) && window.pocketdeskComposeSend) {
+      var gesture = lastGesture;
+      gesture.submittedAt = Date.now(); gesture.outcome = 'submitted';
+      Promise.resolve(window.pocketdeskComposeSend()).then(function () {
+        gesture.finishedAt = Date.now(); gesture.outcome = 'finished';
+      }, function () { gesture.finishedAt = Date.now(); gesture.outcome = 'failed'; });
+    }
   }
 
   // 运行态一变就广播：设置面板据此回填开关，避免"偏好是开、实际没跑"或反过来的显示错位。
@@ -215,11 +231,14 @@
   // 任何一步失败都返回失败码，由设置面板把开关拨回去并给同一句人话：
   // 不循环弹权限框、不要求系统配置、不提证书与端口。
   function enable() {
+    var ticket = ++generation;
     var env = environment();
     if (!env.ok) return Promise.resolve({ ok: false, code: env.code });
     return requestPermission().then(function (permission) {
+      if (ticket !== generation) return { ok: false, code: 'cancelled' };
       if (!permission.ok) return permission;
       return probeData(PROBE_WINDOW_MS).then(function (data) {
+        if (ticket !== generation) return { ok: false, code: 'cancelled' };
         if (!data.ok) return data;
         suspended = '';
         startActive();
@@ -229,6 +248,8 @@
   }
 
   function disable() {
+    generation++;
+    if (cancelProbe) cancelProbe();
     stopActive();
     suspended = '';
     dataVerified = false;   // 下次开启重新验证：偏好只代表意愿，不代表这次还能出数
@@ -238,6 +259,8 @@
 
   // 切后台、断网、失去控制权都停识别。理由不是省电，而是"离开场景后的迟到候选不能发"。
   function suspend(reason) {
+    generation++;
+    if (cancelProbe) cancelProbe();
     if (!active && !verifying) { suspended = reason || 'suspended'; return; }
     stopActive();
     dataVerified = false;
@@ -247,11 +270,14 @@
   // 恢复后不自动请求权限（那需要用户点按），只重新验证有效数据；验证通过才起识别。
   // 已有开启偏好不能直接等同运行成功——这是"已有偏好安全停用"的落点。
   function resume() {
+    if (document.hidden || (typeof navigator !== 'undefined' && navigator.onLine === false)) return Promise.resolve({ ok: false, code: 'suspended' });
     if (!window.pocketdeskMotionEnabled || !window.pocketdeskMotionEnabled()) return Promise.resolve({ ok: false, code: 'disabled' });
     if (!environment().ok) return Promise.resolve({ ok: false, code: environment().code });
     if (needsPermission() && !authGranted) return Promise.resolve({ ok: false, code: 'needs-permission' });
     if (active || verifying) return Promise.resolve({ ok: active, code: active ? 'ok' : 'verifying' });
+    var ticket = ++generation;
     return probeData(PROBE_WINDOW_MS).then(function (data) {
+      if (ticket !== generation) return { ok: false, code: 'cancelled' };
       if (!data.ok) return data;
       suspended = '';
       startActive();
@@ -284,6 +310,7 @@
       dataVerified: dataVerified,
       active: active,
       suspended: suspended,
+      lastGesture: lastGesture && Object.assign({}, lastGesture),
     };
   }
 

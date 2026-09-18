@@ -2,7 +2,7 @@
  * [INPUT]: 纯函数识别器，不依赖任何浏览器 API；样本为 { t(ms), beta, gamma, alpha, accel(m/s²) }。
  * [OUTPUT]: makeRecognizer(params) 返回 { push(sample), reset(reason), state() }，push 返回 { fired, phase, events }；
  *           isUsableSample(sample) 判定传感器是否真的在出数（供免证书方案的“数据层”门禁使用）。
- * [POS]: 翻腕手势识别核心；对姿态按时间低通，从握姿基线识别限时前倾，达幅度立即发候选；一次动作只给一次候选，回位后再武装。
+ * [POS]: 甩送手势识别核心；按横竖屏映射前翻轴，侧向限制相对握姿；支持姿态前翻或短促整体加速度脉冲。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  *
  * 手势定义（来自 WRIST_SEND_EXECUTION_PLAN）：手机上沿向远离自己的方向前翻，达到角度立即发送，不要求停稳或回弹。
@@ -21,12 +21,15 @@
     filterMs: 40,      // 姿态低通时间常数，抑制采样噪声，不使用固定帧数
     settleDeg: 3,      // 起始握姿基线的噪声容差，不用于发送后的姿态判定
     returnDeg: 8,       // 回到起点附近，才能识别下一次动作
-    gammaMaxDeg: 35,    // 左右扭转上限，超过 → 拒绝
+    gammaMaxDeg: 35,    // 相对握姿的侧向变化上限，不限制起始侧倾
     gammaRateMax: 110,  // °/s
     alphaRateMax: 220,  // °/s 屏幕旋转 → 拒绝
     accelMax: 17,       // m/s² 平动/震动 → 拒绝（重力约 9.8）
     gapMaxMs: 220,      // 数据缺口 → 复位
     cooldownMs: 600,    // 触发后冷却，避免持续倾斜重复发
+    impulseMin: 2.8,    // 相对重力的短促加速度增量，支持手机整体向前甩
+    impulsePeak: 4.2,   // 没有明显角度变化时需要更强的峰值，减少走路误触
+    impulseMaxMs: 280,   // 甩送脉冲最长窗口
   };
 
   // 有效样本判定：motion-send 用它证明"传感器真的在出数"，而不是"接口存在"。
@@ -52,6 +55,11 @@
     var liftStart = 0, armStart = null, anchor = null;
     var cooldownUntil = 0;
     var events = [];
+    var sideBaseline = null;
+    var screenAngle = null;
+    var accelBaseline = 9.8;
+    var impulseStart = null;
+    var impulsePeak = 0;
 
     function delta(a, b) { return ((a - b + 540) % 360) - 180; }
     function valid(s) {
@@ -62,6 +70,8 @@
     function reset(reason) {
       if (reason) events.push({ t: prev ? prev.t : 0, type: 'reset', reason: reason });
       baseline = null; prev = null; anchor = null; armStart = null;
+      sideBaseline = null; screenAngle = null; accelBaseline = 9.8;
+      impulseStart = null; impulsePeak = 0;
       phase = 'arming'; liftStart = 0;
     }
     function result(fired) {
@@ -88,14 +98,24 @@
 
     function push(s) {
       if (!valid(s)) return reject('invalid', s && s.t);
+      // Landscape forward tilt lies on gamma; preserve the portrait beta direction.
+      var angle = typeof s.screenAngle === 'number' ? s.screenAngle : 0;
+      angle = ((angle % 360) + 360) % 360;
+      if (screenAngle !== null && angle !== screenAngle) return reject('screen', s.t);
+      screenAngle = angle;
+      if (angle === 90 || angle === 270) {
+        s = Object.assign({}, s, { beta: (angle === 90 ? -1 : 1) * s.gamma, gamma: s.beta });
+      } else if (angle === 180) {
+        s = Object.assign({}, s, { beta: -s.beta, gamma: -s.gamma });
+      }
       var raw = s;
       var t = s.t;
       if (prev && t <= prev.t) return result(false); // 重复/乱序不回拨时钟。
       if (prev && t - prev.t > p.gapMaxMs) return reject('gap', t);
       if (s.accel > p.accelMax) return reject('accel', t);
-      if (Math.abs(s.gamma) > p.gammaMaxDeg) return reject('gamma', t);
+      if (sideBaseline !== null && Math.abs(delta(s.gamma, sideBaseline)) > p.gammaMaxDeg) return reject('gamma', t);
       if (!prev) {
-        prev = s; baseline = s.beta; anchor = s; armStart = t;
+        prev = s; baseline = s.beta; sideBaseline = s.gamma; accelBaseline = s.accel; anchor = s; armStart = t;
         return result(false);
       }
       var dt = (t - prev.t) / 1000;
@@ -118,6 +138,8 @@
 
       if (phase === 'arming') {
         baseline = s.beta;
+        sideBaseline = s.gamma;
+        accelBaseline = accelBaseline * 0.9 + s.accel * 0.1;
         if (stable(raw) && t >= cooldownUntil && t - armStart >= p.armMs) {
           phase = 'idle'; anchor = null; armStart = null;
         }
@@ -130,8 +152,25 @@
         return result(false);
       }
       if (phase === 'idle') {
+        var impulse = s.accel - accelBaseline;
+        if (impulse >= p.impulseMin) {
+          if (impulseStart === null) { impulseStart = t; impulsePeak = impulse; }
+          impulsePeak = Math.max(impulsePeak, impulse);
+          if (t - impulseStart <= p.impulseMaxMs &&
+              (dBeta >= p.liftDeg * 0.3 || impulsePeak >= p.impulsePeak)) {
+            events.push({ t: t, type: 'fire', mode: 'impulse' });
+            cooldownUntil = t + p.cooldownMs;
+            phase = 'release';
+            return result(true);
+          }
+          if (t - impulseStart > p.impulseMaxMs) { impulseStart = null; impulsePeak = 0; }
+        } else if (impulseStart !== null) {
+          impulseStart = null; impulsePeak = 0;
+        }
         if (signedRate < p.liftRateMin) {
           baseline = s.beta; // 慢速换握姿随动，不积攒角度。
+          sideBaseline = s.gamma;
+          accelBaseline = accelBaseline * 0.9 + s.accel * 0.1;
           return result(false);
         }
         baseline = previous.beta;

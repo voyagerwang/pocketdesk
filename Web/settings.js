@@ -69,10 +69,10 @@ function updateWristUI() {
   const state = wristStatus();
   if (wristGroup) wristGroup.hidden = false;
   document.querySelector('#wrist-sensitivity-row').hidden = state !== 'running';
-  wristToggle.disabled = state === 'verifying';
+  wristToggle.disabled = state === 'verifying' || state === 'unsupported';
   if (state === 'unsupported') {
     wristToggle.checked = false;
-    setWristNote(WRIST_IDLE_NOTE);
+    setWristNote(WRIST_FAIL_NOTE, true);
     return;
   }
   const running = state === 'running';
