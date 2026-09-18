@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 AppKit 的 NSApplication/NSWorkspace 与 Foundation 的 FileManager/ProcessInfo；消费 TargetStore/Server/WSServer/FrameServer/PointerExecutor 的装配。
+ * [INPUT]: 依赖 AppKit 的 NSApplication/NSWorkspace 与 Foundation 的 FileManager/ProcessInfo；消费 TargetStore/Server/WSServer/FrameServer/PointerExecutor 与 SpriteDesk 离线球体资源的装配。
  * [OUTPUT]: 对外提供 PocketDesk 启动引导：web 根目录定位、端口选择（VOICE_DECK_PORT 环境变量）、辅助功能授权提示、HTTP、控制与独立画面服务启动与 Dock 应用身份（AppDelegate）。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的唯一入口与组装根；其余文件都是可独立理解的职责模块，本文件不再包含任何业务逻辑。
@@ -140,6 +140,8 @@ if #available(macOS 14.0, *) {
 }
 // 服务都起来之后再看门：网络工作线程被 securityd 占死时，由主线程把 App 重启回来。
 ServerWatchdog.start(port: selectedPort)
+// 桌面小精灵反馈面板：装配细节在 SpriteDesk（展示会话 + 任务只读投影 → 原生面板）。
+SpriteDesk.install(webRoot: root.appendingPathComponent("Web"))
 let consoleURL = URL(string: "http://localhost:\(selectedPort)/console")!
 print("PocketDesk 已启动。控制台：\(consoleURL.absoluteString)（触控板通道 ws:\(wsPort)）")
 // 首次运行或尚未授权时，自动打开电脑端控制台引导流程。

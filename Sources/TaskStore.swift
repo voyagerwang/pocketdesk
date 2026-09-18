@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Foundation 的 FileManager/JSONEncoder/FileHandle，消费 AgentModels 的任务与事件类型。
  * [OUTPUT]: 对外提供任务与事件的唯一权威存储：整体快照 tasks.json（原子写）、append-only 事件日志
- *           events.jsonl、requestId 去重表 dedupe.json；以及幂等接受 claim。
+ *           events.jsonl、requestId 去重表 dedupe.json；以及幂等接受 claim 与派单/桌面动作副作用前的原子占用。
  * [POS]: Sources 的 Agent 持久化层；HTTP 层与 TaskService 都通过它读写，不允许两边各自声明权威。
  *        首版用文件化方案而非 SQLite：本项目由 install-app.sh 直接 swiftc 裸编、未链接 -lsqlite3，
  *        引入 SQLite 要改构建并手写 C API 封装，成本与收益不匹配（方案 §9 v1.1 修正）。
@@ -98,8 +98,34 @@ enum TaskStore {
         guard let index = tasks.firstIndex(where: { $0.id == task.id }) else {
             throw TaskStoreError.writeFailed("任务 \(task.id) 不存在。")
         }
-        tasks[index] = task
+        // 派单占用是只增证据；并发状态保存不能用旧快照抹掉它而允许二次外发。
+        var updated = task
+        let messageIDs = Set(updated.messages.map(\.id))
+        updated.messages += tasks[index].messages.filter { ["dispatch_to_app", "desktop_action"].contains($0.toolName ?? "") && !messageIDs.contains($0.id) }
+        tasks[index] = updated
         try persistLocked(tasks: tasks, dedupe: dedupeLocked())
+    }
+
+    /// 在任何新建/输入副作用之前原子占用一次派单；并发调用和进程重启均不能自动重放。
+    static func reserveAppDispatch(id: String, label: String) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        var tasks = loadLocked()
+        guard let index = tasks.firstIndex(where: { $0.id == id }), tasks[index].status == .running,
+              !tasks[index].messages.contains(where: { $0.toolName == "dispatch_to_app" }) else { return false }
+        tasks[index].messages.append(TaskMessage(role: .tool, text: label, toolName: "dispatch_to_app"))
+        try persistLocked(tasks: tasks, dedupe: dedupeLocked())
+        return true
+    }
+
+    /// 同一任务的同一桌面动作只占用一次，避免重复关闭下一扇窗口或再次删掉新输入。
+    static func reserveDesktopAction(id: String, request: String) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        var tasks = loadLocked()
+        guard let index = tasks.firstIndex(where: { $0.id == id }), tasks[index].status == .running,
+              !tasks[index].messages.contains(where: { $0.toolName == "desktop_action" && $0.text == request }) else { return false }
+        tasks[index].messages.append(TaskMessage(role: .tool, text: request, toolName: "desktop_action"))
+        try persistLocked(tasks: tasks, dedupe: dedupeLocked())
+        return true
     }
 
     static func remove(id: String) throws {

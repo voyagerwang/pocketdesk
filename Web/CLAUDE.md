@@ -16,8 +16,8 @@ compose-queue.js: 串行输入队列；生命周期主动取消用 ComposeCancel
 compose.js: 仅使用原生输入法；首页与全屏共享草稿 ID、整值/选区实时同步、特殊远控暂存、图文一次提交和 IME 恢复；提交等待图片处理及全批重传并冻结附件编辑，按有序 imageIds 绑定草稿；用户显式切换目标或失败后重选当前目标时，保留正文/附件并重建草稿身份、执行队列和输入上下文，激活完成后以当前电脑位置重新同步已有正文；健康状态重复点击不重建，键盘移动选中与前台自动跟随也不触发；保留电脑原文且不反填手机，手机只管理本轮段落；已有手机正文聚焦、页面返回、首次目标就绪或进入全屏即调度全文同步，候选结束补齐镜像，当前编辑面板而非焦点决定正文来源；通用模式持续上传全文，特殊远控暂存才停止预览请求，提交确认结束本轮（`clearCompose` 换新草稿身份，故下一轮首字即重新实时同步），失败暂停自动同步但保留显式发送路径，重试沿用草稿 ID/原目标并重新取输入上下文，保留首个真实失败原因；编辑框空白/实时同步/暂存均可见，44–88px 随文字增长，发送与关闭同排；原生长按由浏览器与系统输入法直接处理，不提供重复的粘贴按钮；Android 残留焦点自愈仅在短按 pointerup 执行，长按期间不 blur、不重建编辑元素；全屏上下文绑定控制会话与电脑输入位置，提交中冻结编辑，关闭取消未发送队列；首页/全屏清空保持草稿 ID 并上传空串，暂停后删除先核验；重建编辑元素并重绑事件，失焦取消 IME 超时探针，镜像始终读取当前首页框。`clearDraft()`（暴露为 `window.pocketdeskClearDraft`）是「清空会话」的手机侧本体：发带 `clear: true` 的幂等请求，**先让电脑侧确认删干净、成功后才 `clearCompose()` 清手机**——反过来的话，一次没生效的删除就把用户的草稿吃掉了（项目红线：失败必须保留草稿）；提交中或未选目标时拒绝并说明，文档类目标的豁免原因由服务端原样带回提示。
 
 **跨弹窗安全恢复**（这一段是修"弹窗打断后只能切应用才能恢复"的地方）：失败回执带服务端 `state`，`pushLive` 的 catch 置 `livePaused` + `liveState` 并调 `startRecovery()`；此后**只发只读探测**（`probeLive()` 发送 `probe: true`），只有服务端回 `recoverable` 才解除冻结，随后走正常 `scheduleLive()` 按公共前缀补差量——**绝不重放正文**（`tests/live-recovery.test.cjs` 直接对 `probeLive` 函数体做否定断言，禁止它调用任何写入路径）。恢复触发来源有四条：页面回前台（`visibilitychange`）、窗口 `focus`、输入框/`#kb-proxy` 重新聚焦（`focusin` 捕获阶段，代理重建后仍有效）、以及 `RECOVERY_INTERVAL`（1.5s）低频有界探针，上限 `RECOVERY_MAX_ATTEMPTS`（20 ≈ 30s）后停下等用户事件。`scheduleProbe` 在 `liveProbing` 为真时把续期请求**登记**到 `recoveryPending`/`recoveryPendingDelay`，由 `probeLive` 的 `finally` 在探测落地后补排——早期版本在这里直接 `return`，恢复链在第一次探测后自己断掉，症状正是"只有切一次应用才能恢复"；`stopRecovery` 必须清空 pending，否则恢复成功后还会误续期。冻结期间 `pocketdeskCanMotionSend()` 返回 false，体感候选一律不发。`refreshInputContext` 对 Electron 提交后重建编辑器做有界重试（`CONTEXT_RETRY_LIMIT` × `CONTEXT_RETRY_DELAY`）。状态落点：错误人话写 `#screen-input-status`（仅 error 态显示），常态/恢复进度写 `#live-flag`。暴露 `pocketdeskComposeSend()`（复用同一业务锁的发送入口，**不是** pad.js 独占的 `pocketdeskSend`）、`pocketdeskHasDraft()`、`pocketdeskCanMotionSend()`（未选目标/发送中/提交锁/组合态/近 300ms 内有输入/`livePaused`/`liveProbing` 则 false）、`pocketdeskInputSettled()` 供体感发送门禁查询。`send()` 在 `selected === SPRITE_ID` 时整条转给 `sendToSprite()`：正文只交给任务 API，**不进电脑输入框、不写剪贴板、不调 /api/live-input**，服务端确认持久接收后才清草稿，失败保留正文。另导出 `window.pocketdeskFocusCompose`——无桌面副作用的聚焦路径，绕开 `showKeyboard()` 里的 `refreshInputContext()` 与 `scheduleLive()`（那会把还没发的 AI 指令同步到电脑）。
-motion-recognizer.js: 翻腕手势纯函数识别器（无浏览器依赖，可 node 单测）；`makeRecognizer(params)` 对“前倾并停住片刻”发候选，对震动/扭转/转屏/数据缺口一律拒绝；阈值全部可配，默认保守，不自动提高灵敏度；另有纯函数 `isUsableSample(sample)` 判定传感器是否真的在出数（有限数字即有效，静止的合法零值算通过，全 null/NaN 才算没数据），供免证书方案的"数据层"门禁使用并可直接 node 单测。
-motion-send.js: 翻腕发送的传感器侧；注册 `window.pocketdeskMotion`（环境/授权/数据/运行四级状态与起停）、`window.pocketdeskMotionSuspend/Resume`（控制通道挂起恢复）与 `window.pocketdeskWristAvailable()`（能力门禁，settings.js 委托它）。四级边界：环境层 `environment()` 判安全上下文与传感器接口，不过关即 `hidden`；授权层只在用户点按时调 `DeviceMotionEvent.requestPermission()`，绝不自动请求；数据层 `probeData()` 以 3 秒窗口等两个**有效**样本（`MotionRecognizer.isUsableSample`：有限数字即有效，静止的合法零值算通过，全 null/NaN 才算没数据）；三层都过才起识别器。它不再提供任何证书向导——`probeSecure`/`secureURL`/`caCertificatePath`/HTTPS 端口探测已全部删除。切后台、pagehide、断网、失去控制权一律 `suspend()` 并让 `dataVerified` 失效，恢复后 `resume()` 重新验证有效数据才起识别，不补发候选。候选经 `pocketdeskCanMotionSend` 门禁后复用 `pocketdeskComposeSend()`。`diagnose()` 只回报环境与探测事实供真机基线使用，不触发桌面发送。
+motion-recognizer.js: 翻腕手势纯函数识别器（无浏览器依赖，可 node 单测）；`makeRecognizer(params)` 从握姿基线启动限时前倾，达到角度立即发一次候选，不等待停稳或回弹，冷却且回位后重新武装；慢速换姿随动基线，不积攒角度；拒绝震动/扭转/转屏/无效姿态/数据缺口，角差按圆周计算，事件仅逐帧返回；阈值可配，不自动提高灵敏度；`isUsableSample(sample)` 判定传感器是否出数，有限数字（包括零）算有效，供能力探测使用。
+motion-send.js: 翻腕发送的传感器侧；注册 `window.pocketdeskMotion`（环境/授权/数据/运行四级状态与起停）、`window.pocketdeskMotionSuspend/Resume`（控制通道挂起恢复）与 `window.pocketdeskWristAvailable()`（能力门禁，settings.js 委托它）。四级边界：环境层 `environment()` 判安全上下文与传感器接口，不过关即 `hidden`；授权层只在用户点按时调 `DeviceMotionEvent.requestPermission()`，绝不自动请求；数据层 `probeData()` 以 3 秒窗口等两个**有效**样本（`MotionRecognizer.isUsableSample`：有限数字即有效，静止的合法零值算通过，全 null/NaN 才算没数据）；三层都过才起识别器。它不再提供任何证书向导——`probeSecure`/`secureURL`/`caCertificatePath`/HTTPS 端口探测已全部删除。切后台、pagehide、断网、失去控制权一律 `suspend()` 并让 `dataVerified` 失效，恢复后 `resume()` 重新验证有效数据才起识别，不补发候选。每帧检查设置/草稿及 `pocketdeskCanMotionSend({requireSettled:false})` 场景门禁，组合输入/提交/冻结即清掉半途动作；输入静默 300ms 仅在候选完成时按默认门禁核验，通过后复用 `pocketdeskComposeSend()`，不排队补发。`diagnose()` 只回报环境与探测事实供真机基线使用，不触发桌面发送。
 screen-geometry.js: 画面适应、1–6 倍缩放、包含横向旋转的坐标正反投影、位移换算和边界夹取；输入与光标只消费这一份几何，不混用 CSS 像素与桌面点。
 screen-gestures.js: 触屏/指针/本地视野手势仲裁，兼容滚轮定位与结束相位；轻点、双击、合并触点采样/显示比例跟手滚动、按时间衰减惯性、捏合、按住放大瞄准及指针长按拖动，取消/第二指加入清理瞄准并松键，不补点击。
 screen-pip.js: PiP 整块拖动、八向等比缩放、位置持久化和视口夹取；拖动中只写 transform，结束后保存位置。
@@ -90,6 +90,48 @@ device-info.js: 浏览器设备类别、系统、浏览器及可用型号采集�
 
 小精灵发送历史：compose.js 在任务 API 确认接收（含请求查账恢复和待补充续接）后，将本次正文以固定接收者「小精灵」写入 app.js 的统一 pd-history；沿用正文去重、最近 20 条与点按回填。未接收不写历史，后续执行失败不撤销已发送记录；历史保存异常只提示警告，不阻断清草稿或诱导重发。index.html 更新 compose 缓存版本。
 
-接收者往返修订（2026-09-18）：启动默认跟随真实前台；小精灵仅手动进入。未发正文/附件、IME 组合和提交期间暂缓跟随，不消费前台边沿；清空或提交后恢复。首页和全屏均提供「回到小精灵／跟随电脑」，后者有草稿时保留并提示处理，不把指令自动输入电脑。
-recipients.js: 接收者路由与 Dock 渲染，从 app.js 提取选择/激活/代际管理；复用 compose.js 的草稿事务，前台观察和小精灵往返不激活桌面，未配置应用之间也重建绑定；晚到的前台查询不能覆盖新选择或新草稿。
-style.css 承接球球动效与接收者往返样式；app-extras.css 保留辅助面板，避免文件继续膨胀。app.js 只持共享状态并编排 boot/heartbeat 对 recipients.js 的调用。
+接收者往返修订（2026-09-18）：启动默认跟随真实前台；小精灵仅手动进入。未发正文/附件、IME 组合和提交期间暂缓跟随，不消费前台边沿；清空或提交后恢复。首页和全屏均移除「回到小精灵／跟随电脑」按钮，统一使用置顶应用栏切换；移除专用点击处理及样式，保留自动前台跟随和草稿保护。
+recipients.js: 接收者路由与 Dock 渲染，从 app.js 提取选择/激活/代际管理；复用 compose.js 的草稿事务，前台观察和小精灵往返不激活桌面，未配置应用之间也重建绑定；自动前台跟随不得覆盖小精灵选择或未发草稿。
+style.css 承接球球动效与接收者标识样式；app-extras.css 保留辅助面板，避免文件继续膨胀。app.js 只持共享状态并编排 boot/heartbeat 对 recipients.js 的调用。
+
+球球选中柔光（2026-09-18）：小精灵移除选中边框/环形阴影/名称圆点，改为静态暖色径向柔光、3px 轻抬与原版侧视到圆眼正视的透明度过渡；米白主题不叠加 drop-shadow。无待机或工作循环，减少动态效果时禁用过渡与位移，保留柔光/名称/aria-checked。原版完整表情和彩带仍仅在 docs 预览中，未接入生产。
+
+开心待输入（2026-09-18）：选中和等待输入改用原版开心表情 10 的首帧眼形，复用柔光和透明度过渡，不启动完整表情引擎。系统键盘听写没有独立录音生命周期信号，不能用 composition/input 冒充语音状态；倾听表情自动切换待可靠语音事件接入。
+
+表情纠正：空白使用显式弯曲笑眼（不是原版开心动画的静态首帧），有正文使用等待眼形；scheduleLive、clearCompose、选择和任务刷新统一调用 recipients.syncSpriteExpression。活动任务优先专注，needsInput 保持等待。规则根据草稿而非录音信号，覆盖上一条限制；选中仅控制柔光/抬起，不再把选中等同开心。
+
+原版引擎恢复：删除手画眼形，空白映射原版 10、有草稿/待补充映射 35、活动任务映射 32。保留选中柔光；实例仅在选中、可见且非后台时运转，减少动态效果时静态。覆盖此前静态表情实现。
+orb-rings.js: 原版球体和眼环几何数据，不变更轮廓。
+orb-emotions.js: 原版表情配置，不裁取首帧代替动画。
+orb-ball.js: 原版 SVG 渲染及彩带物理效果。
+orb-engine.js: 原版状态机、眨眼与表情轮换，适配约 30fps 绘制上限。
+orb-mobile.js: 唯一实例生命周期和可见性门禁，由 recipients 更新。
+
+左上待机与唤醒：空白使用原版眼环 0 加左上目光偏移，点击小精灵播放原版 07 抖动唤醒 1.6 秒后回归草稿对应状态；输入变化/活动任务/后台会取消唤醒，减少动态效果不播放。覆盖空白开心映射。
+
+电脑控制台小精灵：console.html 内嵌原版 orb 引擎导出的固定左视帧（pool 0、lookX -55、lookY 0），保持 34px 图标热区；无动画循环，不改变手机端表情。素材归属沿用 docs/orb-attribution.md。
+
+应用栏吸顶：style.css 的 .deck 使用原生 sticky/top:0，带安全区顶部内边距和主题不透明背景，保持横向应用切换；不新增滚动监听/模糊滤镜。层级低于画面工作台和系统 dialog，全屏沿用主页面隐藏规则。
+
+默认姿态纠正：手机空白待机恢复最初完整 SVG（内嵌 orb-mobile.js），撤销自定义 lookX=-55；原图不变换眼形，默认暂停引擎。点击仍用原版 07，结束回原图；有正文/执行中沿用原版动态表情。
+
+点击闭眼纠正：移除原版 07 的睡眼开场，点击仅对完整球体播放 480ms transform 轻抖，不改变眼形/表情；输入变化、切走、后台或减少动态效果会取消。
+
+orb.svg: 桌面原生反馈面板的原版左视静态球体，与 console.html 内嵌静态帧一致；手机引擎和草稿表情不变。
+
+sprite-report.js: 桌面展示旁路，绑定 pad 控制连接；单请求在途、待发草稿合并、重连整稿与 5 秒心跳，旧连接回执不重放。提交票据由 compose 捕获，回执不读取可变的全局提交版本；重复点小精灵也发显式选择。
+
+展示同步错误：sprite-report 在未连接、观看模式或上报失败时显示一次明确提示，自动重连继续恢复快照。
+
+甩送稳定性修正（2026-09-18）：保持“上沿向前翻一下，然后停住”的动作与三档角度。基线需稳定 180ms，慢速换握姿不累计；起翻须有方向速度且 650ms 内到角度，允许正常快翻；停稳检查原始姿态的窗口漂移，动作速度使用按时间低通后的姿态，1600ms 内未完成整次动作即作废。发送后保留原基线，冷却且回位才重新识别。设置、空草稿、组合输入和提交中清除半途动作；输入静默等待只限制实际发送，不重置基线，完成时未通过的候选直接丢弃、不补发。三档停稳时间不变。合成轨迹与控制器回归通过；手机手感和误触率待真机确认。
+
+实时转写：recipients.syncSpriteExpression 将首页及全屏输入事件的完整草稿投影到 sprite-transcript；仅选中小精灵时显示。sprite-report 用 150ms 节流而非尾沿防抖，持续输入仍更新桌面；提交/切走取消定时器，保留串行合并及代际隔离。
+
+手机输入优先：有新草稿时隐藏已结束的任务卡，活动任务及待补充仍可查看；转写浮层使用透明底，避免重复卡片抢占输入空间。
+
+orb-desktop.html: 桌面离线透明矢量画布，按原版依赖顺序加载；无网络连接、正文或输入控件，由 SpriteOrbView 读本地资源，不经 HTTP 路由。
+orb-desktop.js: 原版桌面表情适配，仅空闲/输入开心唤醒 1.8s；执行/终态重选不播欢迎；完成按任务身份庆祝一次，2s 后满意停留，任务/输入可抢占，同状态不重播，隐藏/减少动态停帧；默认态不显示占位问候。
+
+甩送噪声回归修复：单帧差分把 ±0.3° 的高频读数噪声放大为速度，旧版因此一直无法武装。方向与速度用 40ms 时间常数低通，停稳用原始角度窗口限制，既容忍微噪声也不把持续晃动滤成静止。识别可与输入静默等待并行，最终发送默认强制 300ms 静默；23 项轨迹测试含 30/60/100Hz 噪声，控制器测试覆盖说完立即翻腕与候选拒绝不补发，尚非真机验收。
+
+甩送当前动作定义（用户确认，覆盖此前停稳规则）：仅识别前翻，达当前档位角度即发候选；删除 hold 阶段和 holdMinMs/holdMaxMs 参数，不检查前翻后的悬停或回弹。三档只控制 30°/22°/15°，设置说明同步。起始基线抗噪、慢速漂移跟随、异常数据拒绝、冷却回位防重复及 compose 提交门禁保留；输入未静默的候选直接拒绝，不排队补发。26 项轨迹测试和控制器回归覆盖仍在前翻时已发送、立即回弹、三档回弹、门禁中断及不重复。

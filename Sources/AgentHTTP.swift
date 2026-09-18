@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 JSONSerialization/JSONEncoder，消费 ModelConfigStore 与 ModelClient。
- * [OUTPUT]: 建任务时传递控制会话以便执行核验；对外提供 AgentHTTP.handle——承接 /api/v1 下「本机管理类」端点：模型服务配置的读写与连通性实测。
+ * [OUTPUT]: 展示上报核验控制租约并绑定连接身份；建任务时传递控制会话以便执行核验；对外提供 AgentHTTP.handle——承接 /api/v1 下「本机管理类」端点：模型服务配置的读写与连通性实测。
  * [POS]: Sources 的 Agent 路由层；Server 只做一行委托，避免它继续膨胀越过 800 行红线。
  *        这些端点**只允许回环访问**（本机控制台），与手机侧的任务接口（M1 的 /api/v1/tasks/…）分开：
  *        任务接口面向配对手机、必须带 Bearer；本文件的管理端点面向本机浏览器，靠回环判定。
@@ -11,6 +11,9 @@ import Foundation
 
 enum AgentHTTP {
     static let managedPaths: Set<String> = ["/api/v1/model-config", "/api/v1/model-test"]
+    /// 桌面反馈面板的展示会话；由 main.swift 装配注入。HTTP 层只转写协议，不做展示决策。
+    static var spriteSession: SpriteSession?
+    static var spriteAuthorized: (String) -> Bool = { _ in false }
 
     // 工具声明与探针回传的假页面：只验证「模型会不会发起工具调用、能否消化工具结果」，
     // 不调用任何真实浏览器或桌面能力——工具执行权在 M1 才接进来。
@@ -25,8 +28,10 @@ enum AgentHTTP {
     private static let fakePage = "标题：PocketDesk 使用说明\n正文：PocketDesk 把手机变成电脑的输入端与控制台，支持实时输入、触控板与画面查看。"
 
     /// 任务类路径：**含回环在内**都要求 Bearer。回环豁免会让本机任意进程读到全部任务正文。
+    /// 小精灵展示会话同权：观看者或失效租约不能改桌面展示。
     static func requiresBearer(_ path: String) -> Bool {
-        path.hasPrefix("/api/v1/tasks") || path == "/api/v1/executors" || path == "/api/v1/context/page"
+        path.hasPrefix("/api/v1/tasks") || path.hasPrefix("/api/v1/sprite")
+            || path == "/api/v1/executors" || path == "/api/v1/context/page"
     }
 
     /// 返回 true 表示已接管该路径（调用方不要继续走 404）。
@@ -216,6 +221,10 @@ enum AgentHTTP {
                                    "domain": binding.domain ?? "", "observedAt": binding.observedAt]])
         case ("POST", "/api/v1/tasks"):
             submit(json: json, respond: respond)
+        case ("POST", "/api/v1/sprite/session"):
+            spriteAction(json: json, respond: respond)
+        case ("GET", "/api/v1/sprite/state"):
+            spriteState(respond: respond)
         case ("GET", "/api/v1/tasks"):
             list(query: query, respond: respond)
         case ("GET", let target) where target.hasPrefix("/api/v1/tasks/by-request/"):
@@ -288,6 +297,71 @@ enum AgentHTTP {
         } catch {
             respond(statusFor(error), ["error": error.localizedDescription])
         }
+    }
+
+    // MARK: 小精灵展示会话（桌面反馈）
+
+    /// 手机 → Mac 的展示上报。只改展示状态：草稿不执行、不注入任何应用，与任务事务完全隔离。
+    private static func spriteAction(json: [String: Any], respond: (Int, [String: Any]) -> Void) {
+        guard let session = spriteSession else {
+            respond(503, ["error": "桌面反馈面板未启用。"])
+            return
+        }
+        guard let action = json["action"] as? String else {
+            respond(400, ["error": "缺少 action。"])
+            return
+        }
+        guard let controller = json["session"] as? String, spriteAuthorized(controller) else {
+            respond(409, ["error": "控制权已变化，请先接管控制。"])
+            return
+        }
+        session.bind(controller: controller)
+        let generation = json["generation"] as? Int ?? 0
+        let seq = json["seq"] as? Int ?? 0
+        let version = json["version"] as? Int ?? 0
+        switch action {
+        case "select":
+            session.select(generation: generation, seq: seq)
+        case "deselect":
+            session.deselect(generation: generation, seq: seq)
+        case "draft":
+            session.draft(generation: generation, seq: seq, version: version,
+                          text: json["text"] as? String ?? "")
+        case "heartbeat":
+            break
+        case "clear":
+            session.clear(generation: generation, seq: seq, version: version)
+        case "submitting":
+            session.submitting(version: version, text: json["text"] as? String ?? "",
+                               requestId: json["requestId"] as? String ?? "")
+        case "submitted":
+            session.submitted(version: version, taskId: json["taskId"] as? String, requestId: json["requestId"] as? String ?? "")
+        case "submit-failed":
+            session.submitFailed(version: version, requestId: json["requestId"] as? String ?? "")
+        default:
+            respond(400, ["error": "不支持的 action：\(action)"])
+            return
+        }
+        session.touch()
+        spriteState(respond: respond)
+    }
+
+    /// 快照回显：手机重连时同步当前展示状态，不回放按键。
+    private static func spriteState(respond: (Int, [String: Any]) -> Void) {
+        guard let session = spriteSession else {
+            respond(503, ["error": "桌面反馈面板未启用。"])
+            return
+        }
+        let snapshot = session.current
+        respond(200, ["state": [
+            "selected": snapshot.selected,
+            "generation": snapshot.generation,
+            "seq": snapshot.seq,
+            "draftVersion": snapshot.draftVersion,
+            "draft": snapshot.draft,
+            "submitting": snapshot.submitting,
+            "taskId": snapshot.lastTaskId ?? "",
+        ] as [String: Any]])
     }
 
     private static func events(taskId: String, query: String, respond: (Int, [String: Any]) -> Void) {

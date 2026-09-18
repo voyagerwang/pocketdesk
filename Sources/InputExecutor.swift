@@ -1,9 +1,10 @@
 /**
  * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard、ApplicationServices 的 AXUIElement、CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的命令词汇、ImageBatchStore 的有界多图资源、ImagePastePolicy 的目标专属时序、ExecutionTrace 的门禁与结果分级、TargetStore/InputFocus/InputBinding/LiveDraft 的目标和草稿事务。
- * [OUTPUT]: 对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、显式整段清空（幂等、可从冻结态破冰；文档类目标只清手机侧）、统一的 UU 文字剪贴板时序、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点；白板等无输入框画布退化为纯粘贴序列并用方向键分离相邻图片）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
+ * [OUTPUT]: 桌面动作在入队前绑定窗口身份，菜单发现和布局复用串行队列； 桌面 Agent 动作复用串行队列和按键原语；快捷操作支持队列内租约核验，锁屏通过系统状态确认才报成功；对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、显式整段清空（幂等、可从冻结态破冰；文档类目标只清手机侧）、统一的 UU 文字剪贴板时序、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点；白板等无输入框画布退化为纯粘贴序列并用方向键分离相邻图片）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/live-input、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
- * [PROTOCOL]: 删除键经 postDeleteKey 发送（不携带 DEL 字符），避免 Chromium 把 Backspace 当成 Delete 键；clearScopeAllowsComputer 不再按进程白名单一刀切拦掉聊天类应用（飞书/钉钉等同进程文档与消息无法从 bundle 区分），改由 focusedInDocument 按需保护真实文档正文；frontmostMatches/preferredFrontApp 以键盘焦点归属（focusedApplicationPID）为准、窗口层序只作回退——半激活态（窗口在最上、活跃应用是别人，实测 Electron/飞书）按层序判会假通过或误报"不在前台"；verifyActivation 轮询期内每两拍补发一次激活；变更时更新此头部，然后检查 CLAUDE.md
+ * [NOTES]: 删除键经 postDeleteKey 发送（不携带 DEL 字符），避免 Chromium 把 Backspace 当成 Delete 键；clearScopeAllowsComputer 不再按进程白名单一刀切拦掉聊天类应用（飞书/钉钉等同进程文档与消息无法从 bundle 区分），改由 focusedInDocument 按需保护真实文档正文；frontmostMatches/preferredFrontApp 以键盘焦点归属（focusedApplicationPID）为准、窗口层序只作回退——半激活态（窗口在最上、活跃应用是别人，实测 Electron/飞书）按层序判会假通过或误报"不在前台"；verifyActivation 轮询期内每两拍补发一次激活；变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 import CoreGraphics
@@ -247,11 +248,17 @@ final class InputExecutor {
     private var imageExecutionDrafts = Set<String>()
     private var imageExecutionOrder: [String] = []
 
-    func mirror(_ command: LiveInputCommand, authorized: @escaping () -> Bool = { true }, completion: @escaping (Result<LiveInputReceipt, LiveInputFailure>) -> Void) {
+    func mirror(_ command: LiveInputCommand, authorized: @escaping () -> Bool = { true }, preflight: @escaping () -> Bool = { true }, completion: @escaping (Result<LiveInputReceipt, LiveInputFailure>) -> Void) {
         queue.async {
             // 提交/图片粘贴/草稿写入期间置位：看门狗据此推迟自愈重启（这些事务不可重放）。
             InputActivity.shared.begin()
             defer { InputActivity.shared.end() }
+            guard preflight() else {
+                let reason = "写入前焦点、控制权或空白输入框已变化，未写入。"
+                self.record("live", "草稿输入", .blocked, reason)
+                completion(.failure(LiveInputFailure(message: reason, state: DraftState.needsUserFocus.rawValue)))
+                return
+            }
             do { completion(.success(try self.applyDraft(command, authorized: authorized))) }
             catch let failure as LiveDraftFailure {
                 self.record("live", "草稿输入", .blocked, failure.message)
@@ -891,11 +898,51 @@ final class InputExecutor {
     // 快捷键：组合键注入当前前台应用，不切换目标；与 send 共用串行队列。
     // 回执分两级——能观察到状态变化才算 delivered，纯按键注入只能是 sent（微信不响应合成 Cmd+W
     // 却旧实现照样回 ok，正是这里要补上的诚实）。
-    func triggerShortcut(_ shortcut: ShortcutConfig, completion: @escaping (Result<ExecutionFeedback, ShortcutError>) -> Void) {
+    /// 桌面 Agent 与手机输入共用串行执行队列；目标 PID 在排队前固定。
+    func performDesktopAction(_ request: DesktopActionRequest, authorized: @escaping () -> Bool,
+                              completion: @escaping (Result<ExecutionFeedback, ShortcutError>) -> Void) {
+        guard let app = AgentDesktopActions.target(request.app, store: store) else {
+            completion(.failure(.message("未找到唯一且正在运行的目标应用，请明确应用名称。"))); return
+        }
+        // 在入队时固定窗口，不能因为用户在同一应用切窗而悄悄改变落点。
+        var captured = request
+        if [.closeWindow, .menuAction, .arrangeWindow].contains(request.action) {
+            guard let window = AgentDesktopActions.selectedWindow(request, app: app) else {
+                completion(.failure(.message("未找到唯一目标窗口，请先查看窗口列表并明确目标。"))); return
+            }
+            captured.window = AgentDesktopActions.windowID(window, pid: app.processIdentifier)
+        }
+        let boundRequest = captured
+        queue.async {
+            InputActivity.shared.begin()
+            AgentDesktopActions.perform(boundRequest, app: app, authorized: authorized,
+                canClear: { self.clearScopeAllowsComputer(front: app) },
+                selectAll: { self.postKey(0, flags: .maskCommand) }, delete: { self.postDeleteKey() }) { result in
+                    InputActivity.shared.end()
+                    switch result {
+                    case .success(let feedback): self.record("desktop", request.action.rawValue, feedback.outcome, feedback.detail)
+                    case .failure(.message(let reason)): self.record("desktop", request.action.rawValue, .blocked, reason)
+                    }
+                    completion(result)
+                }
+        }
+    }
+
+    func triggerShortcut(_ shortcut: ShortcutConfig, authorized: @escaping () -> Bool = { true }, completion: @escaping (Result<ExecutionFeedback, ShortcutError>) -> Void) {
         queue.async {
             // 快捷键注入同样是不可重放的输入事务：期间看门狗不得重启。
             InputActivity.shared.begin()
             defer { InputActivity.shared.end() }
+            guard authorized() else {
+                let reason = "手机控制权已失效，未执行快捷操作。"
+                self.record("shortcut", shortcut.label, .blocked, reason)
+                completion(.failure(.message(reason))); return
+            }
+            if shortcut.action == ShortcutAction.lockScreen.rawValue, LockScreenInput.locked {
+                let feedback = ExecutionFeedback.delivered("电脑已经处于锁屏状态。")
+                self.record("shortcut", shortcut.label, feedback.outcome, feedback.detail)
+                completion(.success(feedback)); return
+            }
             if let reason = EnvironmentGate.blockReason() {
                 self.record("shortcut", shortcut.label, .blocked, reason)
                 completion(.failure(.message(reason))); return
@@ -921,9 +968,11 @@ final class InputExecutor {
                         completion(.failure(.message(text))); return
                     }
                     if self.runCommand(command) {
-                        let feedback = ExecutionFeedback.delivered("已执行\(action.label)。")
-                        self.record("shortcut", shortcut.label, .delivered, feedback.detail, frontName)
-                        completion(.success(feedback))
+                        self.verify(label: shortcut.label, frontApp: frontName, delay: .milliseconds(1200),
+                                    changed: { LockScreenInput.locked }, okText: { "电脑已锁屏。" },
+                                    pendingText: "已发出关屏命令，但尚未确认系统锁屏；请检查 Mac 的需要密码设置。") {
+                            completion(.success($0))
+                        }
                     } else {
                         let text = "「\(action.label)」执行失败（系统命令返回非零）。"
                         self.record("shortcut", shortcut.label, .failed, text, frontName)

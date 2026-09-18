@@ -28,7 +28,8 @@ agent-client.test.cjs: 在 vm 沙箱里注入最小的 window/localStorage/fetch
 
 phone-settings.test.cjs: 静态结构回归，验证首页设置入口唯一、触控板内无齿轮、三个旧控件 ID 与范围未变且未被复制第二份、翻腕开关默认关闭且不写死 disabled、翻腕偏好只存用户意愿、翻腕练习（按钮/读数条/仪表/控制器练习通道）已彻底移除而带度数的灵敏度档位仍在、新脚本同时进入页面引用与 Server.swift 静态白名单；并锁住免证书降级——`#wrist-group` 默认 `hidden` 且由设置面板按状态显隐，证书向导的任何一个词（CA 路径、`probeSecure`、描述文件安装、信任开关、探测跳转）都不得再出现在手机端设置面板与体感模块里，失败只给「暂时无法使用翻腕发送，请使用发送按钮」一句人话，四级状态与有效数据探测、挂起恢复必须真实存在；控制台只留局域网/跨网地址链接且不再有安全连接整块。
 
-motion-recognizer.test.cjs: 纯函数识别器单测，覆盖正常翻腕触发与震动/扭转/转屏/短触/静止的拒绝，以及灵敏度预设差异；不依赖浏览器。
+motion-recognizer.test.cjs: 纯函数轨迹回归，覆盖多采样率传感器噪声、稳定握姿、慢速漂移、快翻达角度立即触发、不依赖悬停或回弹、超时、回位再触发、圆周角与无效数据、逐帧事件及灵敏度差异；不依赖浏览器。
+motion-send.test.cjs: vm 浏览器事件替身驱动真实控制器与识别器，并执行 compose 实际门禁，验证前翻中立即调用提交入口、输入静默等待与动作采集并行、未静默候选不补发、统一提交入口、连续倾斜不重复、设置/草稿/输入门禁中断不补发及恢复新动作、关闭与挂起；不连接桌面服务。
 
 web-globals.test.cjs: 静态结构回归，验证 window.pocketdeskSend 只由 pad.js 赋值（screen.js 的画面指令通道）、compose.js 以 pocketdeskComposeSend 暴露发送入口、motion-send.js 不读该全局、index.html 中 pad.js 先于 compose.js 加载，以及安卓专属输入补丁（残留焦点再聚焦/内边距补聚焦/IME 重建）全部受 androidInputPatch 门禁约束。
 
@@ -62,3 +63,44 @@ sprite-flow.test.py 动效断言更新为分层 SVG、待机转头、执行扫�
 球球回退验收：sprite-flow.test.py 验证原始整图加载、待机/执行动效、无独立变形眼层及减少动态；截图 /tmp/pocketdesk-orb-restored.png。
 
 sprite-flow.test.py 新增启动前台/未配置应用之间的绑定隔离、草稿/IME/提交期间延迟跟随、小精灵往返无桌面写入及 320/390/1024 宽度检查；live-recovery.test.cjs 的选择契约从 recipients.js 读取并验证静态资源注册。agent-runner.test.swift 覆盖 Codex 包身份别名、普通 ChatGPT 不误认与候选歧义。
+
+球球选中回归：sprite-flow.test.py 覆盖经典/米白主题无框柔光、圆眼正视和减少动态效果；保留草稿/派单行为回归，未替代真机性能验收。
+
+表情草稿回归：sprite-flow.test.py 覆盖空白开心、输入等待、清空恢复开心及任务优先专注。
+
+agent-runner.test.swift 新任务回归：new/current 传递与无效类型拒绝、Workbody/z code 别名、各应用新建页面正反证据、Codex 多行特殊字符深链往返、并发原子占用、旧快照与进程重载不能解除派单去重。测试只注入替身，不实际提交外部 Agent。
+
+原版球球回归：sprite-flow.test.py 检查单 SVG 实例、草稿状态映射和减少动态模式下 SVG 几何停止变化；真机耗电/发热未验证。
+
+待机映射更新：空白/清空现在回归左上待机，点击走原版抖动唤醒；仍验证减少动态模式下几何不变。
+
+agent-runner.test.swift 锁屏回归：工具列表暴露已有能力、真实回执直接收尾、未确认与失败不冒充成功、无参数约束、锁屏后同批动作不执行、控制权失效及输入队列末端拒绝。执行器用替身，队列测试固定授权 false，不实际锁屏。
+
+默认原图回归：空白原图静止，唤醒期间隐藏，1.6 秒后恢复；不再期望默认待机持续运动。
+
+点击反馈回归更新：轻抖过程中原图保持可见，结束后无残留动画，替代原版 07 闭眼过程。
+
+agent-runner.test.swift 桌面动作回归：六个动作路由、租约/参数拒绝、重复关闭防护、未确认结果、标题重名拒绝、Unicode 全选与一次删除、选区未确认/焦点变化/正文不可读时不删除。使用内存输入框和执行器替身，不操作真实窗口。
+
+desktop-actions.test.swift: 无副作用验证菜单/布局参数隔离、禁用与重名菜单精确路径、窗口身份稳定、负坐标屏幕和半屏/四角/居中几何；不操作真实桌面。
+agent-runner.test.swift 常用动作扩展：动态 schema 所有动作参数路由、只读发现可重复、菜单已发出回执不报失败且不冒充完成；保留原六项动作、清空选区和关闭去重回归。
+
+sprite-flow.test.py 接收者入口更新：首页和全屏均不再提供接收者切换按钮，改点置顶应用栏进入；移除已删除的手动跟随入口测试，保留自动前台跟随和草稿保护验证。
+
+sprite-session.test.swift: 展示会话与任务投影回归；覆盖连接刷新、迟到回执身份、同任务追问、跨任务相同 revision、重选唤醒代际。
+sprite-report.test.cjs: 可控网络隔离验证串行上报、草稿合并、不可变提交票据、重连快照、心跳与切走隔离。
+sprite-panel.test.swift: 原生面板集成验证；测试锁屏替身仅在独立编译使用，验证显式重选、锁屏隔离、非激活窗口与长回答滚动区域。
+
+sprite-panel.test.swift 直接装载 WKWebView 本地原版组件，断言原生字号/居中、无收起按钮和默认问候、表情抢占及锁屏隔离，导出 /tmp 原生渲染截图。
+
+sprite-flow.test.py 新增选择与草稿上报断言，防止手机界面正常但桌面旁路未接通。
+
+sprite-report.test.cjs 增加连续输入共享 150ms 节流窗口断言，避免持续听写使上报饥饿。sprite-panel.test.swift 增加默认透明面板与短句单行检查。
+
+sprite-session.test.swift 验证历史终态不自动展示、本会话回执仍恢复结果；sprite-flow.test.py 验证 320/390 宽度实时草稿、长句不溢出与切走隐藏。
+
+orb-desktop.test.py: 原版引擎浏览器回归，验证开心唤醒、SVG 帧变化、输入抢占、轮询不重播、隐藏/减少动态停帧，截图只写 /tmp。
+
+执行反馈回归：sprite-session 覆盖 Phase 优先级、提交/执行不回显原话、新草稿替换终态、交接不庆祝；sprite-panel 验证原生输入→执行→完成标题/正文和实际庆祝表情；orb-desktop 验证重选执行不欢迎、同任务不重复庆祝和连续任务独立庆祝。
+
+原生动效验收必须让 NSApp.run 真正处理窗口事件，用异步测试等待 WebKit，不能在主队列内阻塞轮询；同时核对 document 可见与引擎 active，防止静态首帧被误判为动画通过。

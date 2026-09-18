@@ -1,0 +1,30 @@
+<!--
+ [INPUT]: 依赖本地原版 orb-rings/emotions/ball/engine 与 orb-desktop 适配器。
+ [OUTPUT]: 桌面 WKWebView 的透明矢量球体画布；不包含文字、输入或网络能力。
+ [POS]: 桌面精灵的离线绘制入口；文字和窗口生命周期由原生面板负责。
+ [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+-->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none'">
+  <title>小精灵</title>
+  <style>
+    :root { --orb-size: 112px; }
+    html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+    body { display: grid; place-items: center; user-select: none; }
+    #orb { width: var(--orb-size); height: var(--orb-size); }
+    #orb svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  </style>
+</head>
+<body>
+  <div id="orb" role="img" aria-label="小精灵"></div>
+  <script src="orb-rings.js"></script>
+  <script src="orb-emotions.js"></script>
+  <script src="orb-ball.js"></script>
+  <script src="orb-engine.js"></script>
+  <script src="orb-desktop.js"></script>
+</body>
+</html>

@@ -45,7 +45,7 @@ function writeMotionPref(patch) {
 
 /* ---------- 翻腕文案：三句人话，不出现端口、证书或系统设置路径 ---------- */
 
-const WRIST_IDLE_NOTE = '开启后，手机向前甩动并停稳，即可发送当前输入的内容。';
+const WRIST_IDLE_NOTE = '开启后，手机向前翻一下即可发送，不用停住或等待回弹。';
 const WRIST_ACTIVE_NOTE = '监听中：说完话轻翻手腕即可发送。';
 const WRIST_CHECKING_NOTE = '正在检查甩送是否可用…';
 // 失败只有这一句：不循环弹权限、不要求系统配置、不提怎么修。

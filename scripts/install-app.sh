@@ -1,5 +1,5 @@
 #!/bin/zsh
-# [INPUT]: 依赖 Sources、Web 和 Resources/Info.plist、AppIcon.icns。 [OUTPUT]: 安装并启动 ~/Applications/PocketDesk.app。 [POS]: scripts 的本机打包入口。 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+# [INPUT]: 依赖 Swift/AppKit/WebKit、Sources、Web 和 Resources/Info.plist、AppIcon.icns。 [OUTPUT]: 安装并启动 ~/Applications/PocketDesk.app。 [POS]: scripts 的本机打包入口。 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,7 +22,7 @@ if [[ -e "$TLS_DIR/server.p12" && ( ! -e "$TLS_DIR/server-key.der" || ! -e "$TLS
 fi
 
 mkdir -p "$BUILD_APP/Contents/MacOS" "$BUILD_APP/Contents/Resources" "$INSTALL_DIR"
-swiftc "$ROOT_DIR"/Sources/*.swift -o "$BUILD_APP/Contents/MacOS/VoiceDeck" -framework AppKit -framework Network -framework CoreImage -framework Carbon -Xlinker -sectcreate -Xlinker __CGPreLoginApp -Xlinker __cgpreloginapp -Xlinker /dev/null
+swiftc "$ROOT_DIR"/Sources/*.swift -o "$BUILD_APP/Contents/MacOS/VoiceDeck" -framework AppKit -framework WebKit -framework Network -framework CoreImage -framework Carbon -Xlinker -sectcreate -Xlinker __CGPreLoginApp -Xlinker __cgpreloginapp -Xlinker /dev/null
 cp "$ROOT_DIR/Resources/Info.plist" "$BUILD_APP/Contents/Info.plist"
 cp "$ROOT_DIR/Resources/AppIcon.icns" "$BUILD_APP/Contents/Resources/AppIcon.icns"
 # 复制目录：优先 ditto（保留扩展属性与资源分支）；受限/沙箱环境下 ditto 会在写自己的

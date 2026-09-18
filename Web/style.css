@@ -1,6 +1,6 @@
 /*
  * [INPUT]: 消费首页语义结构。
- * [OUTPUT]: 首页/全屏接收者往返入口与球球状态样式； 提供经典蓝基础主题令牌、Dock、输入区和触控板样式，按展开状态区分页面/电脑滚动。
+ * [OUTPUT]: 首页原生吸顶应用栏、输入接收者标识与球球柔光选中样式（无持续动效）； 提供经典蓝基础主题令牌、Dock、输入区和触控板样式，按展开状态区分页面/电脑滚动。
  * [POS]: Web 设计令牌来源；app-extras.css 补充首页辅助控件与米白覆盖，screen.css 承载全屏工作台。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -189,7 +189,15 @@ h1 {
 
 /* ---------- Dock ---------- */
 
+/* 应用栏由浏览器原生吸顶；不监听滚动，不额外启动逐帧计算。 */
 .deck {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  flex-shrink: 0;
+  margin-inline: calc(-1 * var(--s-5));
+  padding: calc(env(safe-area-inset-top) + var(--s-2)) var(--s-5) var(--s-2);
+  background: var(--bg);
   display: flex;
   flex-direction: column;
   gap: var(--s-3);
@@ -673,40 +681,42 @@ main.pad-mode #pad { touch-action: none; overscroll-behavior: contain; }
   font-size: var(--text-sm);
   color: var(--fg-muted);
 }
-.recipient-toggle {
-  flex: none;
-  min-height: var(--control-size);
-  padding: 0 var(--s-2);
-  border: 0;
-  border-radius: var(--r-field);
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-.recipient-toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.recipient-toggle:hover { background: var(--surface-2); }
 .agent-brief { color: var(--fg-muted); font-size: 13px; line-height: 1.5; }
 .agent-result details, .agent-sources details { font-size: 12px; color: var(--fg-muted); }
 .agent-result summary, .agent-sources summary { cursor: pointer; padding: 8px 0; }
 .agent-actions:has(button:not([hidden])) { display: flex; }
 .agent-actions:not(:has(button:not([hidden]))) { display: none; }
 
-/* 恢复整颗球的轻动效，眼睛与身体保持原始比例。 */
-.sprite-icon img { transform-origin: 50% 75%; animation: sprite-idle 4.8s ease-in-out infinite; }
-.target-sprite.is-working .sprite-icon img { animation: sprite-working 1.6s ease-in-out infinite; }
-@keyframes sprite-idle {
-  0%, 100% { transform: translateY(0) rotate(-3deg) scale(1); }
-  50% { transform: translateY(-3px) rotate(3deg) scale(1.035); }
+/* 小精灵选中：静态柔光与原版独立表情引擎，保持点击热区，不运行待机循环。 */
+.target.target-sprite .sprite-icon {
+  isolation: isolate;
+  border-color: transparent;
+  box-shadow: none;
+  transition: transform 300ms cubic-bezier(.16, 1, .3, 1);
 }
-@keyframes sprite-working {
-  0%, 100% { transform: translateY(0) rotate(-7deg); }
-  50% { transform: translateY(-4px) rotate(7deg); }
+.target-sprite .sprite-icon::before {
+  content: "";
+  position: absolute;
+  inset: -9px -12px -12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 55%, rgb(255 225 151 / 65%) 0%, rgb(255 233 177 / 32%) 28%, rgb(255 238 198 / 0%) 65%);
+  opacity: 0;
+  transition: opacity 300ms ease-out;
 }
+.target.target-sprite.selected .sprite-icon { transform: translateY(-3px) scale(1.06); }
+.target-sprite.selected .sprite-icon::before { opacity: 1; }
+.target-sprite.selected small::before { display: none; }
+.sprite-engine { position: absolute; inset: 0; pointer-events: none; }
+.sprite-engine svg { width: 100%; height: 100%; }
+.target-sprite:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 12px; }
 @media (prefers-reduced-motion: reduce) {
-  .sprite-icon img, .target-sprite.is-working .sprite-icon img { animation: none; transform: none; }
+  .target.target-sprite .sprite-icon, .target-sprite .sprite-icon::before,
+  .sprite-engine { transition: none; }
+  .target.target-sprite.selected .sprite-icon { transform: none; }
 }
+
+/* 默认姿态使用最初完整 SVG，原图不重新定位眼睛；仅交互时显示引擎。 */
+.sprite-engine > .sprite-original { display: none; }
+.sprite-engine[data-resting="true"] > svg { display: none !important; }
+.sprite-engine[data-resting="true"] > .sprite-original { display: block; }

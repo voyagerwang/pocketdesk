@@ -1,6 +1,6 @@
 <!--
  [INPUT]: 依赖 app/pad/compose 的首页、多图批次和输入能力，以及 screen 系列模块的画面工作台。
- [OUTPUT]: 简洁任务卡、接续动作、首页和全屏共享的小精灵往返入口及输入接收者标识； 小精灵完成后直接输入下一项，无独立新任务按钮；提供首页 Dock、原生多图文件选择与缩略图容器、触控板、草稿和 PiP/全屏工作台。
+ [OUTPUT]: 实时草稿浮层、简洁任务卡、接续动作、首页和全屏的输入接收者标识，切换统一使用置顶应用栏； 小精灵完成后直接输入下一项，无独立新任务按钮；提供首页 Dock、原生多图文件选择与缩略图容器、触控板、草稿和 PiP/全屏工作台。
  [POS]: Web 唯一手机入口；只收集文本与手势，听写由手机输入法提供。
  [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -20,8 +20,8 @@
         } catch (e) { /* 无属性 = 经典蓝 */ }
       })();
     </script>
-    <link rel="stylesheet" href="/style.css?v=1.3.0.13" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
-    <link rel="stylesheet" href="/app-extras.css?v=1.3.0.13">
+    <link rel="stylesheet" href="/style.css?v=1.3.0.14-expression-original-sticky-restored" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
+    <link rel="stylesheet" href="/app-extras.css?v=1.3.0.13-glow">
     <link rel="stylesheet" href="/screen.css?v=3.1.1">
   </head>
   <body data-page-node-id="2eqrPm23J7ToUXDDq0CibO">
@@ -49,6 +49,7 @@
         </div>
       </section>
 
+      <div id="sprite-transcript" class="sprite-transcript" aria-live="polite" hidden></div>
       <section id="agent-panel" class="agent-panel" aria-label="小精灵当前任务" hidden>
         <div id="agent-status" class="agent-status" role="status"></div>
         <div id="agent-result" class="agent-result"></div>
@@ -66,7 +67,6 @@
       <section class="compose" aria-label="要输入的文本" data-page-node-id="0ZcVuev8NMMuOPyD02o9O6">
         <div class="recipient-bar">
           <span id="compose-recipient" class="compose-recipient"></span>
-          <button class="recipient-toggle" data-recipient-toggle type="button">回到小精灵</button>
         </div>
         <textarea id="text" rows="7" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="点这里，用手机键盘或听写输入…"></textarea>
         <div id="history-panel" class="history-panel" hidden data-page-node-id="LNyuhfSQtQRqKlrfGvAsUc">
@@ -136,7 +136,6 @@
       <section id="screen-compose" class="screen-compose" aria-label="输入到电脑" hidden>
         <div class="recipient-bar">
           <span id="screen-recipient" class="compose-recipient"></span>
-          <button class="recipient-toggle" data-recipient-toggle type="button">回到小精灵</button>
         </div>
         <div class="screen-compose-bar">
           <div id="screen-compose-editor"><textarea id="kb-proxy" class="kb-proxy" rows="1" enterkeyhint="enter" autocomplete="off" autocapitalize="sentences" spellcheck="false" aria-label="输入到电脑" placeholder="输入文字…"></textarea></div>
@@ -177,7 +176,7 @@
               <span>甩送</span>
               <input id="wrist-toggle" type="checkbox" role="switch" aria-describedby="wrist-note">
             </label>
-            <p id="wrist-note" class="sheet-hint">开启后，手机向前甩动并停稳，即可发送当前输入的内容。</p>
+            <p id="wrist-note" class="sheet-hint">开启后，手机向前翻一下即可发送，不用停住或等待回弹。</p>
             <label id="wrist-sensitivity-row" class="sheet-row wrist-secondary" hidden>
               <span>灵敏度</span>
               <select id="wrist-sensitivity">
@@ -192,20 +191,26 @@
     </dialog>
     <script src="/device-info.js?v=2"></script>
     <script src="/agent-client.js?v=2"></script>
-    <script src="/agent-panel.js?v=5"></script>
+    <script src="/agent-panel.js?v=5-expression"></script>
     <script src="/app.js?v=3.0.34"></script>
-    <script src="/recipients.js?v=1"></script>
+    <script src="/orb-rings.js?v=1"></script>
+    <script src="/orb-emotions.js?v=1"></script>
+    <script src="/orb-ball.js?v=1"></script>
+    <script src="/orb-engine.js?v=1"></script>
+    <script src="/orb-mobile.js?v=4"></script>
+    <script src="/recipients.js?v=5-transcript"></script>
     <script src="/pad.js?v=3.0.12"></script>
-    <script src="/settings.js?v=3.0.10"></script>
+    <script src="/settings.js?v=3.1.4"></script>
     <script src="/compose-queue.js?v=3.0.17"></script>
-    <script src="/compose.js?v=3.0.33"></script>
+    <script src="/compose.js?v=3.0.35-motion-gate"></script>
+    <script src="/sprite-report.js?v=4-live"></script>
     <script src="/screen-geometry.js?v=3.0.2"></script>
     <script src="/screen-gestures.js?v=3.0.12"></script>
     <script src="/screen-pip.js?v=3.0.0"></script>
     <script src="/screen-frames.js?v=3.1.0"></script>
     <script src="/screen.js?v=3.1.0"></script>
-    <script src="/motion-recognizer.js?v=3.1.0"></script>
-    <script src="/motion-send.js?v=3.1.1"></script>
+    <script src="/motion-recognizer.js?v=3.1.4"></script>
+    <script src="/motion-send.js?v=3.1.4"></script>
     <script>boot();</script>
   </body>
 </html>

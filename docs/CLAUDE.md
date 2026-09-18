@@ -3,7 +3,7 @@
 
 成员清单
 
-desktop-sprite-execution-plan.md: 用户已确认的桌面对话球首版交接；定义居中球球、手机草稿同步、真实任务反馈、焦点与乱序隔离、WorkBuddy Hy4 实施步骤和验收；本期只交付文字闭环。
+desktop-sprite-execution-plan.md: 用户已确认的桌面对话球首版交接；定义居中球球、手机草稿同步、真实任务反馈、焦点与乱序隔离、WorkBuddy Hy4 实施步骤和验收；本期只交付文字闭环，附审核修复记录与待真机项。
 
 desktop-feedback-tts-plan.md: 电脑反馈与 TTS 调研提案；复用任务事实建立不抢焦点的文字反馈，再接系统朗读，明确外部 Agent 回复回传边界、官方依据与分阶段验收，尚未实现。
 
@@ -25,6 +25,10 @@ superpowers/specs/: 已确认的小范围交互规格；记录实现边界、数
 
 orb-attribution.md: 工作台球球静态 SVG 的来源、原始声明与非商业素材许可；不适用项目 MIT 许可。
 
-orb-turn-preview.html: 独立动效评审，内嵌原版全部表情与彩带，对照双眼变圆的正视过渡；含 52px 手机尺寸、暂停/重播/正侧定格/手动进度、减少动态效果适配，不替换生产页面。许可见 orb-attribution.md。
+orb-turn-preview.html: 独立动效评审，内嵌原版全部表情与彩带，对照双眼变圆的正视过渡与多倾角彩带飘动（仅预览引擎启用）；含 52px 手机尺寸、暂停/重播/正侧定格/手动进度、减少动态效果适配，不替换生产页面。许可见 orb-attribution.md。
 
 接收者交互以 sprite-agent-implementation-plan.md 的 2026-09-18 修订为准：默认跟随前台，手动进入小精灵，输入栏往返，草稿保护。
+
+agent-new-task-dispatch.md: Agent 新建任务契约、四应用页面核验、失败语义与实际验证边界。
+
+orb-interaction-preview.html: 手机尺寸点击/输入节奏试验，原版默认图与等待表情；点击轻抬、首字点头、输入柔光、停笔暂停，含模拟输入与减少动态效果；不修改生产应用。

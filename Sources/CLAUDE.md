@@ -59,7 +59,7 @@ DeviceConnections.swift: 已鉴权浏览器心跳的设备描述与连接记录�
 
 AppOperator.swift: 「打开本机应用」执行器（路径 B）——受信任目录白名单（/System/Applications、/Applications、/Applications/Utilities、~/Applications）内的 `.app` 才能启动，中文别名表（飞书→lark/feishu、微信→wechat…）把模型给的中文名映到包名/标识符关键字，`resolve` 按显示名/包名/包标识精确或包含匹配打分，`open` 走 `NSWorkspace.open`。与 BrowserOperator（路径 A 开网页）对称，由 AgentRunner 核验控制租约后调用。tt-bridge（CC BY-NC）只覆盖浏览器、不启动应用，故本能力为原生自研、未嵌入其代码。
 BrowserOperator.swift: 「打开网页」执行器——只接受 http(s) 绝对地址，其余一律拒绝，由默认浏览器新标签页打开。与 PageReader（只读）对称，写入前由 AgentRunner 核验控制租约。
-AgentAppDispatch.swift: Agent 派单适配层——把「让某个 Agent 做件事」落到现有输入事务上（不另起第二套键盘执行器）。只支持控制台已配置的 Cola / Codex / ZCode / WorkBuddy / ChatGPT，且**不支持聊天联系人发信**；要求目标应用可激活、前台是它、焦点在可编辑控件。投递前先 `clearComposerForAgentDispatch` 做 **Cmd+A + Delete 清空**，再交 `executor.mirror(text, submit:true)` 写入并提交。**刻意不校验「输入框必须为空」**：WorkBuddy 等 Chromium 应用的 AXValue 读到的是**占位提示**（「今天帮你做些什么？ @ 引用对话文件，/ 调用技能与指令」，且每次读都不一样），空框时也永远非空，该判据在这些应用上恒为假、派单会被永久拒绝。投递前持久写一条 `dispatch_to_app` 工具消息，保证模型不会自动重复提交。回执区分 committed（提交动作已发出，不代表对方已完成）与待核对，失败一律如实上报、不重试。
+AgentAppDispatch.swift: 新建/继续派单编排；默认 new，只有显式 current 才复用当前对话。副作用前原子占用任务并串行派单，委托 AgentTaskComposer 核验新建页面，空白框通过现有 mirror 提交；Codex 深链预填后只提交。新建失败不降级旧会话，回执只证明提交动作已发出。
 
 派单接续契约（2026-09-18）：AgentModels 的可选 handoffTargetId/name/requested 保持旧任务解码兼容，HTTP 只暴露接续事实，不暴露控制会话。AgentRunner 从 switchAfter 保存明确切换意图；AgentAppDispatch 仅 committed 后持久保存配置中的精确目标 ID/name，手机不解析模型文字猜接收者。
 
@@ -73,3 +73,34 @@ FeishuGateway.swift: 全 CLI 业务域的能力发现与按帮助执行；读取
 派单焦点恢复：AgentAppDispatch 激活后沿用 InputFocus 的 AX 聚焦；未确认时使用 TargetWindowLocator（排除搜索/下拉）定位可见输入框，再经共享 PointerExecutor 点击并延迟核验。未找到、被遮挡、用户移动鼠标、失去租约或焦点未确认均不清空/提交；不使用窗口底部猜测坐标。派单去重检查与持久标记先于清空，防止重复调用擦除草稿。Server 仅注入已有指针执行器，普通手动选应用保留原定位策略。
 
 Codex 派单身份修订：AgentAppDispatch 除配置名称外识别 com.openai.codex（可安装为 ChatGPT.app），路径的真实 bundle ID 优先于旧配置；多候选仍拒绝。Server 静态白名单新增 recipients.js。
+
+AgentAppProfile.swift: 应用身份和会话模式的纯策略；真实 bundle ID 优先于名称，兼容 Workbody/z code 别名，定义各应用空白框与新页面证据及 Codex 官方深链编码。
+AgentTaskComposer.swift: 有界 AX 新任务导航；WorkBuddy/Cola/ZCode 按唯一语义入口新建，核验应用特定页面后绑定精确撰写框。Cola 未选模型则停止并提示；Codex 深链预填正文后逐字读回，不重复输入。每次动作核验租约与焦点。
+
+派单事务补充：TaskStore.reserveAppDispatch 在锁内先持久占用，save 保留已有占用证据，旧快照不能解除去重。InputExecutor.mirror 的可选 preflight 在串行队列写入前核验空白框；AgentTaskComposer.submitPrepared 核验预填正文后点击唯一可用发送按钮，观察当前撰写框清空；未确认不重试、不写成功接续。TargetWindowLocator.axWindowElement 对适配层提供窗口 AX 根，不扩大窗口检索范围。
+
+手机原版球球：Server 静态资源白名单增加 orb-rings/emotions/ball/engine/mobile.js，沿用已有静态文件处理。
+
+小精灵锁屏契约：AgentRunner.lock_computer 只接受空参数，用户明确要求时复用 Server 注入的 ShortcutAction.lockScreen → InputExecutor.triggerShortcut；队列内再核验控制租约。系统命令成功退出只表示已发出关屏请求，读取 LockScreenInput.locked 后才报告锁屏已生效；未确认、拒绝和失败不能写成锁屏成功。锁屏回执直接结束模型轮次，同批后续工具标记未执行，不因控制会话断开继续请求模型。
+
+AgentDesktopActions.swift: 小精灵固定桌面动作协议、运行应用与窗口身份解析、AX 精确关闭及输入框全选/清空事务；应用隐藏/正常退出使用 AppKit，不强退或处理保存提示。输入按键注入复用 InputExecutor，选区与清空结果必须读回核验。
+桌面动作接线：Server 注入 desktop_action 至 InputExecutor 串行队列；AgentRunner 公开固定动作及 list_windows，写前 TaskStore.reserveDesktopAction 原子去重，失败/未确认直接结束本轮。TaskStore.save 保留桌面动作占用，避免旧快照解除去重。关闭指定应用的多个窗口必须给唯一准确标题，当前窗口必须仍属于原聚焦进程。
+
+SpriteSession.swift: 按真实控制连接隔离展示计数，按提交身份与版本接受回执；显式选择修订用于恢复面板，草稿不执行。
+
+SpriteFeedback.swift: 以 taskId/revision 合并最新问题和结果，投影交互 Phase、阶段标题/正文与原版表情 ID；提交和忙碌优先于残留草稿，同任务追问隐藏旧回答，展示修订驱动唤醒，不维护手动收起状态，不执行任务。
+
+SpriteFeedbackPanel.swift: AppKit 非激活透明面板；默认只有原版动态球体，无收起按钮和占位文字；输入显示草稿，发送后用执行标题取代原话，完成展示结果；真实正文用 15pt 原生字体居中/换行和独立滚动；应用隐藏与锁屏独立，保持球体底部锚点。
+
+DesktopMenuActions.swift: 常用菜单语义目录、当前应用真实菜单发现与唯一匹配执行；菜单路径不能扩大目录范围。绑定焦点/窗口/标题、执行前复核 enabled；新窗口读回新身份，其余菜单操作只报告已发出，不冒充结果完成。
+DesktopWindowLayout.swift: AX 窗口布局与纯几何；可用区域从 NSScreen 换算到 AX 全局点，支持左右/上下/四角/铺满/居中/最小化/恢复。屏幕不存在或全屏空间拒绝；布局必须读回尺寸位置，应用最小尺寸限制不报成功。
+桌面操作扩展：AgentDesktopActions 提供 list_actions/menu_action/arrange_window；窗口身份由有界的进程内 AX 元素注册表维护，重复标题优先使用 id。InputExecutor 入队前固定窗口。AgentRunner 工具 schema 从同一动作目录生成，只读发现不去重，写动作仍持久去重；菜单 sent 直接返回真实回执并停止本轮依赖动作。
+电脑球体状态：SpriteOrbView 用透明、非持久化 WKWebView 加载本地 orb-desktop.html；原版矢量引擎负责表情，面板只传可见性/表情/代际/任务身份/减少动态设置，不传正文，无网页到原生操作桥。
+
+菜单超时契约：AX cannotComplete 可能表示应用已执行后进入模态处理，回执为结果待核验，绝不自动重放；依据 Apple AXUIElementPerformAction 文档。
+
+SpriteDesk.swift: 桌面展示唯一装配入口；进程级强持有协调层和原生面板，任务只读投影与展示会话分别注入。
+
+桌面反馈精简：SpriteFeedback 仅恢复活动/待补充或本展示会话提交的任务，历史终态不作为默认内容。SpriteFeedbackPanel 使用透明容器与 360pt 转写浮层，短句单行、长句换行，执行中优先反馈任务；非忙碌时新草稿替换结果；默认锚点为 Dock 可用区上方 44pt，原版引擎呈现输入表情，切应用隐藏，重选开心唤醒。
+
+SpriteOrbView.swift: 离线 WebKit 绘制适配；仅允许本地入口导航，就绪重放最新快照，隐藏停帧，Web 内容进程终止后恢复；hitTest 不拦截拖动，不接受键盘焦点。

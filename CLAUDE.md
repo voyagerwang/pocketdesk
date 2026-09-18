@@ -1,9 +1,9 @@
 # PocketDesk MVP - 手机语音输入到桌面应用的本地与私网桥接器
-Swift + Network + Quartz Event Services，搭配零依赖手机 Web 页面；局域网直连或经 Tailscale 私网跨网连接，macOS 先行，命令协议为 Windows helper 保留稳定边界。
+Swift + Network + Quartz Event Services + WebKit（桌面原版球体），搭配零依赖手机 Web 页面；局域网直连或经 Tailscale 私网跨网连接，macOS 先行，命令协议为 Windows helper 保留稳定边界。
 
 <directory>
-Sources/ - HTTP、控制/光标与持续画面三通道；应用配置、焦点/输入上下文、草稿快照、图片批次、输入活动闸、指针几何与窗口定位及系统输入执行，模型服务配置/客户端与 Agent 路由，以及小精灵的任务模型/存储/服务/执行/网页读取/接收者顺序（45 个 Swift 文件）
-Web/ - 手机首页、全屏工作台与电脑控制台，零依赖经典脚本按职责拆分；含小精灵的任务客户端与任务卡（22 个静态文件）
+Sources/ - HTTP、控制/光标与持续画面三通道；应用配置、焦点/输入上下文、草稿快照、图片批次、输入活动闸、指针几何与窗口定位及系统输入执行，模型服务配置/客户端与 Agent 路由，以及小精灵的任务模型/存储/服务/执行/网页读取/接收者顺序与 Agent 新任务/桌面动作适配（55 个 Swift 文件）
+Web/ - 手机首页、全屏工作台与电脑控制台，零依赖经典脚本按职责拆分；含小精灵的任务客户端与任务卡（32 个静态文件）
 Resources/ - 独立 macOS App 的 bundle 元数据与应用图标 (plist + icns + iconset)
 scripts/ - 应用安装、图标生成、焦点与锁屏通道探针（7 个脚本）
 SessionProbe/ - 独立用户级会话验证应用，比较预登录标记下的锁屏帧状态与显式测试按键；不是生产解锁服务
@@ -12,6 +12,7 @@ docs/ - 已确认交互方案的短规格与实现前决策记录
 </directory>
 
 <architecture>
+桌面小精灵反馈：控制连接隔离手机展示快照，复用 TaskStore 事实，经 SpriteFeedback 投影到非激活原生面板，文字原生绘制、球体复用离线 EmotionBall 组件；展示不执行任务，不抢输入焦点；输入时显示草稿，提交/执行时明确状态，完成时庆祝并保留结果，旧终态不默认恢复，预填派单由语义发送按钮与撰写框清空核验收尾。
 三条独立通路，改任何一条前先想清楚它跑在哪条上：
   画面：Mac 桌面 → ScreenCaptureKit → 最新 JPEG → 独立 WS :46389 → 手机 <img>（目标 30fps；PiP/失败降级走 HTTP 单帧）
   光标：Mac 光标位置 → CursorMonitor → WS 广播 → 手机 #screen-cursor 叠加层（约 30Hz，轻，latest-only）
@@ -39,5 +40,5 @@ AGENT_PRODUCT_ARCHITECTURE.md - Agent 整体产品设计：任务与记忆、规
 AGENT_MODE_PLAN.md - 口述办事一期：意图底座与确定性动作（P1）、窗口摆放与一键布局（P2）、给应用发消息（P3）的分步方案与验收（方案）
 </config>
 
-锁屏解锁：用户级预登录标记支持当前会话锁屏事件；HTTPS/WSS :46487–46489 与原通道共享控制租约，密码只走 LockScreenInput，不写日志/历史/剪贴板。首次手机信任本机 CA；不覆盖重启后的 FileVault 登录。
+锁屏解锁：用户级预登录标记支持当前会话锁屏事件；HTTPS/WSS :46487–46489 与原通道共享控制租约，密码只走 LockScreenInput，不写日志/历史/剪贴板。首次手机信任本机 CA；不覆盖重启后的 FileVault 登录。小精灵通过 lock_computer 复用已有锁屏执行器，锁屏状态核验后直接回执；解锁仍只走专用入口。
 翻腕发送：免手动证书降级——手机不得为它下载、安装或信任 CA；非安全上下文整组隐藏，能力以真实有效传感器数据证明，运动权限并入开启那次点按（详见 docs/wrist-send-no-certificate-plan.md）。

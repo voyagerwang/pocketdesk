@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 AppKit/ApplicationServices 的 AXUIElement 窗口属性与 CoreGraphics 的 CGWindowListCopyWindowInfo。
- * [OUTPUT]: findInputBoxCenter 可排除搜索/下拉控件供派单恢复焦点； 提供 TargetWindowLocator.resolve(pid:)：目标应用的目标窗口矩形与位于其之上的其他应用遮挡窗口矩形，
+ * [OUTPUT]: axWindowElement 提供目标窗口 AX 根供新任务页面核验；findInputBoxCenter 可排除搜索/下拉控件供派单恢复焦点； 提供 TargetWindowLocator.resolve(pid:)：目标应用的目标窗口矩形与位于其之上的其他应用遮挡窗口矩形，
  *           优先 AX focused window、其次 AX main window、再退到该 PID 最前的普通可见窗口。
  * [POS]: Sources 的窗口解析层；只读窗口服务器与辅助功能属性，不移动光标、不改变焦点。与 PointerGeometry 组合使用。
  *        所有矩形都是 CoreGraphics 全局桌面点（左上原点），与 AXPosition 同坐标系，不做 NSScreen 翻转。
@@ -94,7 +94,7 @@ enum TargetWindowLocator {
     /// 取目标应用的窗口 AX 元素，按 focused → main → 全部窗口中第一个 的优先级回退。
     /// 这是 findInputBoxCenter 能检到输入框的前提：Electron 在后台/激活时序下 kAXFocusedWindowAttribute
     /// 常取不到，若不回退就会整条跳过、导致"鼠标跟过去了却点不进输入框"。
-    private static func axWindowElement(pid: pid_t, preferFocused: Bool = true) -> AXUIElement? {
+    static func axWindowElement(pid: pid_t, preferFocused: Bool = true) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
         let attrs: [CFString] = preferFocused
             ? [kAXFocusedWindowAttribute as CFString, kAXMainWindowAttribute as CFString]

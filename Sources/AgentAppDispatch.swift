@@ -1,9 +1,8 @@
 /**
- * [INPUT]: 依赖已配置 TargetStore、共享 InputExecutor、InputFocus、TargetWindowLocator、PointerGeometry 与共享 PointerExecutor；控制租约保护聚焦与投递。
- * [OUTPUT]: 以真实包身份兼容 Codex 安装为 ChatGPT.app 的接收者别名； 提供 AgentAppDispatch.send：在已配置 Agent 的当前对话中恢复输入焦点、清空输入框、写入并提交任务，返回投递证据并持久保存成功接续目标。
+ * [INPUT]: 依赖 AgentAppProfile 的身份/模式、AgentTaskComposer 的新任务页证据和 TaskStore 原子派单占用； 依赖已配置 TargetStore、共享 InputExecutor、InputFocus、TargetWindowLocator、PointerGeometry 与共享 PointerExecutor；控制租约保护聚焦与投递。
+ * [OUTPUT]: 以真实包身份兼容 Codex 安装为 ChatGPT.app 的接收者别名； 提供 AgentAppDispatch.send：默认创建独立新任务、仅显式 current 才沿用当前对话；核验页面及输入框后提交任务，返回投递证据并持久保存成功接续目标。
  * [POS]: Agent 工具与现有输入事务之间的适配层；不创建第二套键盘执行器，不操作聊天联系人。
- *        派单前先 Cmd+A + Delete 清空输入框再写入：不依赖「AXValue 为空」这条判据，
- *        因为 Chromium 应用（WorkBuddy 等）的 AXValue 读到的是会变化的占位提示，该判据恒为假。
+ *        新任务禁止盲清空，页面证据不成立就停止；副作用前落幂等记录，不确定结果不重试。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
@@ -14,85 +13,121 @@ enum AgentAppDispatch {
     static let supportedNames: Set<String> = ["cola", "codex", "zcode", "workbuddy", "chatgpt"]
 
     static func target(named name: String, in targets: [TargetConfig]) -> TargetConfig? {
-        let key = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let key = AgentAppProfile.canonicalName(name)
         guard supportedNames.contains(key) else { return nil }
-        // Codex 可安装为 ChatGPT.app；真实包身份优先于用户可改的名称。
         let matches = targets.filter { target in
-            if target.name.lowercased() == key || target.id.lowercased() == key { return true }
-            let installedID = target.path.flatMap { Bundle(path: $0)?.bundleIdentifier }
-            return key == "codex" && (installedID ?? target.bundleID) == "com.openai.codex"
+            AgentAppProfile.canonicalName(target.name) == key || AgentAppProfile.canonicalName(target.id) == key
+                || AgentAppProfile.resolve(target)?.rawValue == key
         }
         return matches.count == 1 ? matches[0] : nil
     }
 
-    static func send(app: String, text: String, taskId: String, store: TargetStore,
-                     executor: InputExecutor, pointer: PointerExecutor? = nil, authorized: @escaping () -> Bool,
-                     completion: @escaping (String) -> Void) {
-        guard let target = target(named: app, in: store.targets) else {
-            completion("未派单：请先在电脑控制台添加该 Agent，使用配置中的名称。目前仅支持 Cola、Codex、ZCode、WorkBuddy、ChatGPT；不支持联系人发信。")
-            return
+    private static let lock = NSLock()
+    private static var busy = false
+
+    static func send(app: String, text: String, taskId: String, mode: AgentConversationMode = .newTask,
+                     store: TargetStore, executor: InputExecutor, pointer: PointerExecutor? = nil,
+                     authorized: @escaping () -> Bool, completion: @escaping (String) -> Void) {
+        guard let target = target(named: app, in: store.targets), let profile = AgentAppProfile.resolve(target) else {
+            completion("未派单：未找到已配置的 Agent 应用，请在电脑控制台添加。"); return
         }
-        guard text.utf16.count <= 8000 else { completion("未派单：任务正文超过 8000 字符限制。"); return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf16.count <= 8000 else {
+            completion("未派单：任务正文为空或超过 8000 字符限制。"); return
+        }
         guard authorized() else { completion("未派单：控制权已失效。"); return }
         guard let task = TaskStore.task(id: taskId),
               !task.messages.contains(where: { $0.toolName == "dispatch_to_app" }) else {
             completion("本任务已经尝试派单，请查看目标应用；不会重复提交。"); return
         }
+        lock.lock()
+        guard !busy else { lock.unlock(); completion("未派单：另一个应用派单尚未结束，请稍后重新下达指令。"); return }
+        busy = true
+        lock.unlock()
+        InputActivity.shared.begin()
+        let finish: (String) -> Void = { result in
+            lock.lock(); busy = false; lock.unlock()
+            InputActivity.shared.end()
+            ExecutionLog.shared.append(kind: "dispatch", label: "Agent 派单 · " + mode.rawValue,
+                outcome: result.hasPrefix("已向") ? .sent : .blocked, detail: result)
+            completion(result)
+        }
+        do {
+            guard try TaskStore.reserveAppDispatch(id: taskId, label: "派单尝试：\(target.name) · \(mode.rawValue)") else {
+                finish("本任务已经尝试派单或不再执行，不会重复创建或提交。"); return
+            }
+        } catch { finish("未派单：无法保存派单记录，未操作目标应用。"); return }
         executor.activate(target.id) { result in
             guard case .success(let activation) = result, let pid = activation.pid else {
-                completion("未派单：应用未能激活。"); return
+                finish("未派单：激活应用失败。"); return
             }
-            prepareInputFocus(pid: pid, pointer: pointer, authorized: authorized) { focused in
-                guard focused else {
-                    completion("未派单：未能定位并聚焦目标输入框，请在目标应用点一下任务输入框后重新下达指令。"); return
+            let prepared: (Result<AgentTaskComposer.Prepared, AgentComposerFailure>) -> Void = { result in
+                switch result {
+                case .failure(let error): finish("未派单：" + error.message)
+                case .success(let composer):
+                    submit(target: target, pid: pid, text: text, taskId: taskId, mode: mode,
+                           composer: composer, executor: executor, pointer: pointer, authorized: authorized, completion: finish)
                 }
-                guard authorized(), InputFocus.focusedApplicationPID() == pid,
-                      InputFocus.probeFocus(pid: pid).verdict == .editable,
-                      let element = InputFocus.focusedElement(pid: pid) else {
-                    completion("未派单：目标应用不在前台或没有可输入的输入框。"); return
-                }
-                // 投递开始前持久标记。不确定结果也不能让模型再自动提交一次。
-                guard var task = TaskStore.task(id: taskId),
-                      !task.messages.contains(where: { $0.toolName == "dispatch_to_app" }) else {
-                    completion("本任务已经尝试派单，请查看目标应用；不会重复提交。"); return
-                }
-                task.messages.append(TaskMessage(role: .tool, text: "派单尝试：" + target.name, toolName: "dispatch_to_app"))
-                do { try TaskStore.save(task) } catch { completion("未派单：无法保存投递记录。"); return }
-                // 刻意不校验「输入框必须为空」：WorkBuddy 等 Chromium 应用的 AXValue 读到的是**占位提示**
-                // （「今天帮你做些什么？ @ 引用对话文件，/ 调用技能与指令」之类，且每次读都不一样），
-                // 空框时也永远非空，这条判据在这些应用上恒为假、派单会被永久拒绝。
-                // 改为先 Cmd+A + Delete 清空再写入：结果可预期，且清空对空框是无害空操作。
-                guard executor.clearComposerForAgentDispatch() else {
-                    completion("未派单：清空目标输入框的按键未能发出。"); return
-                }
-                let payload: [String: Any] = ["draftId": "agent-" + taskId, "targetId": target.id,
-                                               "text": text, "submit": true]
-                guard let data = try? JSONSerialization.data(withJSONObject: payload),
-                      let command = try? JSONDecoder().decode(LiveInputCommand.self, from: data) else {
-                    completion("未派单：指令格式无效。"); return
-                }
-                executor.mirror(command, authorized: {
-                    // 输入框已在上一步清空，这里只守住「控制权仍有效 + 焦点没跑掉」。
-                    // 不再重复判空：Chromium 应用的 AXValue 判不出空，重复判只会把派单再挡死一次。
-                    guard authorized(), InputFocus.focusedApplicationPID() == pid,
-                          let current = InputFocus.focusedElement(pid: pid), CFEqual(current, element) else { return false }
-                    return true
-                }) { result in
-                    switch result {
-                    case .success(let receipt):
-                        if receipt.committed, var current = TaskStore.task(id: taskId) {
-                            current.handoffTargetId = target.id
-                            current.handoffTargetName = target.name
-                            do { try TaskStore.save(current) }
-                            catch { completion("结果待核对：任务已提交，接续记录保存失败，请查看电脑。"); return }
-                        }
-                        completion(receipt.committed
-                            ? "已向\(target.name)提交任务；不代表该 Agent 已完成，结果请在电脑查看。"
-                            : "结果待核对：" + receipt.note)
-                    case .failure(let failure):
-                        completion("派单未确认，请查看电脑，不能自动重试：" + failure.message)
+            }
+            if mode == .newTask {
+                AgentTaskComposer.prepare(profile: profile, target: target, pid: pid, text: text,
+                    pointer: pointer, authorized: authorized, completion: prepared)
+            } else {
+                prepareInputFocus(pid: pid, pointer: pointer, authorized: authorized) { focused in
+                    guard focused, let element = InputFocus.focusedElement(pid: pid) else {
+                        prepared(.failure(.init(message: "继续当前对话：未确认目标输入框。"))); return
                     }
+                    prepared(.success(.init(element: element, prefilled: false)))
                 }
+            }
+        }
+    }
+
+    private static func submit(target: TargetConfig, pid: pid_t, text: String, taskId: String,
+                               mode: AgentConversationMode, composer: AgentTaskComposer.Prepared,
+                               executor: InputExecutor, pointer: PointerExecutor?, authorized: @escaping () -> Bool,
+                               completion: @escaping (String) -> Void) {
+        let stillValid: () -> Bool = {
+            guard authorized(), InputFocus.focusedApplicationPID() == pid,
+                  let current = InputFocus.focusedElement(pid: pid) else { return false }
+            return CFEqual(current, composer.element)
+        }
+        guard stillValid() else { completion("未派单：提交前焦点或控制权已变化。"); return }
+        let committed: () -> Void = {
+            guard var task = TaskStore.task(id: taskId) else { completion("结果待核对：提交已发出，任务记录不可用。"); return }
+            task.handoffTargetId = target.id
+            task.handoffTargetName = target.name
+            do { try TaskStore.save(task) }
+            catch { completion("结果待核对：提交已发出，接续记录保存失败。"); return }
+            completion("已向\(target.name)的\(mode == .newTask ? "新任务" : "当前对话")发出提交；不代表该 Agent 已接收或完成，请在电脑查看。")
+        }
+        if composer.prefilled {
+            AgentTaskComposer.submitPrepared(pid: pid, prepared: composer, text: text, pointer: pointer, authorized: authorized) { result in
+                switch result {
+                case .success: committed()
+                case .failure(let error): completion("派单未确认，请查看电脑，不能自动重试：" + error.localizedDescription)
+                }
+            }
+            return
+        }
+        // 新建页已核验空白，绝不清空旧对话；仅明确继续当前对话沿用原有替换行为。
+        if mode == .current && !executor.clearComposerForAgentDispatch() {
+            completion("未派单：当前输入框清空按键未能发出。"); return
+        }
+        let payload: [String: Any] = ["draftId": "agent-" + taskId, "targetId": target.id, "text": text, "submit": true]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let command = try? JSONDecoder().decode(LiveInputCommand.self, from: data) else {
+            completion("未派单：指令格式无效。"); return
+        }
+        executor.mirror(command, authorized: stillValid, preflight: {
+            guard stillValid() else { return false }
+            guard mode == .newTask else { return true }
+            guard let profile = AgentAppProfile.resolve(target) else { return false }
+            return profile.isEmptyComposer(value: AgentTaskComposer.string(composer.element, kAXValueAttribute), placeholder: nil)
+        }) { result in
+            switch result {
+            case .success(let receipt):
+                if receipt.committed { committed() } else { completion("结果待核对：" + receipt.note) }
+            case .failure(let error): completion("派单未确认，请查看电脑，不能自动重试：" + error.message)
             }
         }
     }
