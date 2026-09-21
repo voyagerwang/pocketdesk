@@ -1,6 +1,6 @@
 /**
  * [INPUT]: Node vm 与真实 motion-recognizer/motion-send，通过浏览器事件替身注入姿态。
- * [OUTPUT]: 验证输入静默只限制最终提交；开关、设置、组合输入、空草稿、提交和挂起中断不补发。
+ * [OUTPUT]: 验证浏览器与 Android 原生桥接样本都可甩送；输入静默只限制最终提交；开关、设置、组合输入、空草稿、提交和挂起中断不补发。
  * [POS]: tests 的体感到提交入口集成回归，不连接网络、不发桌面按键。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -21,18 +21,26 @@ function surface() {
   };
 }
 
-async function fixture(probeMode = 'normal') {
+async function fixture(probeMode = 'normal', native = false) {
   let sends = 0, t = 100;
+  const nativeCalls = { starts: 0, stops: 0 };
   const state = { settings: false, draft: true, allowed: true, settled: true };
   const window = Object.assign(surface(), {
-    isSecureContext: true, DeviceMotionEvent: function () {}, DeviceOrientationEvent: function () {},
-    location: { protocol: 'https:' },
+    isSecureContext: !native, DeviceMotionEvent: native ? undefined : function () {}, DeviceOrientationEvent: native ? undefined : function () {},
+    location: { protocol: native ? 'http:' : 'https:' },
     pocketdeskMotionEnabled: () => true,
     pocketdeskSettingsOpen: () => state.settings,
     pocketdeskHasDraft: () => state.draft,
     pocketdeskCanMotionSend: ({ requireSettled = true } = {}) => state.allowed && (!requireSettled || state.settled),
     pocketdeskComposeSend: () => { sends++; }
   });
+  let nativeRunning = false;
+  if (native) window.PocketDeskMotionNative = {
+    available: () => true,
+    running: () => nativeRunning,
+    start: () => { nativeCalls.starts++; nativeRunning = true; },
+    stop: () => { nativeCalls.stops++; nativeRunning = false; }
+  };
   const document = Object.assign(surface(), { readyState: 'loading', hidden: false });
   const context = vm.createContext({ window, document, navigator: { userAgent: 'test', onLine: true }, console, setTimeout, clearTimeout, Date });
   for (const name of ['motion-recognizer.js', 'motion-send.js']) {
@@ -40,6 +48,10 @@ async function fixture(probeMode = 'normal') {
   }
   function sample(beta) {
     t += 20;
+    if (native) {
+      window.dispatchEvent({ type: 'pocketdesk-native-motion', detail: { t, beta, gamma: 0, alpha: 0, accel: 9.8, screenAngle: 0 } });
+      return;
+    }
     window.dispatchEvent({ type: 'devicemotion', timeStamp: t, accelerationIncludingGravity: { x: 0, y: 0, z: 9.8 } });
     window.dispatchEvent({ type: 'deviceorientation', timeStamp: t, beta, gamma: 0, alpha: 0 });
   }
@@ -59,7 +71,7 @@ async function fixture(probeMode = 'normal') {
   }
   sample(0); sample(0);
   assert.equal((await enabled).ok, true);
-  return { window, document, state, sample, hold, tilt, sends: () => sends };
+  return { window, document, state, sample, hold, tilt, sends: () => sends, nativeCalls };
 }
 
 // 直接执行生产 compose 的门禁，避免替身把接口接错也测成通过。
@@ -122,5 +134,18 @@ assert.equal(gateWindow.pocketdeskCanMotionSend({ requireSettled: false }), fals
     f.hold(30, 1000);
     assert.equal(f.sends(), 0, action + ' 后不能发旧候选');
   }
+  const native = await fixture('normal', true);
+  assert.equal(native.window.pocketdeskMotion.diagnose().nativeMotion, true, 'HTTP Android App 应使用原生传感器桥接');
+  native.hold(0); native.tilt();
+  assert.equal(native.sends(), 1, '原生桥接样本应复用同一甩送识别与提交入口');
+  native.window.PocketDeskMotionNative.stop();
+  const resumed = native.window.pocketdeskMotion.resume();
+  await Promise.resolve();
+  assert.equal(native.window.pocketdeskMotion.status(), 'verifying', '原生层停止后恢复必须重新探测，不得保留假运行态');
+  native.sample(30); native.sample(30);
+  assert.equal((await resumed).ok, true);
+  assert.equal(native.window.pocketdeskMotion.status(), 'running');
+  native.window.pocketdeskMotion.disable();
+  assert.ok(native.nativeCalls.starts >= 4 && native.nativeCalls.stops >= 2, '探测、运行、后台恢复与关闭应管理原生监听生命周期');
   console.log('motion send: 完整动作 / 不重复 / 设置与输入门禁 / 恢复新动作 / 关闭挂起通过');
 })().catch(error => { console.error(error); process.exitCode = 1; });

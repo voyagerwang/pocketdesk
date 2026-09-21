@@ -18,12 +18,14 @@ src/test/java/dev/pocketdesk/mobile/LocalClientTest.java: 真实临时 TLS 监�
 
 src/test/java/dev/pocketdesk/mobile/ScannerDependenciesTest.java: 检查 ZXing 所需 AndroidX 类能在测试运行时装载，防止遗漏依赖导致扫码才崩溃。
 src/test/java/dev/pocketdesk/mobile/PairingExperienceTest.java: Android 35 沙箱运行真实首页，验证权限拒绝/扫码启动/取消/错误二维码及窄屏大字渲染；不替代真机相机验收。
-构建依赖显式补齐 ZXing 4.3.0 POM 遗漏的 core 1.6.0 与 fragment 1.3.6；APK 0.4.0 / versionCode 6。
+构建依赖显式补齐 ZXing 4.3.0 POM 遗漏的 core 1.6.0 与 fragment 1.3.6；APK 0.4.1 / versionCode 7。
 
-src/main/java/dev/pocketdesk/mobile/MainActivity.java: 默认完整 Web 工作台；移除低频底部Tab，首页锁定入口经同源顶层真实点击直达解锁；连接后移除原生顶栏与空状态占位，连接管理通过工作台齿轮内的受限用户导航打开；保存扫码连接，提供系统文件选择、下载及可选快捷解锁入口。
+src/main/java/dev/pocketdesk/mobile/MainActivity.java: 默认完整 Web 工作台；移除低频底部Tab，首页锁定入口经同源顶层真实点击直达解锁；连接后移除原生顶栏与空状态占位，连接管理通过工作台齿轮内的受限用户导航打开；保存扫码连接，提供系统文件选择、下载、受限甩送桥接及可选快捷解锁入口。
+src/main/java/dev/pocketdesk/mobile/NativeMotionBridge.java: 仅在当前顶层 URL 属于已保存工作台时启停加速度计与旋转向量，把姿态样本派发给现有 Web 识别器；Activity 离开前台立即停止，不识别手势、不提交内容。
 src/main/java/dev/pocketdesk/mobile/WorkspaceConnection.java: 工作台邀请与下载同源边界。
 src/main/java/dev/pocketdesk/mobile/SquareCaptureActivity.java: 两类扫码共用方形预览和取景框。
 src/test/java/dev/pocketdesk/mobile/WorkspaceExperienceTest.java: 工作台二维码、重启恢复、非法地址、正方形取景集成回归。
+src/test/java/dev/pocketdesk/mobile/NativeMotionBridgeTest.java: Android 姿态弧度到 Web 角度及四向屏幕旋转的纯映射回归；不替代真机方向与手感验收。
 
 src/main/java/dev/pocketdesk/mobile/NativePage.java: 原生标题、安全区与工作台主题映射，无底部Tab；返回复用工作台Activity，保留网页草稿。
 src/main/java/dev/pocketdesk/mobile/FilesActivity.java: 原生收件列表，单击接收签发票据并交系统下载，回到前台核验系统下载状态。

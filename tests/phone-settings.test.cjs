@@ -55,6 +55,7 @@ assert.ok(!/id="wrist-toggle"[^>]*disabled/.test(html),
 
 // 翻腕练习已移除：页面不留按钮/读数条/仪表，控制器不再暴露练习通道。
 const motionSend = fs.readFileSync(path.join(root, 'Web/motion-send.js'), 'utf8');
+const nativeMotion = fs.readFileSync(path.join(root, 'Android/app/src/main/java/dev/pocketdesk/mobile/NativeMotionBridge.java'), 'utf8');
 for (const gone of ['wrist-practice', 'wrist-meter', 'wrist-meter-fill', 'wrist-meter-mark', 'wrist-gauge', 'wrist-angle', 'wrist-meta', 'wrist-status']) {
   assert.ok(!html.includes(gone), `练习相关节点 ${gone} 应已从页面移除`);
 }
@@ -100,6 +101,10 @@ for (const state of ['unsupported', 'needs-permission', 'unverified', 'running']
 assert.ok(/PROBE_WINDOW_MS = 3000/.test(motionSend), '初始探测窗口应为 3 秒（待真机校准）');
 assert.ok(/PROBE_MIN_SAMPLES/.test(motionSend) && motionSend.includes('isUsableSample'),
   '必须以有效样本证明传感器在出数');
+assert.ok(motionSend.includes('PocketDeskMotionNative') && motionSend.includes('pocketdesk-native-motion'),
+  'Android HTTP 工作台必须消费受限原生传感器桥接');
+assert.ok(nativeMotion.includes('ownsWorkspacePage') && nativeMotion.includes('@JavascriptInterface public void start()'),
+  '原生传感器只能由当前已连接工作台启动');
 assert.ok(fs.readFileSync(path.join(root, 'Web/motion-recognizer.js'), 'utf8').includes('function isUsableSample'),
   '有效样本判定应是识别器里的纯函数，便于单测');
 // 挂起/恢复：切后台、断线、失去租约都要停识别，恢复后重新验证。
@@ -108,15 +113,12 @@ assert.ok(motionSend.includes("suspend('hidden')") && motionSend.includes("suspe
 assert.ok(fs.readFileSync(path.join(root, 'Web/pad.js'), 'utf8').includes('pocketdeskMotionSuspend'),
   '控制通道失去租约时必须停识别');
 
-// 控制台：地址仍是可点链接。翻腕发送需要安全上下文，控制台因此提供一个 HTTPS 配对码
-// （内嵌 token，扫码即完成配对 + 拿到安全上下文一步到位）；它复用既有自签证书的一次性站点例外，
-// 不下载/不安装/不信任 CA，符合免证书红线。证书下载入口已彻底移除。
+// 控制台只保留 App / 浏览器共用的一张局域网二维码；Android App 甩送走原生桥接，
+// 不应为了甩送重新增加 HTTPS 二维码或证书入口。
 const consoleHtml = fs.readFileSync(path.join(root, 'Web/console.html'), 'utf8');
-for (const id of ['url', 'ipUrl', 'secureUrl']) {
-  assert.ok(new RegExp(`<a id="${id}"[^>]*class="[^"]*url-link`).test(consoleHtml), `控制台 #${id} 应是链接`);
-}
-assert.ok(/id="secureQrItem"/.test(consoleHtml), '控制台应提供 HTTPS 配对二维码（翻腕发送的安全上下文入口）');
-assert.ok(/id="qr-secure"/.test(consoleHtml), 'HTTPS 配对二维码应有对应 img');
+assert.ok(/<a id="ipUrl"[^>]*class="[^"]*url-link/.test(consoleHtml), '控制台 #ipUrl 应是链接');
+assert.equal((consoleHtml.match(/<img id="qr-/g) || []).length, 1, '控制台只能有一张手机连接二维码');
+assert.ok(!/id="secureQrItem"|id="qr-secure"|id="secureUrl"/.test(consoleHtml), '不得恢复第二张安全连接二维码');
 assert.ok(!/id="caDownload"/.test(consoleHtml), '控制台不再承载证书下载');
 // CA 路由保留：它不是翻腕的入口，而是锁屏 HTTPS 通道（另有自身安全门禁）需要的证书分发。
 // 免证书方案只说"不为翻腕要求装 CA"，没说要拆掉已有信任基础设施。
@@ -128,4 +130,5 @@ console.log('phone settings: single entry, migrated controls, default-off wrist 
 assert.ok(html.includes('aria-label="甩送"'), '手机统一使用甩送名称');
 assert.ok(settings.includes('wristGroup.hidden = false'), '不支持时仍显示开关和原因');
 assert.ok(!consoleHtml.includes('翻腕发送'), '电脑不展示翻腕发送文案');
+assert.ok(!consoleHtml.includes('手机安全连接'), '电脑不展示第二套安全连接入口');
 assert.ok(!consoleHtml.includes('访问此网站'), '不提示绕过证书警告');

@@ -22,6 +22,12 @@ final class PhoneFileStore {
     func list(subject: String) -> [Offer] { [] }
 }
 final class PhoneFilePicker { static let shared = PhoneFilePicker(); func presentPicker(completion: @escaping ([String: Any]) -> Void) { completion(["cancelled": true]) } }
+final class ConsoleFileUpload {
+    func start(_ input: [String: Any]) throws -> [String: Any] { ["uploadId": "fixture", "chunkBytes": 1] }
+    func append(_ input: [String: Any]) throws -> [String: Any] { ["received": 1] }
+    func finish(_ input: [String: Any], completion: @escaping ([String: Any]) -> Void) { completion(["ok": true]) }
+    func cancel(_ input: [String: Any]) {}
+}
 final class ConsoleLock: LockStateProviding { var state = "locked"; var epoch: UInt64 = 1; var sessionUserID: Int64? = 501 }
 final class ConsoleNoInput: UnlockInputExecuting {
     func prepare(session: String) -> [String: Any] { fatalError("must never input") }

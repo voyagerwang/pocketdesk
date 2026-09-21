@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 CGSession、Carbon 键盘布局和 Secure Event Input、已认证控制租约。
- * [OUTPUT]: 唤醒后有界等待安全输入门禁、提供一次性挑战与串行密码提交；具体门禁失败可诊断，不记录密码、不使用剪贴板、不重试密码。
+ * [OUTPUT]: 唤醒后有界等待安全输入门禁、在主线程读取键盘布局并提供一次性挑战与串行密码提交；具体门禁失败可诊断，不记录密码、不使用剪贴板、不重试密码。
  * [POS]: Sources 的锁屏专用输入边界；只有 HTTPS 路由可调用，与普通草稿执行完全隔离。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -88,7 +88,17 @@ final class LockScreenInput {
         }
     }
 
-    private static func keys(for text: String) -> [(CGKeyCode, CGEventFlags)]? {
+    /// HIToolbox 的输入源属性只能从主线程读取；锁屏输入本身在专用队列执行。
+    /// 统一在这里切回主线程，避免 TSMGetInputSourceProperty 触发 dispatch queue assertion。
+    static func keys(for text: String) -> [(CGKeyCode, CGEventFlags)]? {
+        if !Thread.isMainThread {
+            return DispatchQueue.main.sync { keysOnMainThread(for: text) }
+        }
+        return keysOnMainThread(for: text)
+    }
+
+    private static func keysOnMainThread(for text: String) -> [(CGKeyCode, CGEventFlags)]? {
+        assert(Thread.isMainThread)
         guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
               let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
         let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue()

@@ -32,8 +32,7 @@
   flex-wrap: wrap;
   gap: var(--s-2);
 }
-.phone-file-actions button,
-.phone-file-actions .phone-file-download {
+.phone-file-actions button {
   min-height: var(--screen-hit);
   display: inline-flex;
   align-items: center;
@@ -44,8 +43,7 @@
   color: var(--fg);
   text-decoration: none;
 }
-.phone-file-actions button:first-child,
-.phone-file-actions .phone-file-download {
+.phone-file-actions button:first-child {
   background: var(--accent);
   color: var(--accent-ink);
   border-color: var(--accent);
@@ -53,11 +51,6 @@
 .phone-file summary {
   min-height: var(--screen-hit);
   align-content: center;
-}
-.phone-file-actions .phone-file-secondary {
-  background: var(--surface-1);
-  color: var(--fg);
-  border-color: var(--border-strong);
 }
 .phone-file p.phone-file-error {
   color: var(--danger);

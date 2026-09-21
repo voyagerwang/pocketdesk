@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 本机 /api/console 的文件与解锁接口，控制台的操作卡片。
- * [OUTPUT]: 网页内文件选择/待收状态、密码配置、显式钥匙串授权检查、开关、二维码核对与设备撤销；密码不持久化、不回填。
+ * [OUTPUT]: 网页内文件选择与分块拖放/待收状态、密码配置、显式钥匙串授权检查、开关、二维码核对与设备撤销；密码不持久化、不回填。
  * [POS]: 独立闭包管理常用电脑操作，避免与应用/模型设置的保存函数冲突。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -38,6 +38,41 @@
     catch (error) { message('sendFileStatus', error.message, true); }
     finally { $('sendFilePick').disabled = false; }
   };
+  const drop = $('sendFileDrop');
+  function asBase64(buffer) {
+    const bytes = new Uint8Array(buffer); let binary = '';
+    for (let start = 0; start < bytes.length; start += 0x8000) binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
+    return btoa(binary);
+  }
+  async function uploadDropped(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    if (files.some(file => !file.name)) { message('sendFileStatus', '只能拖入普通文件；文件夹请先压缩。', true); return; }
+    drop.classList.add('is-uploading'); $('sendFilePick').disabled = true;
+    let uploadId = null;
+    try {
+      const started = await request('files/upload/start', { files: files.map(file => ({ name: file.name, size: file.size })) });
+      uploadId = started.uploadId; const chunkBytes = started.chunkBytes;
+      const total = files.reduce((sum, file) => sum + file.size, 0); let sent = 0;
+      for (let index = 0; index < files.length; index++) {
+        for (let offset = 0; offset < files[index].size || (files[index].size === 0 && offset === 0); offset += chunkBytes) {
+          const data = asBase64(await files[index].slice(offset, offset + chunkBytes).arrayBuffer());
+          await request('files/upload/chunk', { uploadId, index, offset, data });
+          sent += Math.min(chunkBytes, files[index].size - offset);
+          message('sendFileStatus', total ? `正在上传 ${Math.min(100, Math.round(sent / total * 100))}%` : '正在准备空文件…');
+          if (files[index].size === 0) break;
+        }
+      }
+      const result = await request('files/upload/finish', { uploadId }); uploadId = null;
+      message('sendFileStatus', result.message); await refreshFiles();
+    } catch (error) {
+      if (uploadId) request('files/upload/cancel', { uploadId }).catch(() => {});
+      message('sendFileStatus', error.message, true);
+    } finally { drop.classList.remove('is-uploading'); $('sendFilePick').disabled = false; }
+  }
+  ['dragenter', 'dragover'].forEach(type => drop.addEventListener(type, event => { event.preventDefault(); if (!drop.classList.contains('is-uploading')) drop.classList.add('is-dragging'); }));
+  ['dragleave', 'drop'].forEach(type => drop.addEventListener(type, event => { event.preventDefault(); drop.classList.remove('is-dragging'); }));
+  drop.addEventListener('drop', event => { if (!drop.classList.contains('is-uploading')) uploadDropped(event.dataTransfer.files); });
   $('sendFileRefresh').onclick = refreshFiles;
   function renderUnlock(data) {
     const attempt = data.lastAttempt;

@@ -1,7 +1,7 @@
 # coding: utf-8
 """
 [INPUT]: 完整手机工作台、可控锁定状态和App 0.4 UA。
-[OUTPUT]: 首页锁定入口、未知/断线禁止解锁、底部应用栏与主题入口、普通浏览器隔离。
+[OUTPUT]: 首页锁定入口、未知/断线禁止解锁、顶部应用栏与主题入口、普通浏览器隔离。
 [POS]: 无真实解锁或桌面输入的产品路径回归。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -27,7 +27,9 @@ with sync_playwright() as p:
   page.route('**/*',route);page.goto('http://localhost:47899/?token=abcdefghijklmnopqrstuvwxyz',wait_until='networkidle')
   page.locator('#quick-unlock-open').wait_for(state='visible')
   assert page.locator('#quick-unlock-entry').bounding_box()['y']<160
-  assert page.locator('.deck').evaluate('(e)=>getComputedStyle(e).position')=='fixed'
+  deck=page.locator('.deck')
+  assert deck.evaluate('(e)=>getComputedStyle(e).position')=='sticky'
+  assert deck.bounding_box()['y']<page.locator('#pad-card').bounding_box()['y']
   assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
   assert not any('unlock' in w for w in writes)
   page.screenshot(path='/tmp/pd-task-first-'+str(width)+'.png')

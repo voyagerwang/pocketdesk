@@ -186,8 +186,11 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
 
   <section id="phone-files-card" class="card">
     <h2>发送文件到手机</h2>
-    <p class="sub">选择电脑上的文件，手机打开“文件”即可接收。支持多选，最多 20 个文件、合计 512 MB。</p>
-    <div class="row"><button id="sendFilePick" class="btn primary">选择文件发送</button><button id="sendFileRefresh" class="btn ghost">刷新列表</button></div>
+    <p class="sub">拖入文件，或从电脑选择。最多 20 个、合计 512 MB。</p>
+    <div id="sendFileDrop" class="console-file-drop" tabindex="0">
+      <strong>拖文件到这里</strong><span>松开后立即准备到手机</span>
+      <div class="row"><button id="sendFilePick" class="btn primary">选择文件</button><button id="sendFileRefresh" class="btn ghost">刷新</button></div>
+    </div>
     <p id="sendFileStatus" class="hint" role="status" aria-live="polite"></p>
     <div id="sendFileList"></div>
   </section>

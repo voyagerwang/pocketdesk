@@ -22,15 +22,14 @@ with tempfile.TemporaryDirectory(prefix='pd-browser-download-') as root:
             page.evaluate("window.authHeaders=()=>({Authorization:'Bearer fixture-token'});window.pairToken=()=> 'fixture-token'")
             page.add_script_tag(path=str(ROOT/'Web/phone-files.js'))
             row=page.locator('article').filter(has_text='测试 文件.txt')
-            row.get_by_role('button',name='接收',exact=True).click()
             with page.expect_download() as event:
-                row.get_by_role('link',name='点击下载',exact=True).click()
+                row.get_by_role('button',name='下载',exact=True).click()
             download=event.value
             assert download.failure() is None
             assert download.suggested_filename=='测试 文件.txt'
             path=Path(root)/'received.txt';download.save_as(path)
             assert path.read_bytes()=='hello 手机\n'.encode()
             browser.close()
-        print('Real browser download PASS: click -> attachment event -> saved exact bytes')
+        print('Real browser download PASS: one click -> attachment event -> saved exact bytes')
     finally:
         process.terminate();process.wait(timeout=5)
