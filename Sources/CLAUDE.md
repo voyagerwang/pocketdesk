@@ -84,7 +84,7 @@ AgentTaskComposer.swift: 有界 AX 新任务导航；WorkBuddy/Cola/ZCode 按唯
 
 手机原版球球：Server 静态资源白名单增加 orb-rings/emotions/ball/engine/mobile.js，沿用已有静态文件处理。
 
-小精灵锁屏契约：AgentRunner.lock_computer 只接受空参数，用户明确要求时复用 Server 注入的 ShortcutAction.lockScreen → InputExecutor.triggerShortcut；队列内再核验控制租约。发送 ⌃⌘Q 只表示已发出锁定请求，读取 LockScreenInput.locked 后才报告锁屏已生效；未确认、拒绝和失败不能写成锁屏成功。锁屏回执直接结束模型轮次，同批后续工具标记未执行，不因控制会话断开继续请求模型。
+小精灵锁屏契约：AgentRunner.lock_computer 只接受空参数，用户明确要求时复用 Server 注入的 ShortcutAction.lockScreen → InputExecutor.triggerShortcut；队列内再核验控制租约。发送 ⌃⌘Q 只表示已发出锁定请求，读取 LockScreenInput.locked 后才报告锁屏已生效；未确认、拒绝和失败不能写成锁屏成功。锁屏回执直接结束模型轮次，同批后续工具标记未执行，不因控制会话断开继续请求模型。LockScreenInput 的 Carbon/TIS 键盘布局读取必须回到主线程，专用输入队列只消费已映射键码，避免后台请求触发 HIToolbox 队列断言并使服务退出。
 
 AgentDesktopActions.swift: 小精灵固定桌面动作协议、运行应用与窗口身份解析、AX 精确关闭及输入框全选/清空事务；应用隐藏/正常退出使用 AppKit，不强退或处理保存提示。输入按键注入复用 InputExecutor，选区与清空结果必须读回核验。
 桌面动作接线：Server 注入 desktop_action 至 InputExecutor 串行队列；AgentRunner 公开固定动作及 list_windows，写前 TaskStore.reserveDesktopAction 原子去重，失败/未确认直接结束本轮。TaskStore.save 保留桌面动作占用，避免旧快照解除去重。关闭指定应用的多个窗口必须给唯一准确标题，当前窗口必须仍属于原聚焦进程。
@@ -143,6 +143,7 @@ UnlockWebAuthn.swift: Base64URL/CBOR 与 P256 旧协议验证底座；复用编�
 Server.swift：status 仅向 loopback 返回带授权的 workspaceURL，供控制台复制与二维码等价的连接链接。
 
 ConsoleActions.swift: 本机网页常用操作适配层；回环+精确Host+同源Origin+专用JSON头限制敏感写入，独立串行队列管理密码/开关/配对核对/设备撤销，密码不回传；文件发送委托主线程系统选择器。
+ConsoleFileUpload.swift: 控制台拖放的分块上传会话；单块6MiB、会话30分钟、文件名不作路径，完成后复用PhoneFileStore的20文件/512MiB/ZIP/快照边界。
 网页解锁配置与原生兼容面板共享 UnlockCoordinator/凭据，onUnlocked 在系统状态确认解锁后调用 Util.wakeDisplay，请求亮屏不当作已亮屏证据。PhoneFilePicker.presentPicker 返回取消/准备结果供网页就地展示，菜单沿用弹窗。
 
 锁定不再使用 pmset 息屏：发送 ⌃⌘Q 后核验会话锁定。原生解锁在签名验证后先请求亮屏，输入准备最多等待2秒安全输入门禁，保留具体失败原因；确认解锁后仍请求亮屏。真机锁定/解锁尚待验收。

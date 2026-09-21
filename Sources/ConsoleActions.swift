@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 本机请求边界、UnlockCoordinator/NativeHTTP/凭据门面、系统文件选择器与文件快照。
- * [OUTPUT]: 本机网页文件发送、快捷解锁与显式钥匙串授权检查；Host/Origin/自定义头限制写入，密码不回传，授权仅限已解锁电脑。
+ * [OUTPUT]: 本机网页文件选择与分块拖放发送、快捷解锁与显式钥匙串授权检查；Host/Origin/自定义头限制写入，密码不回传，授权仅限已解锁电脑。
  * [POS]: 控制台操作适配层，与手机远控和原生签名解锁路由隔离；所有 AppKit 操作交主线程。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -12,6 +12,7 @@ final class ConsoleActions {
     private let configured: () -> Bool
     private let isLocked: () -> Bool
     private let queue = DispatchQueue(label: "dev.voicedeck.console-actions")
+    private let fileUpload = ConsoleFileUpload()
     private var pair: [String: Any]?
     init(coordinator: UnlockCoordinator, native: UnlockNativeHTTP, configured: @escaping () -> Bool, isLocked: @escaping () -> Bool = { LockScreenInput.locked }) {
         self.coordinator = coordinator; self.native = native; self.configured = configured; self.isLocked = isLocked
@@ -34,7 +35,8 @@ final class ConsoleActions {
             && contentType?.lowercased().components(separatedBy: ";").first?.trimmingCharacters(in: .whitespaces) == "application/json"
     }
     func handle(method: String, path: String, body: Data, reply: @escaping (Int, [String: Any]) -> Void) {
-        guard body.count <= 8192 else { reply(413, ["error": "请求过大。"]); return }
+        let isUploadChunk = path == "/api/console/files/upload/chunk"
+        guard body.count <= (isUploadChunk ? 9 * 1024 * 1024 : 8192) else { reply(413, ["error": "请求过大。"]); return }
         queue.async { [self] in
             if method == "GET", path == "/api/console/files" {
                 reply(200, ["files": PhoneFileStore.shared.list(subject: PhoneFileStore.subject).map(\.json)]); return
@@ -45,6 +47,19 @@ final class ConsoleActions {
             }
             if path == "/api/console/files/pick" {
                 DispatchQueue.main.async { PhoneFilePicker.shared.presentPicker { reply($0["error"] == nil ? 200 : 422, $0) } }; return
+            }
+            if path == "/api/console/files/upload/start" {
+                guard !isLocked() else { reply(423, ["error": "请先解锁这台电脑。"]); return }
+                do { reply(200, try fileUpload.start(input)) } catch { reply(422, ["error": error.localizedDescription]) }; return
+            }
+            if path == "/api/console/files/upload/chunk" {
+                guard !isLocked() else { reply(423, ["error": "请先解锁这台电脑。"]); return }
+                do { reply(200, try fileUpload.append(input)) } catch { reply(422, ["error": error.localizedDescription]) }; return
+            }
+            if path == "/api/console/files/upload/cancel" { fileUpload.cancel(input); reply(200, ["ok": true]); return }
+            if path == "/api/console/files/upload/finish" {
+                guard !isLocked() else { reply(423, ["error": "请先解锁这台电脑。"]); return }
+                fileUpload.finish(input) { result in reply(result["error"] == nil ? 200 : 422, result) }; return
             }
             guard !isLocked() else { reply(423, ["error": "请在已解锁的电脑上修改设置。"]); return }
             do {

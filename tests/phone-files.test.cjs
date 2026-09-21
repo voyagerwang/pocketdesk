@@ -1,6 +1,6 @@
 /**
  * [INPUT]: Node 内建 fs；真实 Web/phone-files.js、phone-files.css、index.html 与 Sources/Server.swift、Sources/PhoneFileHTTP.swift、Resources/Info.plist。
- * [OUTPUT]: 静态结构回归：XSS 纯文本渲染、下载链接同源校验、显式下载链接而非程序化 click、
+ * [OUTPUT]: 静态结构回归：XSS 纯文本渲染、下载地址同源校验、单按钮直接下载、
  *           代际序号防迟到轮询复活、容器与资源引用、路由鉴权顺序与静态白名单、Finder 用途声明。
  * [POS]: tests 的文件收件页面静态回归；不启动服务、不请求网络。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -28,10 +28,11 @@ const drop = fs.readFileSync('Sources/SpriteFileDropView.swift', 'utf8');
   assert.ok(js.includes("url.pathname.startsWith(base + '/download/')"), '下载地址校验收件前缀');
   assert.ok(!js.includes('Bearer'), '下载不需要页面脚本携带 token');
 
-  // 安卓下载稳健性：确认后给显式 <a download>，不做程序化 click。
+  // 下载交互：一个按钮确认并直接导航到短票据附件，不展示协议选项。
   assert.ok(!js.includes('link.click()'), '不做程序化 click（安卓非手势下载会被拦截）');
-  assert.ok(js.includes("setAttribute('download'"), '下载链接带 download 属性');
-  assert.ok(/function downloadLink/.test(js), '确认后渲染显式下载链接');
+  assert.ok(js.includes('location.assign(url.href)'), '短票据签发后直接交给浏览器下载');
+  assert.ok(/function download\(file\)/.test(js), '单一下载动作');
+  assert.ok(!/HTTPS 下载|局域网兼容下载|换新下载链接/.test(js), '不展示多种下载选项');
 
   // 迟到轮询防护：列表轮询捕获发起时的代际；确认/拒绝成功推进代际作废旧列表响应。
   // 逐项操作不捕获代际——不同文件并行接收的成功响应互不丢弃。
@@ -42,8 +43,8 @@ const drop = fs.readFileSync('Sources/SpriteFileDropView.swift', 'utf8');
   assert.ok(!/request\('\/' \+ encodeURIComponent\(file\.id\)[^)]*true\)/.test(js), '逐项操作不共用列表代际');
 
   // 状态文案诚实：未确认前不声称已下载。
-  assert.ok(js.includes('等待你确认接收'), '接收前文案明确等待确认');
-  assert.ok(js.includes('已发起下载，请在浏览器下载列表查看'), '只有点击下载后才报告已发起');
+  assert.ok(js.includes('点击下载后保存到手机'), '下载前文案明确下一步');
+  assert.ok(js.includes('点击下载后保存到手机'), '下载前文案简洁明确');
   assert.ok(!/已保存到手机|已下载到手机/.test(js), '不声称文件已保存手机');
 
   // 页面接缝：容器、脚本与样式引用，以及 Server 静态白名单。

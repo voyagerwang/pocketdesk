@@ -12,7 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 with sync_playwright() as p:
  browser=p.chromium.launch(headless=True)
  page=browser.new_page(viewport={'width':1100,'height':900});page.set_default_timeout(7000)
- state={'configured':True,'enabled':False,'hasPassword':False,'credentials':[]};files=[];errors=[];writes=[]
+ state={'configured':True,'enabled':False,'hasPassword':False,'credentials':[]};files=[];errors=[];writes=[];uploads={}
  page.on('pageerror',lambda e:errors.append(str(e)))
  def route(r):
   path=urlparse(r.request.url).path
@@ -20,6 +20,13 @@ with sync_playwright() as p:
    assert r.request.headers['x-pocketdesk-console']=='1';writes.append(path)
    if path.endswith('/files/pick'):
     files.append({'name':'测试文件.pdf','size':1048576,'accepted':False});return r.fulfill(json={'message':'已准备好，等待手机接收。'})
+   if path.endswith('/files/upload/start'):
+    uploads['meta']=r.request.post_data_json['files'];uploads['chunks']=[];return r.fulfill(json={'uploadId':'drop-1','chunkBytes':3})
+   if path.endswith('/files/upload/chunk'):
+    uploads['chunks'].append(r.request.post_data_json);return r.fulfill(json={'received':3})
+   if path.endswith('/files/upload/finish'):
+    files.append({'name':'PocketDesk-2个文件.zip','size':5,'accepted':False});return r.fulfill(json={'message':'已准备好，等待手机下载。'})
+   if path.endswith('/files/upload/cancel'):return r.fulfill(json={'ok':True})
    data=r.request.post_data_json
    if path.endswith('/password'):assert data['password']=='fixture-password';state['hasPassword']=True
    if path.endswith('/enabled'):state['enabled']=data['enabled']
@@ -36,9 +43,17 @@ with sync_playwright() as p:
   r.fulfill(status=404,body='')
  page.route('**/*',route);page.goto('http://127.0.0.1:47899/console.html',wait_until='networkidle')
  assert page.locator('#connect img').count()==1
+ assert page.locator('#secureQrItem').count()==0
  assert page.get_by_text('手机连接 · App 和浏览器通用',exact=True).is_visible()
  assert page.locator('#ipUrl').get_attribute('href')=='http://192.168.1.2:46387/?token=fixture'
  page.locator('#sendFilePick').click();page.wait_for_function('document.querySelector("#sendFileList").textContent.includes("测试文件")')
+ page.evaluate("""() => {
+   const transfer=new DataTransfer();transfer.items.add(new File(['hello'],'甲.txt'));transfer.items.add(new File([],'空.txt'));
+   document.querySelector('#sendFileDrop').dispatchEvent(new DragEvent('drop',{dataTransfer:transfer,bubbles:true,cancelable:true}));
+ }""")
+ page.wait_for_function('document.querySelector("#sendFileList").textContent.includes("2个文件")')
+ assert uploads['meta']==[{'name':'甲.txt','size':5},{'name':'空.txt','size':0}]
+ assert [(c['index'],c['offset']) for c in uploads['chunks']]==[(0,0),(0,3),(1,0)]
  assert page.locator('#quEnabled').is_disabled()
  page.locator('#quPassword').fill('fixture-password');page.locator('#quPasswordForm button').click()
  page.wait_for_function('!document.querySelector("#quEnabled").disabled');assert page.locator('#quPassword').input_value()==''
@@ -53,4 +68,4 @@ with sync_playwright() as p:
  page.locator('#phone-files-card').screenshot(path='/tmp/pd-web-send-files.png')
  page.set_viewport_size({'width':390,'height':844});assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
  assert not errors,errors;browser.close()
-print('PASS: web file entry, password not retained, enable, QR/code confirmation, revoke, responsive layout')
+print('PASS: file picker and chunked drop, password not retained, enable, single QR/code confirmation, revoke, responsive layout')

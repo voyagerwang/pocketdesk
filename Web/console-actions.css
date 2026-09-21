@@ -9,6 +9,10 @@
 .console-file-row { display:flex; gap:16px; align-items:center; justify-content:space-between; padding:12px 0; border-bottom:1px solid var(--line); }
 .console-file-row strong { overflow-wrap:anywhere; min-width:0; }
 .console-file-row .hint { flex-shrink:0; }
+.console-file-drop { display:grid; place-items:center; gap:8px; min-height:150px; margin:16px 0; padding:24px; border:1px dashed var(--line-strong); border-radius:8px; background:var(--panel); text-align:center; transition:border-color .15s,background .15s; }
+.console-file-drop span { color:var(--muted); font-size:13px; }
+.console-file-drop.is-dragging { border-color:var(--accent); background:var(--accent-soft); }
+.console-file-drop.is-uploading { cursor:progress; }
 .console-unlock-row { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px; }
 .console-unlock-row input { width:20px; height:20px; accent-color:var(--accent); }
 #quPasswordEditor { margin:16px 0; }

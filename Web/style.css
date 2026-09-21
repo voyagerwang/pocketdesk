@@ -6,7 +6,6 @@
  */
 
 :root {
-  --app-dock-space: 120px;
   --screen-bg: #101319;
   --screen-ink: #ffffff;
   --screen-line: #000000;
@@ -730,7 +729,7 @@ main.pad-mode #pad { touch-action: none; overscroll-behavior: contain; }
 
 .pocketdesk-native-files #phone-files { display: none !important; }
 
-/* 状态优先：首页解锁与底部应用切换，复用既有主题和应用组件。 */
+/* 状态优先：首页解锁与顶部应用切换，复用既有主题和应用组件。 */
 .quick-unlock-entry {
   display: flex;
   align-items: center;
@@ -762,21 +761,5 @@ main.pad-mode #pad { touch-action: none; overscroll-behavior: contain; }
   text-decoration: none;
 }
 .quick-unlock-entry a[hidden] {
-  display: none;
-}
-.pocketdesk-task-first main {
-  padding-bottom: calc(var(--app-dock-space) + env(safe-area-inset-bottom));
-}
-.pocketdesk-task-first .deck {
-  position: fixed;
-  top: auto;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  margin: 0;
-  padding: var(--s-2) var(--s-5) calc(var(--s-2) + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--border);
-}
-.pocketdesk-task-first .deck:has(.targets:empty) {
   display: none;
 }

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 电脑工作台连接码、WebView、系统文件选择与下载服务。
- * [OUTPUT]: 首页锁屏直达解锁、设置中打开低频文件和设备页，返回保留网页实例与草稿；默认完整网页工作台，连接后隐藏原生顶栏；网页设置通过受限用户导航打开连接管理，状态为空不占布局。
+ * [OUTPUT]: 首页锁屏直达解锁、设置中打开低频文件和设备页，返回保留网页实例与草稿；默认完整网页工作台，连接后隐藏原生顶栏；受限原生传感器桥接支持 HTTP 工作台甩送；网页设置通过受限用户导航打开连接管理，状态为空不占布局。
  * [POS]: 安卓前台入口，复用 Mac 提供的工作台，不复制网页业务与输入状态。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -23,6 +23,7 @@ public final class MainActivity extends Activity {
     private ScrollView onboarding;
     private boolean loadFailed;
     private WorkspaceConnection connection;
+    private NativeMotionBridge motionBridge;
     private ValueCallback<Uri[]> fileCallback;
     private static final int CAMERA=41, FILES=42;
     @Override public void onCreate(Bundle state) {
@@ -39,8 +40,10 @@ public final class MainActivity extends Activity {
         button(welcome,"扫描电脑上的连接码",this::scan);button(welcome,"粘贴连接链接",this::paste);onboarding=new ScrollView(this);onboarding.addView(welcome);root.addView(onboarding,new LinearLayout.LayoutParams(-1,0,1));
         message=new TextView(this);message.setTextSize(15);message.setPadding(dp(16),dp(8),dp(16),dp(8));message.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);message.setVisibility(View.GONE);root.addView(message);
         web=new WebView(this);web.setVisibility(View.GONE);root.addView(web,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);
-        WebSettings options=web.getSettings();options.setUserAgentString(options.getUserAgentString()+" PocketDeskAndroid/0.4.0");options.setJavaScriptEnabled(true);options.setDomStorageEnabled(true);
+        WebSettings options=web.getSettings();options.setUserAgentString(options.getUserAgentString()+" PocketDeskAndroid/0.4.1");options.setJavaScriptEnabled(true);options.setDomStorageEnabled(true);
         options.setAllowFileAccess(false);options.setAllowContentAccess(true);options.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        motionBridge=new NativeMotionBridge(this,web);
+        web.addJavascriptInterface(motionBridge,NativeMotionBridge.NAME);
         web.setWebViewClient(new WebViewClient(){
             @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest request){
                 String url=request.getUrl().toString();
@@ -57,7 +60,7 @@ public final class MainActivity extends Activity {
                 }
                 return connection==null || !connection.owns(url);
             }
-            @Override public void onPageStarted(WebView v,String url,android.graphics.Bitmap icon){loadFailed=false;}
+            @Override public void onPageStarted(WebView v,String url,android.graphics.Bitmap icon){loadFailed=false;motionBridge.stopOnUiThread();}
             @Override public void onPageFinished(WebView v,String url){if(!loadFailed&&connection!=null&&connection.owns(url))showMessage("");}
             @Override public void onReceivedError(WebView v,WebResourceRequest request,WebResourceError error){if(request.isForMainFrame()){loadFailed=true;appBar.setVisibility(View.VISIBLE);showMessage("连接中断。确认电脑 PocketDesk 正在运行且连接同一 Wi-Fi，可在连接设置中重试或重新扫码。");}}
             @Override public void onReceivedSslError(WebView v,android.webkit.SslErrorHandler handler,android.net.http.SslError error){handler.cancel();loadFailed=true;appBar.setVisibility(View.VISIBLE);showMessage("此 HTTPS 证书尚未受信任。请重新扫描电脑上的“手机连接 · App / 浏览器”二维码。");}
@@ -80,6 +83,7 @@ public final class MainActivity extends Activity {
             appBar.setVisibility(View.GONE);onboarding.setVisibility(View.GONE);web.setVisibility(View.VISIBLE);showMessage("正在打开工作台…");web.loadUrl(next.url);
         }catch(Exception e){showMessage(e.getMessage()==null?"请粘贴电脑端完整连接链接。":e.getMessage());}
     }
+    boolean ownsWorkspacePage(String url){return connection!=null&&url!=null&&connection.owns(url);}
     private void showMessage(String text){message.setText(text);message.setVisibility(text==null||text.isEmpty()?View.GONE:View.VISIBLE);}
     private void download(String url,String disposition,String mime){
         if(connection==null)return;
@@ -108,7 +112,9 @@ public final class MainActivity extends Activity {
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleWorkspaceAction(intent);}
     private void handleWorkspaceAction(Intent intent){String action=intent.getStringExtra("workspaceAction");intent.removeExtra("workspaceAction");if("scan".equals(action))scan();else if("paste".equals(action))paste();else if("reconnect".equals(action)){if(connection!=null)connect(connection.url);else scan();}}
     @Override public void onBackPressed(){if(web.canGoBack())web.goBack();else super.onBackPressed();}
-    @Override protected void onDestroy(){if(fileCallback!=null)fileCallback.onReceiveValue(null);web.destroy();super.onDestroy();}
+    @Override protected void onResume(){super.onResume();if(web!=null)web.evaluateJavascript("window.pocketdeskMotionResume&&window.pocketdeskMotionResume()",null);}
+    @Override protected void onPause(){if(web!=null)web.evaluateJavascript("window.pocketdeskMotionSuspend&&window.pocketdeskMotionSuspend('native-paused')",null);if(motionBridge!=null)motionBridge.stopOnUiThread();super.onPause();}
+    @Override protected void onDestroy(){if(fileCallback!=null)fileCallback.onReceiveValue(null);if(motionBridge!=null)motionBridge.stopOnUiThread();web.destroy();super.onDestroy();}
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private void label(LinearLayout parent,String text,int size){TextView v=new TextView(this);v.setText(text);v.setTextSize(size);v.setTextColor(Color.rgb(23,28,44));v.setPadding(0,0,0,dp(20));parent.addView(v);}
     private void button(LinearLayout parent,String text,Runnable action){Button b=new Button(this);b.setText(text);if(text.startsWith("扫描")){b.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(31,107,255)));b.setTextColor(Color.WHITE);}b.setMinHeight(dp(52));b.setOnClickListener(v->action.run());parent.addView(b,new LinearLayout.LayoutParams(-1,-2));}

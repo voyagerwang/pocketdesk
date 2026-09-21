@@ -120,7 +120,7 @@ sprite-flow.test.py 派单默认接续回归：真实前台改变自动离开小
 
 phone-file-store.test.swift: 文件暂存隔离回归；仅编译 PhoneFileStore.swift（Auth/TargetStore 测试替身）与可推进时钟，验证快照 SHA-256 一致、空文件、Unicode 名、单文件/批次/总量/数量限额、目录与 FIFO 拒绝、同任务重试与四路并发同批次信号量接力幂等（首批完成后等待方复用同一收件项）、接受换票/旧票作废/拒绝与过期回收、跨主体隔离、源文件变化不影响快照、ZIP 解压成员哈希一致且同名不覆盖；全部在临时目录，不碰真实用户文件。
 phone-file-agent.test.swift: 文件发送工具替身回归（与 agent-runner.test.swift 同一全量编译方式）；验证参数校验、租约失效拒绝、访达多选替身的失败提示/空选/成功回执（只说"等待手机确认"不称已下载）、多文件 ZIP 回执与 search_computer_files 替身的普通文件过滤、截断标记与同名提醒；不触发真实自动化、不读真实文件。
-phone-files.test.cjs: 收件页面静态结构回归；锁定 textContent-only 渲染（XSS 防线）、下载地址同源+前缀校验、显式 <a download> 而非程序化 click、代际序号防迟到轮询复活、状态文案诚实（确认前不称已下载）、index.html 容器与 Server 白名单、HTTP 层 Bearer/票据边界（不用回环豁免）、Info.plist NSAppleEventsUsageDescription、拖拽显现与面板拖动保留、44px 触控令牌。
+phone-files.test.cjs: 收件页面静态结构回归；锁定 textContent-only 渲染（XSS 防线）、下载地址同源+前缀校验、单按钮直接下载且无协议选项、代际序号防迟到轮询复活、状态文案诚实、index.html 容器与 Server 白名单、HTTP 层 Bearer/票据边界（不用回环豁免）、Info.plist NSAppleEventsUsageDescription、拖拽显现与面板拖动保留、44px 触控令牌。
 
 phone-file-http.fixture.swift: 注入假 Auth 和临时 PhoneFileStore 的生产路由宿主，仅监听 loopback 随机端口；两秒流超时用于可重复资源回收测试。
 phone-file-http.test.py: 真实 HTTP/socket 联测，覆盖鉴权、附件字节/中文名/空文件、换票拒绝、断流重试、三路慢下载上限与超时后恢复；只使用夹具临时文件。
@@ -132,6 +132,7 @@ phone-files.download.py: 生产手机脚本连接隔离HTTP夹具，真实点击
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 
 unlock-native.test.swift / unlock-native-http.test.swift: 原生配对、挑战及签名授权与路由拒绝隔离回归；测试替身不触碰真实钥匙串或解锁。
+lock-screen-input.test.swift: 在后台队列请求生产键盘布局映射并运行主线程事件循环，确认 Carbon/TIS 查询正确切回主线程且不崩溃；不发送按键。
 unlock-coordinator.test.swift / unlock-webauthn.test.swift: 锁屏状态机、撤销与旧验证底座回归，为原生路径共用逻辑提供保护。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 
@@ -139,7 +140,8 @@ console-shortcut-delete.py: 真实控制台完整脚本的隔离浏览器测试�
 android-shell-browser.py: App UA 与普通浏览器对比，验证唯一顶栏、设置链接、320/390窄屏与紧凑顶距；不连接实际桌面。
 
 console-actions.test.swift: 内存凭据与隔离证书/选择器替身验证同源写入边界、密码不回传、开关、配对确认防重放与撤销。
-console-actions-browser.py: 真实控制台完整脚本的文件选择、网页密码/配对/撤销与窄屏布局回归，所有网络截留在合成替身。
+console-actions-browser.py: 真实控制台完整脚本的文件选择、两文件分块拖放、网页密码/配对/撤销与窄屏布局回归，所有网络截留在合成替身。
+console-file-upload.test.swift: 隔离验证控制台分块上传的精确字节重组、Unicode名、空文件、错序和路径名拒绝，不碰真实收件箱。
 unlock-native.test.swift 补充确认解锁后恰好调用一次唤醒；失败、拒绝和重放不唤醒。
 phone-files.runtime.py 补充局域网下载入口直接可见、排列首位且HTTPS入口保留的窄屏回归；不依赖打开失败帮助。
 
@@ -147,5 +149,6 @@ unlock-native.test.swift 验证仅通过签名及授权的请求触发输入前�
 console-actions.test.swift 验证显式钥匙串授权检查不回传密码或密钥；系统授权弹窗仍需本机用户验证。
 console-actions-browser.py 验证即使存在HTTPS地址，连接区仍只有一个App/浏览器通用码；解锁授权码按需显示并标清仅限App。
 
-task-first-browser.py: App0.4首页锁定、未知和解锁状态的入口显隐、无自动授权、底部应用栏与主题设置入口的320/390回归。
+task-first-browser.py: App0.4首页锁定、未知和解锁状态的入口显隐、无自动授权、顶部应用栏与主题设置入口的320/390回归。
 Android LocalClientTest与WorkspaceExperienceTest补充具体错误保留、真实手势才能直达解锁和主题传递；NativePagesTest确认低频页无底部Tab、返回保留工作台。
+motion-send.test.cjs 与 Android NativeMotionBridgeTest：锁定 HTTP WebView 原生姿态样本进入既有甩送识别/提交门禁，以及 Android 姿态角和屏幕方向映射；合成测试不替代安卓真机方向与手感验收。

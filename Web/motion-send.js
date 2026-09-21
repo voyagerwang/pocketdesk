@@ -2,14 +2,14 @@
  * [INPUT]: 依赖 motion-recognizer.js（全局 MotionRecognizer：makeRecognizer / isUsableSample）
  *          与 compose.js/settings.js 暴露的 window.pocketdeskComposeSend / pocketdeskCanMotionSend /
  *          pocketdeskHasDraft / pocketdeskSettingsOpen / pocketdeskMotionEnabled。
- * [OUTPUT]: 注册 window.pocketdeskMotion（控制器）与 window.pocketdeskWristAvailable（能力门禁）。
+ * [OUTPUT]: 注册 window.pocketdeskMotion（控制器）与 window.pocketdeskWristAvailable（能力门禁）；Android App 的 HTTP WebView 优先消费受限原生传感器桥接。
  *           三档仅控制角度；采集 DeviceMotion/Orientation 喂给识别器；每帧检查场景门禁，输入静默等待只在候选完成时核验；候选复用 pocketdeskComposeSend()。
  *           对外给出四级状态 status()：unsupported（环境）/ needs-permission（授权）/
  *           unverified（数据）/ running（运行），另加过渡态 verifying。
  *           数据探测必须收到完整方向角；挂起与关闭取消探测，并作废迟到授权和启动回调。
  *           另注册 pocketdeskMotionSuspend/Resume 供控制通道在断线与失去租约时停识别。
  * [POS]: 翻腕发送的传感器侧；默认不自动发送，必须用户开启、授权且真的收到有效数据。
- *        不提供任何证书向导：非安全上下文由设置面板整组隐藏，用户走发送按钮。
+ *        不提供任何证书向导：普通浏览器的非安全上下文不可用；Android App 可由受限原生桥接供数。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  *
  * 免证书降级（docs/wrist-send-no-certificate-plan.md 阶段 2）：
@@ -46,14 +46,22 @@
   var cancelProbe = null;
   var lastGesture = null;
 
+  function nativeMotion() {
+    var bridge = window.PocketDeskMotionNative;
+    if (!bridge || typeof bridge.available !== 'function') return null;
+    try { return bridge.available() ? bridge : null; } catch (error) { return null; }
+  }
+
   function sensorSupported() {
+    if (nativeMotion()) return true;
     // 优先看标准构造器；部分 WebView 仅暴露 on* 事件属性，退一步兼容。
     var hasMotion = typeof window.DeviceMotionEvent !== 'undefined' || ('ondevicemotion' in window);
     var hasOrient = typeof window.DeviceOrientationEvent !== 'undefined' || ('ondeviceorientation' in window);
     return !!(hasMotion && hasOrient);
   }
   function needsPermission() {
-    // iOS 13+ 需显式授权，且必须由用户点按触发；其余平台靠安全上下文即可。
+    if (nativeMotion()) return false;
+    // iOS 13+ 需显式授权，且必须由用户点按触发；Android App 的原生桥接无需网页权限弹窗。
     return sensorSupported() && typeof window.DeviceMotionEvent !== 'undefined'
       && typeof window.DeviceMotionEvent.requestPermission === 'function';
   }
@@ -66,13 +74,13 @@
   // 环境不过关时设置面板整组隐藏（hidden: true）——不显示灰色开关、不出现证书下载，
   // 也不给"去系统设置里配置"的维修教程。翻腕是可选捷径，普通发送始终可达。
   function environment() {
-    if (!secure()) return { ok: false, hidden: true, code: 'insecure-context' };
+    if (!secure() && !nativeMotion()) return { ok: false, hidden: true, code: 'insecure-context' };
     if (!sensorSupported()) return { ok: false, hidden: true, code: 'no-sensor-api' };
     return { ok: true, code: 'ok' };
   }
 
   // 能力门禁：settings.js 的 wristAvailability() 直接委托它。
-  // 顺序很关键：先判安全上下文。多数安卓浏览器其实支持传感器，只是必须 HTTPS；
+  // 顺序很关键：先判安全上下文或受限原生桥接。多数安卓浏览器其实支持传感器，只是必须 HTTPS；
   // 若先判传感器，会把"没开 HTTPS / 用了受限 WebView"误报成"设备不支持"，误导用户。
   function available() {
     var env = environment();
@@ -97,6 +105,23 @@
   // 探测与识别共用同一条订阅路径：避免出现"探测能收到数、识别收不到"的两套代码分叉。
   // 回调的第二参数标明这一帧来自 deviceorientation（只有它带姿态角，识别器只吃这一种）。
   function listen(handleSample) {
+    var bridge = nativeMotion();
+    if (bridge) {
+      function onNative(event) {
+        var sample = event && event.detail;
+        if (!sample) return;
+        handleSample(sample, true);
+      }
+      window.addEventListener('pocketdesk-native-motion', onNative);
+      try { bridge.start(); } catch (error) {
+        window.removeEventListener('pocketdesk-native-motion', onNative);
+        return function () {};
+      }
+      return function stopNative() {
+        window.removeEventListener('pocketdesk-native-motion', onNative);
+        try { bridge.stop(); } catch (error) { /* 页面退出时桥接可能已销毁 */ }
+      };
+    }
     function onMotion(event) {
       var a = event.accelerationIncludingGravity || event.acceleration;
       var magnitude = null;
@@ -274,6 +299,12 @@
     if (!window.pocketdeskMotionEnabled || !window.pocketdeskMotionEnabled()) return Promise.resolve({ ok: false, code: 'disabled' });
     if (!environment().ok) return Promise.resolve({ ok: false, code: environment().code });
     if (needsPermission() && !authGranted) return Promise.resolve({ ok: false, code: 'needs-permission' });
+    var bridge = nativeMotion();
+    if (active && bridge && typeof bridge.running === 'function') {
+      try {
+        if (!bridge.running()) { active = false; dataVerified = false; recognizer = null; if (stopListening) { stopListening(); stopListening = null; } }
+      } catch (error) { active = false; dataVerified = false; recognizer = null; if (stopListening) { stopListening(); stopListening = null; } }
+    }
     if (active || verifying) return Promise.resolve({ ok: active, code: active ? 'ok' : 'verifying' });
     var ticket = ++generation;
     return probeData(PROBE_WINDOW_MS).then(function (data) {
@@ -304,6 +335,7 @@
       hasDeviceMotion: typeof window.DeviceMotionEvent !== 'undefined',
       hasDeviceOrientation: typeof window.DeviceOrientationEvent !== 'undefined',
       hasRequestPermission: needsPermission(),
+      nativeMotion: !!nativeMotion(),
       environment: environment(),
       status: status(),
       authGranted: authGranted,
