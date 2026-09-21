@@ -239,4 +239,3 @@ PocketDesk 的设置页保留“记忆”入口，但默认打开统一管理页
 - Mem0 memory documentation: https://docs.mem0.ai/platform/features/memory
 
 这些链接是下一轮逐页复核和记录产品实际路径的入口；本报告不把未现场验证的产品行为写成 PocketDesk 已实现能力。
-
