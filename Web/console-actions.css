@@ -1,0 +1,26 @@
+/*
+ * [INPUT]: console.html 的既有主题令牌及文件/解锁卡片。
+ * [OUTPUT]: 常用操作入口、可读文件状态与分步解锁配置的响应式布局。
+ * [POS]: 控制台增量样式，不改变手机工作台与全局主题。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+.console-shortcuts { display:flex; flex-wrap:wrap; gap:12px; margin:20px 0; }
+.console-shortcuts a { text-decoration:none; }
+.console-file-row { display:flex; gap:16px; align-items:center; justify-content:space-between; padding:12px 0; border-bottom:1px solid var(--line); }
+.console-file-row strong { overflow-wrap:anywhere; min-width:0; }
+.console-file-row .hint { flex-shrink:0; }
+.console-unlock-row { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px; }
+.console-unlock-row input { width:20px; height:20px; accent-color:var(--accent); }
+#quPasswordEditor { margin:16px 0; }
+#quPasswordEditor summary { cursor:pointer; padding:8px 0; }
+#quPasswordForm { display:flex; align-items:end; flex-wrap:wrap; gap:12px; padding:12px 0; }
+#quPasswordForm label { flex:1; min-width:220px; }
+#quPassword { display:block; width:100%; margin-top:8px; }
+#quPairBox { margin:20px 0; padding:20px; border:1px solid var(--line); border-radius:8px; }
+#quPairQR { width:200px; height:200px; display:block; background:white; padding:8px; }
+#quPairCode { font-size:20px; margin:16px 0 8px; }
+.action-error { color:var(--danger); }
+@media(max-width:560px) { .console-file-row { align-items:flex-start; flex-wrap:wrap; gap:8px; } #quPairBox { padding:12px; } }
+
+.console-pair-content { display:grid; grid-template-columns:200px minmax(0,1fr); gap:24px; align-items:center; }
+@media(max-width:560px) { .console-pair-content { grid-template-columns:1fr; gap:12px; } }

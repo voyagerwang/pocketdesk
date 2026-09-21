@@ -952,7 +952,7 @@ final class InputExecutor {
             let beforePID = frontApp?.processIdentifier
             let beforeWindows = beforePID.map { self.windowCount(pid: $0) } ?? 0
             let appName = frontName ?? "当前前台应用"
-            // 系统级动作不走按键：锁屏跑系统命令、切换应用用 AppKit，两者都不依赖系统快捷键守护进程。
+            // 语义动作按投递策略执行：锁定发送系统组合键并核验，切换应用使用 AppKit。
             if let action = shortcut.action.flatMap(ShortcutAction.find) {
                 switch action.delivery {
                 case .deviceLocal:
@@ -970,7 +970,7 @@ final class InputExecutor {
                     if self.runCommand(command) {
                         self.verify(label: shortcut.label, frontApp: frontName, delay: .milliseconds(1200),
                                     changed: { LockScreenInput.locked }, okText: { "电脑已锁屏。" },
-                                    pendingText: "已发出关屏命令，但尚未确认系统锁屏；请检查 Mac 的需要密码设置。") {
+                                    pendingText: "已发出系统命令，但尚未确认锁定。") {
                             completion(.success($0))
                         }
                     } else {
@@ -1047,7 +1047,16 @@ final class InputExecutor {
                 self.record("shortcut", shortcut.label, .failed, text, frontName)
                 completion(.failure(.message(text))); return
             }
-            // 退出应用是唯一可验证的按键动作：进程没了才算数，否则多半卡在未保存确认框上。
+            // 锁定必须以会话锁定为准；合成组合键被系统忽略时不能回报成功或退化为息屏。
+            if shortcut.action == ShortcutAction.lockScreen.rawValue {
+                self.verify(label: shortcut.label, frontApp: frontName, delay: .milliseconds(1500),
+                            changed: { LockScreenInput.locked }, okText: { "电脑已锁定。" },
+                            pendingText: "已发送 ⌃⌘Q，但未确认系统锁定；请在电脑上检查锁定状态。") {
+                    completion(.success($0))
+                }
+                return
+            }
+            // 退出应用需要进程退出才能确认，否则可能卡在未保存确认框。
             if shortcut.action == ShortcutAction.quitApp.rawValue, let pid = beforePID {
                 self.verify(label: shortcut.label, frontApp: frontName, delay: .milliseconds(1500),
                             changed: { self.isTerminated(pid: pid) },

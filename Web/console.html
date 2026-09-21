@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   [INPUT]: 依赖 /api/status 的二维码地址与手机在线状态、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility；小精灵图标为原版 orb 引擎导出的固定左视 SVG（归属见 docs/orb-attribution.md）。
-  [OUTPUT]: 电脑端控制台：授权引导、扫码连接（卡内只留局域网与跨网二维码 + 标题行右侧的在线状态 pill；Tailscale 与"添加到主屏"等说明文字一律不写，跨网码仅在探测到 Tailscale 时出现）、应用管理（搜索/添加/拖拽排序/删除/自定义图标）、快捷键管理（录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"；主键只认 event.code 物理键位不回退 IME 可污染的 event.key，拦截 isComposing 与纯修饰键；键位标签用 .keycap 样式、label 与键位重复时只显示一个；支持重录/拖拽排序/删除；预设动作由 /api/status.actions 下发，点选即添加、不进录制流程，已添加的置灰判重，预设项不可重录）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
+  [OUTPUT]: 电脑端控制台：授权引导、扫码连接（卡内只留局域网与跨网二维码 + 标题行右侧的在线状态 pill；Tailscale 与"添加到主屏"等说明文字一律不写，跨网码仅在探测到 Tailscale 时出现）、应用管理（搜索/添加/拖拽排序/删除/自定义图标）、网页文件发送与完整快捷解锁管理；快捷键管理（录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"；主键只认 event.code 物理键位不回退 IME 可污染的 event.key，拦截 isComposing 与纯修饰键；键位标签用 .keycap 样式、label 与键位重复时只显示一个；支持重录/拖拽排序/单击删除，保存失败恢复原项；预设动作由 /api/status.actions 下发，点选即添加、不进录制流程，已添加的置灰判重，预设项不可重录）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
   [POS]: 电脑端唯一页面入口；目标顺序与快捷键都保存在 Mac 本机（App Support），手机端只渲染。
   [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -44,8 +44,8 @@ button{font:inherit;cursor:pointer}
 .qr-item{display:flex;flex-direction:column;gap:8px}
 .qr-item[hidden]{display:none}
 .qr-item b{font-size:12px;font-weight:600}
-#qr,#qr-ip,#qr-secure{width:132px;height:132px;border:1px solid var(--line);border-radius:4px;background:#fff;padding:6px}
-#qr.error,#qr-ip.error,#qr-secure.error{background:var(--panel)}
+#qr-ip{width:132px;height:132px;border:1px solid var(--line);border-radius:4px;background:#fff;padding:6px}
+#qr-ip.error{background:var(--panel)}
 .mono{font-family:ui-monospace,Menlo,monospace;color:var(--muted);word-break:break-all;font-size:12px}
 .connect-info{display:flex;flex-direction:column;gap:8px;flex:1;min-width:220px}
 #url{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--ink);word-break:break-all}
@@ -116,7 +116,7 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
 :root[data-theme="muji"] .pill{border-radius:4px}
 :root[data-theme="muji"] .step{border-radius:4px;font-weight:700}
 :root[data-theme="muji"] #search,:root[data-theme="muji"] #results,:root[data-theme="muji"] .target-row{border-radius:4px}
-:root[data-theme="muji"] #qr,:root[data-theme="muji"] #qr-ip{border-radius:4px}
+:root[data-theme="muji"] #qr-ip{border-radius:4px}
 :root[data-theme="muji"] .keycap{border-radius:4px}
 .keycap{display:inline-block;min-width:22px;margin-left:4px;padding:2px 7px;border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:4px;background:#fff;color:var(--ink);font-size:11px;text-align:center}
 /* 目标设置展开区：默认面板开关 + 专属快捷键组，视觉上从属于目标行。 */
@@ -131,7 +131,7 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
 .icon-btn svg{width:17px;height:17px;flex:0 0 17px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}.icon-btn .confirm-text{display:none;font-size:12px;font-weight:600;white-space:nowrap}
 .icon-btn.danger:hover{color:var(--danger)}
 /* armed 态要压过 :hover（更高优先级），否则悬停时红底被染回白底、"确认移除"红字不可见。 */
-.icon-btn.armed,.icon-btn.armed:hover{background:var(--danger);border-color:var(--danger);color:#fff}
+.icon-btn.armed,.icon-btn.armed:hover{width:104px;background:var(--danger);border-color:var(--danger);color:#fff}
 .icon-btn.armed .confirm-text{display:inline;margin-left:5px}
 /* 最近动作日志：四列网格 = 时间 / 结论徽章 / 动作+前台 / 说明。
    结论徽章用颜色分三态：绿=已生效、琥珀=已发出未确认、红=未执行或失败。 */
@@ -158,6 +158,7 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
 .device-popover h3{font-size:.875rem;margin:0 0 .5rem}
 .device-popover details{margin-top:1rem}
 </style>
+<link rel="stylesheet" href="/console-actions.css?v=1">
 </head>
 <body>
 <main>
@@ -172,25 +173,44 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
 
   <section class="card">
     <h2><span class="step">2</span>手机扫码连接<span id="phoneState" class="pill">等待手机连接…</span></h2>
+    <nav class="console-shortcuts" aria-label="常用操作"><a class="btn primary" href="#phone-files-card">发送文件</a><a class="btn" href="#quick-unlock-card">快捷解锁设置</a></nav>
     <div id="connect">
       <div class="qr-item">
-        <img id="qr" alt="永久地址二维码">
-        <b>永久地址 · iPhone</b>
-        <a id="url" class="hint mono url-link" href="#">生成中…</a>
-      </div>
-      <div class="qr-item">
-        <img id="qr-ip" alt="IP 地址二维码">
-        <b>手机连接</b>
+        <img id="qr-ip" alt="手机连接二维码，PocketDesk App 和浏览器通用">
+        <b>手机连接 · App 和浏览器通用</b>
         <a id="ipUrl" class="hint mono url-link" href="#">生成中…</a>
       </div>
-      <div id="secureQrItem" class="qr-item" hidden>
-        <img id="qr-secure" alt="手机连接二维码">
-        <b>手机连接</b>
-        <a id="secureUrl" class="hint mono url-link" href="#">生成中…</a>
-
-      </div>
-      <div class="connect-info"></div>
+      <div class="connect-info">手机和电脑连接同一 Wi-Fi。在 PocketDesk App 中扫码，或用手机浏览器扫码，即可打开完整工作台。快捷解锁在下方单独设置。</div>
     </div>
+  </section>
+
+  <section id="phone-files-card" class="card">
+    <h2>发送文件到手机</h2>
+    <p class="sub">选择电脑上的文件，手机打开“文件”即可接收。支持多选，最多 20 个文件、合计 512 MB。</p>
+    <div class="row"><button id="sendFilePick" class="btn primary">选择文件发送</button><button id="sendFileRefresh" class="btn ghost">刷新列表</button></div>
+    <p id="sendFileStatus" class="hint" role="status" aria-live="polite"></p>
+    <div id="sendFileList"></div>
+  </section>
+  <section id="quick-unlock-card" class="card">
+    <h2>快捷解锁 <span id="quickUnlockState" class="pill">读取中…</span></h2>
+    <p class="sub">用手机验证身份后解锁这台 Mac。密码只存本机钥匙串，手机不保存电脑密码。</p>
+    <div id="quControls">
+      <label class="console-unlock-row"><strong>允许已配对的手机解锁</strong><input id="quEnabled" type="checkbox" role="switch" disabled></label>
+      <p id="quPasswordStatus" class="hint"></p>
+      <button id="quKeychain" class="btn" type="button">检查并授权钥匙串</button>
+      <p class="hint">若解锁一直等待或提示钥匙串不可用，请在电脑已解锁时点击检查。系统若询问，由你输入登录密码并为 PocketDesk 选择“始终允许”。</p>
+      <details id="quPasswordEditor"><summary>设置或更新登录密码</summary>
+        <form id="quPasswordForm"><label>电脑登录密码<input id="quPassword" type="password" autocomplete="off" maxlength="256" required></label><button class="btn" type="submit">保存密码</button></form>
+        <button id="quDeletePassword" class="btn ghost" type="button" hidden>删除已保存的密码</button>
+      </details>
+      <div class="row"><button id="quPairStart" class="btn primary" disabled>添加解锁设备</button></div>
+      <div id="quPairBox" hidden><p><strong>解锁授权专用 · 仅用 PocketDesk App 扫描</strong></p><div class="console-pair-content"><img id="quPairQR" alt="快捷解锁授权二维码，仅限 PocketDesk App"><div><p id="quPairCode"></p><p id="quPairHelp" class="hint"></p>
+        <div class="row"><button id="quPairConfirm" class="btn primary" hidden>核对一致，确认配对</button><button id="quPairCopy" class="btn">复制配对链接</button><button id="quPairCancel" class="btn ghost">取消配对</button></div></div></div>
+      </div>
+      <div id="quDevices" class="hint"></div>
+    </div>
+    <p id="quLastAttempt" class="hint" role="status" hidden></p>
+    <p id="quHint" class="hint" role="status" aria-live="polite"></p>
   </section>
 
   <section class="card">
@@ -213,8 +233,9 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
       <span class="hint" style="flex:0 0 auto">预设动作</span>
       <div class="preset-chips" id="scPresetChips"></div>
     </div>
-    <p class="hint" style="margin:0 0 12px">这些在网页里按下去就会被浏览器或系统本身吃掉（真的锁屏、真的退出浏览器），录制器拿不到，所以点选即添加。系统级的不模拟按键，直接调系统能力：锁屏走关屏（需系统已开启「需要密码」），切换应用按最近使用顺序切。「清空会话」也在这组：它由手机执行，会同时清掉电脑与手机的输入内容；文档类应用（Word、WPS、Pages、TextEdit、飞书）只清手机侧，不动电脑。</p>
+    <p class="hint" style="margin:0 0 12px">这些在网页里按下去就会被浏览器或系统本身吃掉（真的锁屏、真的退出浏览器），录制器拿不到，所以点选即添加。锁屏发送 ⌃⌘Q 并检查系统是否真的锁定，不使用息屏代替；切换应用按最近使用顺序切。「清空会话」也在这组：它由手机执行，会同时清掉电脑与手机的输入内容；文档类应用（Word、WPS、Pages、TextEdit、飞书）只清手机侧，不动电脑。</p>
     <div id="scList"></div>
+    <p id="scSaveState" class="hint" role="status" aria-live="polite"></p>
   </section>
 
   <section class="card">
@@ -240,6 +261,8 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
     <p class="hint" id="mKeyHint" style="margin:10px 0 0"></p>
     <pre class="probe-out" id="mOut" hidden></pre>
   </section>
+
+
 </main>
 <input id="iconFile" type="file" accept="image/*" hidden>
 <script>
@@ -274,6 +297,7 @@ themeSwitch.addEventListener('click',async event=>{
 <script>
 const $ = id => document.getElementById(id);
 let state = { targets: [], recipients: [], platform: 'macOS', status: null };
+let configRevision = 0, savingTargets = false, savingShortcuts = false;
 // 内置接收者：小精灵不是应用，不进 /api/targets 的普通应用列表，只参与接收者排序（方案 §3）。
 const SPRITE_ID = '__sprite__';
 let iconTargetId = null;
@@ -285,7 +309,7 @@ function esc(text) { const div = document.createElement('div'); div.textContent 
 // 并摘掉 href，免得留下一个点开还在原地的死链。
 function setLink(id, url, emptyText) {
   const el = $(id);
-  el.textContent = url || emptyText;
+  el.textContent = url ? url.split('?')[0] : emptyText;
   if (url) el.href = url; else el.removeAttribute('href');
   el.classList.toggle('is-empty', !url);
 }
@@ -355,6 +379,7 @@ async function refreshDevices() {
 }
 
 async function refresh() {
+  const revision = configRevision;
   refreshDevices();
   try {
     const status = await fetch('/api/status').then(r => r.json());
@@ -368,12 +393,13 @@ async function refresh() {
     authState.className = granted ? 'ok' : 'bad';
     $('openSettings').disabled = granted;
     if (status.platform !== 'macOS') { $('authHint').textContent = '在系统设置中允许 VoiceDeck 获得输入控制权限。'; }
-    state.targets = status.targets;
+    const configFresh = revision === configRevision && !savingTargets && !savingShortcuts;
+    if (configFresh) state.targets = status.targets;
     // 接收者顺序每次刷新都拉：新增/删除应用后服务端会归一化，控制台必须跟着走。
     await refreshRecipients();
     if (!$('current').children.length) renderTargets();
     const incoming = status.shortcuts || [];
-    if (JSON.stringify(incoming) !== JSON.stringify(shortcuts)) { shortcuts = incoming; renderShortcuts(); }
+    if (revision === configRevision && !savingTargets && !savingShortcuts && JSON.stringify(incoming) !== JSON.stringify(shortcuts)) { shortcuts = incoming; renderShortcuts(); }
     if (JSON.stringify(status.actions || []) !== JSON.stringify(presetActions)) {
       presetActions = status.actions || [];
       renderPresetActions();
@@ -384,26 +410,13 @@ async function refresh() {
       lastActivityLog = incomingLog;
       renderActivity(incomingLog);
     }
-    if (!$('qr').src || $('qr').dataset.loaded !== '1') {
-      $('qr').src = '/api/qr';
-      $('qr-ip').src = '/api/qr?type=ip';
-      setLink('url', status.lanURL, '未找到局域网地址，请确认 Wi-Fi 已连接。');
-      setLink('ipUrl', status.ipURL, '未找到局域网地址');
+    const workspaceURL = status.workspaceURL || status.ipURL;
+    setLink('ipUrl', workspaceURL, '未找到局域网地址，请确认 Wi-Fi 已连接。');
+    if (workspaceURL && ($('qr-ip').dataset.url !== workspaceURL || $('qr-ip').classList.contains('error'))) {
+      $('qr-ip').dataset.url = workspaceURL;
+      $('qr-ip').classList.remove('error');
+      $('qr-ip').src = '/api/qr?type=ip&t=' + Date.now();
     }
-    if (status.secureURL) {
-      $('secureQrItem').hidden = false;
-      setLink('secureUrl', status.secureURL, '');
-      if ($('qr-secure').dataset.url !== status.secureURL) {
-        $('qr-secure').dataset.url = status.secureURL;
-        $('qr-secure').classList.remove('error');
-        $('qr-secure').src = '/api/qr?type=secure&t=' + Date.now();
-      }
-    } else {
-      $('secureQrItem').hidden = true;
-    }
-    // 同一入口适用于 iOS 和 Android，优先使用现有 HTTPS 地址。
-    $('qr').closest('.qr-item').hidden = true;
-    $('qr-ip').closest('.qr-item').hidden = !!status.secureURL;
     // 手机在线状态：标题行右侧的状态徽章（与顶部 #conn 同一 pill 范式），只有"已连接"才点亮。
     const seen = status.phoneLastSeen * 1000;
     const phoneState = $('phoneState');
@@ -678,12 +691,13 @@ function renderScopedShortcuts(box, list, scope, targetId) {
       ${label && display ? `<span class="keycap">${esc(display)}</span>` : ''}
       <button class="btn ghost icon-btn danger" data-act="remove-sc" style="margin-left:auto" title="移除" aria-label="移除">${TRASH_SVG}<span class="confirm-text">确认移除</span></button>`;
     row.querySelector('[data-act="remove-sc"]').addEventListener('click', async event => {
-      if (!armConfirm(event.target.closest('button'))) return;
+      if (savingTargets) return;
       const t = state.targets.find(item => item.id === targetId);
       if (!t) return;
-      t.shortcuts = (t.shortcuts || []).filter((_, i) => i !== index);
+      const previous = t.shortcuts;
+      t.shortcuts = (t.shortcuts || []).filter(item => item.id !== shortcut.id);
       if (!t.shortcuts.length) t.shortcuts = null; // 清空即回退全局
-      await save();
+      if (!await save()) { t.shortcuts = previous; renderTargets(); }
     });
     attachDragSort(row, {
       key: 'sc:' + targetId, index,   // 每个应用一组，key 里带 id 免得跨应用串台
@@ -710,6 +724,9 @@ function armConfirm(button) {
 }
 
 async function save() {
+  if (savingTargets) return false;
+  savingTargets = true; configRevision++;
+  $('current').inert = true;
   $('saveState').textContent = '保存中…';
   try {
     // 整表序列化：必须带上 shortcuts/openPanel/showGlobal，否则服务端收到的是无偏好旧形态、覆盖存储丢配置。
@@ -721,10 +738,12 @@ async function save() {
       return out;
     }));
     $('saveState').textContent = '已保存到本机';
+    savingTargets = false;
     await refresh(); renderTargets();
     setTimeout(() => { $('saveState').textContent = ''; }, 2500);
     return true;
-  } catch (error) { $('saveState').textContent = error.message; return false; }
+  } catch (error) { $('saveState').textContent = '保存失败：' + error.message; return false; }
+  finally { savingTargets = false; configRevision++; $('current').inert = false; }
 }
 
 let searchTimer = 0;
@@ -897,15 +916,25 @@ document.addEventListener('keydown', event => {
 $('scRecord').onclick = (event) => startRecording({ scope: 'global' }, '按下按键…', event.currentTarget);
 
 async function saveShortcuts() {
-  $('saveState').textContent = '保存中…';
+  if (savingShortcuts) return false;
+  savingShortcuts = true; configRevision++;
+  $('scList').inert = true;
+  $('scPresetChips').inert = true;
+  $('scRecord').disabled = true;
+  $('scSaveState').textContent = '保存中…';
   try {
     await post('/api/shortcuts', shortcuts.map(s => ({ id: s.id, label: s.label, hotkey: s.hotkey, action: s.action || null })));
-    $('saveState').textContent = '已保存到本机';
-    // 必须显式重绘：reorder 是先改内存再存，等 refresh 比对时本地与服务端已一致，
-    // 光靠 refresh() 里那句 JSON diff 判定为"没变"，重排后的顺序就永远画不出来（与 save() 同构）。
+    savingShortcuts = false;
     await refresh(); renderShortcuts();
-    setTimeout(() => { $('saveState').textContent = ''; }, 2500);
-  } catch (error) { $('saveState').textContent = error.message; }
+    $('scSaveState').textContent = '已保存到本机';
+    return true;
+  } catch (error) {
+    $('scSaveState').textContent = '保存失败：' + error.message;
+    return false;
+  } finally {
+    savingShortcuts = false; configRevision++;
+    $('scList').inert = false; $('scPresetChips').inert = false; $('scRecord').disabled = false;
+  }
 }
 
 // 预设动作：录不到的系统/应用操作，点选即添加（服务端按平台展开按键串）。
@@ -948,7 +977,12 @@ function renderShortcuts() {
     row.addEventListener('click', async event => {
       const act = event.target.closest('[data-act]')?.dataset?.act;
       if (!act) return;
-      if (act === 'remove') { if (!armConfirm(event.target.closest('button[data-act]'))) return; shortcuts.splice(index, 1); await saveShortcuts(); }
+      if (act === 'remove') {
+        if (savingShortcuts) return;
+        const previous = shortcuts;
+        shortcuts = shortcuts.filter(item => item.id !== shortcut.id);
+        if (!await saveShortcuts()) { shortcuts = previous; renderShortcuts(); }
+      }
       // 重录反馈显示在全局录制按钮上（重录发生在全局列表，与按钮同卡片）。
       if (act === 'rerecord') startRecording({ scope: 'rerecord-global', index }, `为「${shortcuts[index].label}」按新按键…`);
     });
@@ -982,13 +1016,12 @@ function renderActivity(log) {
   }).join('');
 }
 
-$('qr').onload = () => { $('qr').dataset.loaded = '1'; };
-$('qr').onerror = () => { $('qr').classList.add('error'); };
 $('qr-ip').onerror = () => { $('qr-ip').classList.add('error'); };
-$('qr-secure').onerror = () => { $('qr-secure').classList.add('error'); };
 refresh(); setInterval(refresh, 3000);
+
 </script>
 <!-- 模型服务面板独立成文件：console.html 已经很长，不再往里堆第二段大块脚本。 -->
 <script src="/console-agent.js"></script>
+<script src="/console-actions.js?v=2"></script>
 </body>
 </html>

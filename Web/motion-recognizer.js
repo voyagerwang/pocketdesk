@@ -2,7 +2,7 @@
  * [INPUT]: 纯函数识别器，不依赖任何浏览器 API；样本为 { t(ms), beta, gamma, alpha, accel(m/s²) }。
  * [OUTPUT]: makeRecognizer(params) 返回 { push(sample), reset(reason), state() }，push 返回 { fired, phase, events }；
  *           isUsableSample(sample) 判定传感器是否真的在出数（供免证书方案的“数据层”门禁使用）。
- * [POS]: 甩送手势识别核心；按横竖屏映射前翻轴，侧向限制相对握姿；支持姿态前翻或短促整体加速度脉冲。
+ * [POS]: 甩送手势识别核心；按横竖屏映射前翻轴，侧向限制相对握姿；前翻与加速度脉冲并行识别，共用超时、反向及冷却门禁。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  *
  * 手势定义（来自 WRIST_SEND_EXECUTION_PLAN）：手机上沿向远离自己的方向前翻，达到角度立即发送，不要求停稳或回弹。
@@ -151,7 +151,12 @@
         if (t >= cooldownUntil && Math.abs(dBeta) <= p.returnDeg) reset('returned');
         return result(false);
       }
-      if (phase === 'idle') {
+      // 起翻后仍检测脉冲，避免传感器先后顺序决定同一动作能否发送。
+      if (phase === 'lift') {
+        if (t - liftStart > p.liftMaxMs) return reject('lift-too-long', t);
+        if (dBeta < -p.settleDeg) return reject('reversed', t);
+      }
+      if (phase === 'idle' || phase === 'lift') {
         var impulse = s.accel - accelBaseline;
         if (impulse >= p.impulseMin) {
           if (impulseStart === null) { impulseStart = t; impulsePeak = impulse; }
@@ -167,6 +172,8 @@
         } else if (impulseStart !== null) {
           impulseStart = null; impulsePeak = 0;
         }
+      }
+      if (phase === 'idle') {
         if (signedRate < p.liftRateMin) {
           baseline = s.beta; // 慢速换握姿随动，不积攒角度。
           sideBaseline = s.gamma;
@@ -179,9 +186,7 @@
         phase = 'lift';
       }
       if (phase === 'lift') {
-        if (t - liftStart > p.liftMaxMs) return reject('lift-too-long', t);
-        if (dBeta < -p.settleDeg) return reject('reversed', t);
-        // 前翻幅度是唯一动作完成条件，不等待悬停，也不检查后续回弹。
+        // 姿态路径达标即发送，与脉冲路径共用一次性释放阶段。
         if (dBeta >= p.liftDeg) {
           events.push({ t: t, type: 'fire' });
           cooldownUntil = t + p.cooldownMs;

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 agent-client.js 的任务快照与事件、index.html 的 #agent-* 容器。
- * [OUTPUT]: 提供 window.pocketdeskAgentPanel——任务优先的球球表情刷新、状态、简短任务说明与成功接续入口，完整结果按需展开，渲染当前任务卡、结果/来源、当前网页绑定与可用动作。
+ * [OUTPUT]: 派单成功默认请求只读前台接续，不依赖模型切换标记； 提供 window.pocketdeskAgentPanel——任务优先的球球表情刷新、状态、简短任务说明与成功接续入口，完整结果按需展开，渲染当前任务卡、结果/来源、当前网页绑定与可用动作。
  * [POS]: Web 的小精灵展示层：**只呈现，不执行工具、不发任何桌面输入**。
  *        所有文本一律 textContent 落地，模型或网页返回的 HTML/脚本不会被解析（方案 §9 安全呈现）。
  *        M1 的按钮是「放弃并保留草稿」而不是「停止」——runtime 不支持真中断，叫停止就是谎报（方案 §2）。
@@ -178,14 +178,14 @@
       el.continue.hidden = !task || !task.handoffTargetId;
       el.continue.textContent = task && task.handoffTargetName ? '继续聊 ' + task.handoffTargetName + ' →' : '';
     }
-    if (task && task.handoffTargetId && task.handoffRequested && task.status === 'succeeded' && !handedOff.has(task.id)) {
+    if (!submittingDraft && task && task.handoffTargetId && task.status === 'succeeded' && !handedOff.has(task.id)) {
       handedOff.add(task.id);
       var key = 'pd-handoff-' + task.id;
       var seen = false;
       try { seen = sessionStorage.getItem(key); sessionStorage.setItem(key, '1'); } catch (_) {}
       // 已切离小精灵或开始写下一条时，不让迟到回执抢走用户正在输入的目标。
       if (!seen && window.pocketdeskIsSpriteSelected?.() && !window.pocketdeskHasDraft?.())
-        window.pocketdeskContinueInApp?.(task.handoffTargetId);
+        window.pocketdeskFollowHandoff?.(task.handoffTargetId);
     }
     lastRenderedStatus = task ? task.status : null;
   }

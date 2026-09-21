@@ -1,6 +1,7 @@
 /**
- * [INPUT]: 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 LiveInputReceipt 的草稿模式回执、InputBinding 的输入上下文、控制租约校验闭包与 ScreenCapture 的鉴权画面读取、Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
- * [OUTPUT]: 展示上报复用控制租约校验；注入输入框、指定窗口及应用动作适配；注入复用系统快捷操作的锁屏工具；注入小精灵 new/current 派单与共享输入/指针执行器与执行时控制租约核验；对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活与应用选择后鼠标就位/发送/图片预上传/快捷键触发/草稿实时同步与只读恢复探测、静态页面与 recipients.js 接收者路由服务；非回环写请求强制 Bearer 校验）。
+ * [INPUT]: ConsoleActions 提供严格本机同源管理接口； 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 PhoneFileHTTP 的独立文件路由、LiveInputReceipt 的草稿模式回执、InputBinding 的输入上下文、控制租约校验闭包与 ScreenCapture 的鉴权画面读取、Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
+ * [OUTPUT]: 注入结构化应用派单回执；展示上报复用控制租约校验；注入输入框、指定窗口及应用动作适配；注入复用系统快捷操作的锁屏工具；注入小精灵 new/current 派单与共享输入/指针执行器与执行时控制租约核验；对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活与应用选择后鼠标就位/发送/图片预上传/快捷键触发/草稿实时同步与只读恢复探测、静态页面与 recipients.js 接收者路由服务；非回环写请求强制 Bearer 校验）。
+ * 原生解锁委托 UnlockNativeHTTP：TLS 固定身份配对、独立签名授权，不走普通网页 token。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的传输层；只翻译协议不做系统调用，与 WSServer（控制/光标）和 FrameServer（持续画面）并列。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -11,6 +12,11 @@ import Network
 
 final class Server {
     var controlAuthorized: (String) -> Bool = { _ in false }
+    /// 快捷解锁：面板打开与状态查询由 main 装配注入；路由侧只强制回环，任何远程请求直接拒绝。
+    var consoleActions: ConsoleActions?
+    var nativeUnlock: UnlockNativeHTTP?
+    var quickUnlockPanel: (() -> Void)?
+    var quickUnlockStatus: (() -> [String: Any])?
     /// 指针执行器：应用选择后的鼠标就位必须走它与其它指针命令同一条串行队列，
     /// 不能在输入层另发 CGEvent。由 main.swift 在既有装配处注入（不新增通用事件总线）。
     var pointerExecutor: PointerExecutor?
@@ -61,7 +67,7 @@ final class Server {
             self.executor.triggerShortcut(shortcut, authorized: { AgentRunner.canControl(taskId) }, completion: done)
         }
         AgentRunner.dispatchToApp = { [weak self] app, text, taskId, mode, done in
-            guard let self else { done("服务不可用。"); return }
+            guard let self else { done(.init(state: .failed, detail: "服务不可用。")); return }
             AgentAppDispatch.send(app: app, text: text, taskId: taskId, mode: mode, store: self.store,
                                   executor: self.executor, pointer: self.pointerExecutor, authorized: { AgentRunner.canControl(taskId) }, completion: done)
         }
@@ -156,6 +162,36 @@ final class Server {
         let bodyData = Data(body)
         let authorization = Self.headerValue("Authorization", in: headerText)
 
+        if PhoneFileHTTP.handle(method: method, path: path, authorization: authorization, connection: connection,
+                                respond: { status, json in self.respond(connection, status: status, json: json) }) { return }
+
+        if path.hasPrefix("/api/console/") {
+            guard let consoleActions, ConsoleActions.allowed(loopback: Self.isLoopback(connection), method: method,
+                host: Self.headerValue("Host", in: headerText), origin: Self.headerValue("Origin", in: headerText),
+                marker: Self.headerValue("X-PocketDesk-Console", in: headerText), contentType: Self.headerValue("Content-Type", in: headerText),
+                port: secure ? SecureTransport.port : port, secure: secure) else {
+                respond(connection, status: 403, json: ["error": "请在电脑本机控制台操作。"]); return
+            }
+            consoleActions.handle(method: method, path: path, body: bodyData) { code, result in
+                self.respond(connection, status: code, json: result)
+            }
+            return
+        }
+        // 原生通路有独立凭据与 TLS 固定身份；不借用网页的普通控制 token。
+        if path.hasPrefix("/api/native-unlock/") {
+            guard method == "POST", Self.headerValue("Origin", in: headerText) == nil,
+                  let nativeUnlock else { respond(connection, status: 403, json: ["error": "native-only"]); return }
+            // 请求体读完后继续等待断开；否则没有挂起 receive 时 FIN 可能无法及时推进状态。
+            // 本服务一连接一请求，拒绝管线追加数据，断线使执行器下一键的授权检查失败。
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { extra, _, finished, error in
+                if finished || error != nil || !(extra?.isEmpty ?? true) { connection.cancel() }
+            }
+            nativeUnlock.handle(path: path, body: bodyData, secure: secure,
+                connected: { connection.state == .ready }) { result in
+                    self.respond(connection, status: 200, json: result)
+                }
+            return
+        }
         // 写端点鉴权：手机 token 来自扫码 URL；控制台走 localhost 回环豁免（本机即机主）。
         // 例外：小精灵的任务接口**连回环也要 Bearer**（方案 §9 v1.1）——回环豁免意味着本机上
         // 任何进程（含网页里被加载的脚本）都能读走全部任务正文与模型返回，这不是"本机即机主"能兜住的。
@@ -195,6 +231,18 @@ final class Server {
         case ("POST", "/api/screen/wake"):
             Util.wakeDisplay()
             respond(connection, status: 200, json: ["ok": true, "locked": Util.isScreenLocked()])
+        // 快捷解锁：只允许本机回环打开原生面板/查询状态；密码与配对授权都在原生面板内完成。
+        case ("POST", "/api/quick-unlock/panel"):
+            guard fromLoopback else {
+                respond(connection, status: 403, json: ["error": "仅电脑本机可打开快捷解锁面板。"]); return
+            }
+            quickUnlockPanel?()
+            respond(connection, status: 200, json: ["ok": true])
+        case ("GET", "/api/quick-unlock"):
+            guard fromLoopback else {
+                respond(connection, status: 403, json: ["error": "仅电脑本机可查看快捷解锁状态。"]); return
+            }
+            respond(connection, status: 200, json: quickUnlockStatus?() ?? ["configured": false])
         case ("GET", "/api/screen/displays"), ("GET", "/api/screen/frame"):
             guard !captureBusy else {
                 respond(connection, status: 503, json: ["error": "画面采集中，请稍后重试。"]); return
@@ -266,6 +314,7 @@ final class Server {
                 "theme": store.theme,
                 "lanURL": (stableURL ?? lanIP.map { "http://\($0):\(port)" }) as Any?,
                 "ipURL": lanIP.map { "http://\($0):\(port)" } as Any?,
+                "workspaceURL": fromLoopback ? lanIP.map { "http://\($0):\(port)/?token=\(Auth.token)" } as Any? : nil,
                 "remoteURL": tailscaleURL ?? "",
                 "secureURL": secureTransport == nil ? "" : (lanIP.map { "https://\($0):\(SecureTransport.port)" } ?? ""),
                 "hostName": Util.stableHost() ?? "",
@@ -541,7 +590,7 @@ final class Server {
             }
         case ("GET", "/"), ("GET", "/index.html"):
             serveFile("index.html", connection: connection)
-        case ("GET", let asset) where ["orb-rings.js", "orb-emotions.js", "orb-ball.js", "orb-engine.js", "orb-mobile.js", "device-info.js", "agent-client.js", "agent-panel.js", "sprite-report.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "recipients.js", "style.css", "app-extras.css", "screen.css", "console-agent.js"].contains(String(asset.dropFirst())):
+        case ("GET", let asset) where ["phone-files.js", "phone-files.css", "orb-rings.js", "orb-emotions.js", "orb-ball.js", "orb-engine.js", "orb-mobile.js", "device-info.js", "agent-client.js", "agent-panel.js", "sprite-report.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "recipients.js", "style.css", "app-extras.css", "screen.css", "console-agent.js", "console-actions.js", "console-actions.css"].contains(String(asset.dropFirst())):
             serveFile(String(path.dropFirst()), connection: connection)
         default:
             // /api/v1 下的本机管理端点（模型服务配置与连通性实测）委托 AgentHTTP，

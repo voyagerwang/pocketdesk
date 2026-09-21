@@ -1,4 +1,5 @@
 # tests/
+混合甩送回归：motion-recognizer.test.cjs 覆盖加速度相对小幅前翻提前 40ms 到滞后 120ms 的五种时序，均只触发一次；超时或反向帧上的脉冲不得复活旧动作。34 项轨迹与 motion-send 集成回归通过，未替代真机验收。
 侧握轨迹回归：motion-recognizer 覆盖正负 45/60 度起始侧握、双向横屏、反向不触发、慢速换姿与转屏作废；motion-send 检查识别到提交入口的时间诊断。合成数据不替代手机实际动作验收。
 chrome-bookmarks.test.swift：临时 Chrome 书签树验证嵌套文件夹、名称、网页和文件地址、多配置文件 ID 隔离及重新读取；motion-send 回归新增仅加速度不能通过探测、探测中关闭与挂起不得迟到启动。
 > L2 | 父级: ../CLAUDE.md
@@ -49,7 +50,7 @@ pointer-geometry.test.swift: 隔离验证 `PointerGeometry`（纯几何）与 `T
 
 提交清空回归：workspace_browser.py 验证有草稿的回车快捷键只提交一次并清空、空草稿回车仍走原接口、旧编辑元素迟到事件不回填或重发、历史配额异常不阻断已确认提交的收尾；失败保留与显式重试仍覆盖。
 
-agent-runner.test.swift: 无桌面副作用验证直接打开、派单、控制租约与失败状态，注入模型和执行器替身；重复派单使用临时任务记录，要求在激活/清空前同步拒绝。
+agent-runner.test.swift: 无桌面副作用验证直接打开、派单、控制租约与失败状态，注入模型和执行器替身；重复派单使用临时任务记录，要求在激活/清空前同步拒绝。另覆盖 WorkBuddy AX 数字/字符串选中状态、占位符换行兼容与真实草稿拒绝。
 sprite-flow.test.py: Playwright 模拟任务与应用接口，验证小精灵成功接收写入历史、未接收保留草稿且不记历史、存储失败不阻断发送收尾，并覆盖甩送发送门禁、连续任务、简洁状态、手动/明确意图自动接续、迟到不抢新草稿及球球加载；截图位于 /tmp。
 
 sprite-flow.test.py 追加：小精灵切应用保留正文并同步，切回小精灵不产生桌面写入；待机/执行动效与减少动态偏好验证。
@@ -106,3 +107,45 @@ orb-desktop.test.py: 原版引擎浏览器回归，验证开心唤醒、SVG 帧�
 执行反馈回归：sprite-session 覆盖 Phase 优先级、提交/执行不回显原话、新草稿替换终态、交接不庆祝；sprite-panel 验证原生输入→执行→完成标题/正文和实际庆祝表情；orb-desktop 验证重选执行不欢迎、同任务不重复庆祝和连续任务独立庆祝。
 
 原生动效验收必须让 NSApp.run 真正处理窗口事件，用异步测试等待 WebKit，不能在主队列内阻塞轮询；同时核对 document 可见与引擎 active，防止静态首帧被误判为动画通过。
+
+agent-runner.test.swift 派单误报回归：确认/失败/未核实均不再续轮请求模型，未核实进入 submitted 且无 error，同批重复派单只执行一次并封闭 transcript。
+
+sprite-session.test.swift 验证派单未核实显示短回执“已尝试发送，接收待核实”，普通追问仍显示“等你补充”。
+
+sprite-flow.test.py 派单默认接续回归：真实前台改变自动离开小精灵；无 switchAfter/false 的成功回执也只读跟随同前台应用，首页/全屏/Dock 一致，自动接续零 activate，手动返回后不被旧回执抢回，保留草稿保护。
+
+派单接续补充：提交锁内不消费成功回执的自动接续机会，解锁后仍可切换。
+
+画面断线回归：screen-frames.test.cjs 使用虚拟时钟与网络替身，验证短暂失败静默、持续失败分级/退避、权限立即提示、真实呈现后恢复、流畅通道自动重试与停止/旧代际隔离；无真实桌面输入。
+
+phone-file-store.test.swift: 文件暂存隔离回归；仅编译 PhoneFileStore.swift（Auth/TargetStore 测试替身）与可推进时钟，验证快照 SHA-256 一致、空文件、Unicode 名、单文件/批次/总量/数量限额、目录与 FIFO 拒绝、同任务重试与四路并发同批次信号量接力幂等（首批完成后等待方复用同一收件项）、接受换票/旧票作废/拒绝与过期回收、跨主体隔离、源文件变化不影响快照、ZIP 解压成员哈希一致且同名不覆盖；全部在临时目录，不碰真实用户文件。
+phone-file-agent.test.swift: 文件发送工具替身回归（与 agent-runner.test.swift 同一全量编译方式）；验证参数校验、租约失效拒绝、访达多选替身的失败提示/空选/成功回执（只说"等待手机确认"不称已下载）、多文件 ZIP 回执与 search_computer_files 替身的普通文件过滤、截断标记与同名提醒；不触发真实自动化、不读真实文件。
+phone-files.test.cjs: 收件页面静态结构回归；锁定 textContent-only 渲染（XSS 防线）、下载地址同源+前缀校验、显式 <a download> 而非程序化 click、代际序号防迟到轮询复活、状态文案诚实（确认前不称已下载）、index.html 容器与 Server 白名单、HTTP 层 Bearer/票据边界（不用回环豁免）、Info.plist NSAppleEventsUsageDescription、拖拽显现与面板拖动保留、44px 触控令牌。
+
+phone-file-http.fixture.swift: 注入假 Auth 和临时 PhoneFileStore 的生产路由宿主，仅监听 loopback 随机端口；两秒流超时用于可重复资源回收测试。
+phone-file-http.test.py: 真实 HTTP/socket 联测，覆盖鉴权、附件字节/中文名/空文件、换票拒绝、断流重试、三路慢下载上限与超时后恢复；只使用夹具临时文件。
+phone-files.runtime.py: Playwright Chromium 安卓尺寸运行时，操作真实收件 DOM，以异步请求替身控制并行确认与迟到轮询；验证 XSS/URL、断网重试、下载手势回执、刷新恢复和44px目标。
+文件暂存回归另覆盖发布时撤权、跨主体批次和文件系统写失败，不以快照测试代替网络下载测试。
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+
+phone-files.download.py: 生产手机脚本连接隔离HTTP夹具，真实点击产生浏览器download事件，保存后核验UTF-8文件名与字节；不拦截默认链接行为，不能替代Via真机。
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+
+unlock-native.test.swift / unlock-native-http.test.swift: 原生配对、挑战及签名授权与路由拒绝隔离回归；测试替身不触碰真实钥匙串或解锁。
+unlock-coordinator.test.swift / unlock-webauthn.test.swift: 锁屏状态机、撤销与旧验证底座回归，为原生路径共用逻辑提供保护。
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+
+console-shortcut-delete.py: 真实控制台完整脚本的隔离浏览器测试，覆盖全局与应用专属删除、最后一项清空、重载、保存失败恢复、不得误写模型配置。
+android-shell-browser.py: App UA 与普通浏览器对比，验证唯一顶栏、设置链接、320/390窄屏与紧凑顶距；不连接实际桌面。
+
+console-actions.test.swift: 内存凭据与隔离证书/选择器替身验证同源写入边界、密码不回传、开关、配对确认防重放与撤销。
+console-actions-browser.py: 真实控制台完整脚本的文件选择、网页密码/配对/撤销与窄屏布局回归，所有网络截留在合成替身。
+unlock-native.test.swift 补充确认解锁后恰好调用一次唤醒；失败、拒绝和重放不唤醒。
+phone-files.runtime.py 补充局域网下载入口直接可见、排列首位且HTTPS入口保留的窄屏回归；不依赖打开失败帮助。
+
+unlock-native.test.swift 验证仅通过签名及授权的请求触发输入前唤醒，拒绝路径不触发。
+console-actions.test.swift 验证显式钥匙串授权检查不回传密码或密钥；系统授权弹窗仍需本机用户验证。
+console-actions-browser.py 验证即使存在HTTPS地址，连接区仍只有一个App/浏览器通用码；解锁授权码按需显示并标清仅限App。
+
+task-first-browser.py: App0.4首页锁定、未知和解锁状态的入口显隐、无自动授权、底部应用栏与主题设置入口的320/390回归。
+Android LocalClientTest与WorkspaceExperienceTest补充具体错误保留、真实手势才能直达解锁和主题传递；NativePagesTest确认低频页无底部Tab、返回保留工作台。

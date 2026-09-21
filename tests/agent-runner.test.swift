@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 注入 AgentRunner 的模型/打开/派单替身，TaskStore 使用临时目录。
- * [OUTPUT]: 覆盖桌面动作参数/去重、输入选区与焦点保护；覆盖锁屏工具发现、执行回执、无效参数、租约与同批去重；验证直接执行无确认、工具串行、租约失效拦截、派单失败不冒充成功、目标匹配（含 Codex 包身份别名和歧义拒绝）、新建页面证据、正文深链编码及并发派单原子去重。
+ * [INPUT]: 注入 AgentRunner 的模型/打开/派单替身，TaskStore 使用临时目录；包含 WorkBuddy AX 状态与占位文本的兼容性样本。
+ * [OUTPUT]: 验证派单回执直接收尾、待核对不报失败及同批后续调用不执行； 覆盖桌面动作参数/去重、输入选区与焦点保护；覆盖锁屏工具发现、执行回执、无效参数、租约与同批去重；验证直接执行无确认、工具串行、租约失效拦截、派单失败不冒充成功、目标匹配（含 Codex 包身份别名和歧义拒绝）、新建页面证据、正文深链编码及并发派单原子去重。
  * [POS]: Agent 工具循环的无桌面副作用回归，不联网、不打开真实应用、不发消息。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -51,17 +51,26 @@ import Foundation
         AgentRunner.openBookmark = savedOpenBookmark
         opened.removeAll()
 
-        func run(_ tool: String, _ arguments: String, allowed: Bool = true, dispatchFailure: Bool = false, expectedMode: AgentConversationMode = .newTask, lockResult: Result<ExecutionFeedback, ShortcutError> = .success(.delivered("电脑已锁屏。")), extraLockCall: Bool = false, desktopResult: Result<ExecutionFeedback, ShortcutError> = .success(.delivered("已操作。")), fallbackOpen: Bool = false) throws -> AgentRunner.Outcome {
+        func run(_ tool: String, _ arguments: String, allowed: Bool = true, dispatchFailure: Bool = false, dispatchUnconfirmed: Bool = false, expectedMode: AgentConversationMode = .newTask, lockResult: Result<ExecutionFeedback, ShortcutError> = .success(.delivered("电脑已锁屏。")), extraLockCall: Bool = false, desktopResult: Result<ExecutionFeedback, ShortcutError> = .success(.delivered("已操作。")), fallbackOpen: Bool = false) throws -> AgentRunner.Outcome {
             var task = try TaskStore.claim(subject: "test", requestId: UUID().uuidString, text: "测试指令", context: nil)
             task.status = .running
             try TaskStore.save(task)
             var turns = 0
             var pageReads = 0
+            var dispatched = false
             AgentRunner.canControl = { _ in allowed }
             AgentRunner.dispatchToApp = { app, text, _, mode, done in
                 assert(app == "Codex" && text == "写测试" && mode == expectedMode)
                 opened.append("dispatch")
-                done(dispatchFailure ? "未派单：输入框非空。" : "已提交到 Codex。")
+                dispatched = true
+                _ = try! TaskStore.reserveAppDispatch(id: task.id, label: "派单尝试")
+                if dispatchFailure {
+                    done(.init(state: .failed, detail: "输入框非空。"))
+                } else if dispatchUnconfirmed {
+                    done(.init(state: .unconfirmed, detail: "已尝试发送，接收待核实"))
+                } else {
+                    done(.init(state: .confirmed, detail: "已交给 Codex", targetName: "Codex", executionVisible: true))
+                }
             }
             AgentRunner.desktopAction = { request, _, done in
                 opened.append("desktop:" + request.action.rawValue)
@@ -90,6 +99,13 @@ import Foundation
             AgentRunner.run(config: config, task: task, readPage: { pageReads += 1; return .failure(.emptyPage) }) { outcome = $0; finished.signal() }
             assert(finished.wait(timeout: .now() + 5) == .success)
             assert(outcome != nil, "跑完必须有回执")
+            if dispatched {
+                assert(turns == 1, "派单后不应再请求模型，避免超时或重复调用改写结果")
+                let transcript = TaskStore.task(id: task.id)?.transcript ?? []
+                if extraLockCall {
+                    assert(transcript.last?["content"] as? String == "本轮已结束，此操作未执行。")
+                }
+            }
             assert(TaskStore.task(id: task.id)?.status == .running, "工具执行不再挂起任务等确认")
             assert(pageReads == 0, "打开应用不得预读无关网页")
             if tool == "lock_computer", allowed, arguments == "{}" {
@@ -196,6 +212,12 @@ import Foundation
         assert(check4)
         let check5 = try run("dispatch_to_app", "{\"app\":\"Codex\",\"text\":\"写测试\"}", dispatchFailure: true).content == nil
         assert(check5)
+        let dispatchCount = opened.filter { $0 == "dispatch" }.count
+        let uncertainDispatch = try run("dispatch_to_app", "{\"app\":\"Codex\",\"text\":\"写测试\"}", dispatchUnconfirmed: true, extraLockCall: true)
+        assert(uncertainDispatch.needsInput == false && uncertainDispatch.error == nil && uncertainDispatch.content == "已尝试发送，接收待核实")
+        assert(opened.filter { $0 == "dispatch" }.count == dispatchCount + 1, "待核对不重放同批派单")
+        let confirmed = try run("dispatch_to_app", "{\"app\":\"Codex\",\"text\":\"写测试\"}", extraLockCall: true)
+        assert(!confirmed.needsInput && confirmed.error == nil && confirmed.content == "已交给 Codex")
         let currentMode = try run("dispatch_to_app", "{\"app\":\"Codex\",\"text\":\"写测试\",\"mode\":\"current\"}", expectedMode: .current)
         assert(currentMode.content != nil)
         let invalidMode = try run("dispatch_to_app", "{\"app\":\"Codex\",\"text\":\"写测试\",\"mode\":\"invented\"}")
@@ -220,13 +242,22 @@ import Foundation
             duplicate.status = .running
             duplicate.messages.append(TaskMessage(role: .tool, text: "已经尝试", toolName: "dispatch_to_app"))
             try TaskStore.save(duplicate)
-            var reply: String?
+            var reply: AppDispatchReceipt?
             AgentAppDispatch.send(app: configured.name, text: "不能发送", taskId: duplicate.id,
                 store: store, executor: InputExecutor(store: store), authorized: { true }) { reply = $0 }
-            assert(reply?.hasPrefix("本任务已经尝试派单") == true, "重复派单必须在桌面副作用之前同步拒绝")
+            assert(reply?.state == .unconfirmed && reply?.summary == "已尝试发送，接收待核实", "重复派单必须在桌面副作用之前同步拒绝")
         }
         // 新建页面必须有应用特定证据；旧会话同名标题或不可读输入框不能放行。
         assert(AgentAppProfile.canonicalName("Workbody") == "workbuddy")
+        assert(AgentTaskComposer.accessibilityBool(NSNumber(value: 1)) == true)
+        assert(AgentTaskComposer.accessibilityBool("1") == true)
+        assert(AgentTaskComposer.accessibilityBool("true") == true)
+        assert(AgentTaskComposer.accessibilityBool("0") == false)
+        assert(AgentTaskComposer.accessibilityBool("false") == false)
+        assert(AgentTaskComposer.accessibilityBool(nil) == nil)
+        assert(AgentTaskComposer.accessibilityBool("selected") == nil)
+        assert(AgentAppProfile.workbuddy.isEmptyComposer(value: "\u{FEFF}\n今天帮你做些什么？\n@ 引用对话文件，/ 调用技能与指令", placeholder: nil))
+        assert(!AgentAppProfile.workbuddy.isEmptyComposer(value: "今天帮你做些什么？ @ 引用对话文件，/ 调用技能与指令\n查找视频", placeholder: nil))
         assert(AgentAppProfile.canonicalName("z code") == "zcode")
         assert(AgentAppProfile.workbuddy.isEmptyComposer(value: "\u{FEFF}今天帮你做些什么？ @ 引用对话文件，/ 调用技能与指令", placeholder: nil))
         assert(!AgentAppProfile.workbuddy.isEmptyComposer(value: "用户尚未提交的草稿", placeholder: nil))

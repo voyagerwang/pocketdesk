@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation，消费 SpriteSession、SpriteFeedback、AgentModels。
- * [OUTPUT]: 覆盖刷新重连、提交身份隔离、同任务追问与显式重选；覆盖展示会话的代际/序号/版本去重（迟到输入不覆盖新版、旧会话不复活、提交清空竞态），
+ * [OUTPUT]: 覆盖派单未核实投影为短回执而非待补充/失败； 覆盖刷新重连、提交身份隔离、同任务追问与显式重选；覆盖展示会话的代际/序号/版本去重（迟到输入不覆盖新版、旧会话不复活、提交清空竞态），
  *           以及投影的逐状态映射（执行中工具行、待补充、完成/派单不冒充、失败、放弃、断线标注）。
  * [POS]: tests 的桌面反馈逻辑测试；`swiftc -parse-as-library` 编译，不依赖 AppKit、不联网。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -166,6 +166,12 @@ import Foundation
             viewModel = SpriteFeedback.project(session: session.current, task: failed, rounds: [],
                                                now: 1_000)
             check(viewModel.statusLine == "未完成" && viewModel.answer == "模型服务不可达。", "失败展示原因")
+
+            var pendingDispatch = makeTask(status: .needsInput, result: "发送已点击，请查看目标应用。")
+            pendingDispatch.messages.append(TaskMessage(role: .tool, text: "派单尝试", toolName: "dispatch_to_app"))
+            viewModel = SpriteFeedback.project(session: session.current, task: pendingDispatch, rounds: [],
+                                               now: 1_000)
+            check(viewModel.phase == .unconfirmed && viewModel.statusLine == "已尝试发送，接收待核实", "发送待核对不能投影为待补充、失败或已完成")
 
             let needsInput = makeTask(status: .needsInput, result: "要 A 版本还是 B 版本？")
             viewModel = SpriteFeedback.project(session: session.current, task: needsInput, rounds: [],

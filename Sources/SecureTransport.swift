@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Security 的证书/私钥 DER 与 Network TLS；读取本机私有 TLS 目录。
  * [OUTPUT]: 提供独立 HTTPS/WSS 监听参数；证书缺失时不开启安全通道，绝不降级密码请求。
- * [POS]: Sources 的 TLS 装配边界；三条服务共享同一证书，客户端必须正常验证信任链。
+ * [POS]: Sources 的 TLS 装配边界；三条服务共享同一证书，网页客户端验证系统信任链，原生 App 通过扫码固定叶证书指纹验证身份。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import Foundation

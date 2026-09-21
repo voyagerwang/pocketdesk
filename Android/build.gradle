@@ -1,0 +1,3 @@
+// [INPUT]: AGP 8.9.1。 [OUTPUT]: 应用构建插件声明。 [POS]: 安卓构建版本边界。
+// [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+plugins { id 'com.android.application' version '8.9.1' apply false }

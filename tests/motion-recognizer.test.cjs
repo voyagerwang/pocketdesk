@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Node assert 与 motion-recognizer 纯函数，输入合成姿态时间序列。
- * [OUTPUT]: 验证限时前翻达幅度即触发，不依赖停稳或回弹，冷却回位后复用；覆盖多采样率噪声、漂移、快翻和异常数据拒绝。
+ * [OUTPUT]: 验证限时前翻达幅度即触发，不依赖停稳或回弹，冷却回位后复用；覆盖混合甩动时序、多采样率噪声、漂移、快翻和异常数据拒绝。
  * [POS]: tests 的识别器回归，无浏览器和桌面发送副作用。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -83,6 +83,32 @@ test('手机整体向前甩的短促加速度脉冲可以触发', () => {
     fired += Number(result.fired);
   }
   assert.strictEqual(fired, 1);
+});
+
+test('整体甩送不受加速度与小幅前翻先后顺序影响', () => {
+  for (const offset of [-40, 0, 40, 80, 120]) {
+    const r = makeRecognizer(); let fired = 0;
+    for (let t = 0; t <= 1000; t += 20) {
+      const beta = t < 400 ? 20 : 20 + Math.min(10, (t - 400) * 0.1);
+      const accel = t >= 440 + offset && t <= 500 + offset ? 14.5 : 9.8;
+      fired += Number(r.push({ t, beta, gamma: 55, alpha: 0, accel }).fired);
+    }
+    assert.equal(fired, 1, '加速度相对转动偏移 ' + offset + 'ms');
+  }
+});
+
+test('前翻超时或反向后出现脉冲不得复活旧动作', () => {
+  for (const invalid of ['timeout', 'reverse']) {
+    const r = makeRecognizer();
+    for (let t = 0; t <= 400; t += 20) r.push({ t, beta: 20, gamma: 0, alpha: 0, accel: 9.8 });
+    for (let t = 420; t <= 500; t += 20) r.push({ t, beta: 20 + (t - 400) * 0.1, gamma: 0, alpha: 0, accel: 9.8 });
+    if (invalid === 'timeout') {
+      for (let t = 520; t <= 1040; t += 20) r.push({ t, beta: 30, gamma: 0, alpha: 0, accel: 9.8 });
+    }
+    const result = r.push({ t: invalid === 'timeout' ? 1060 : 520,
+      beta: invalid === 'timeout' ? 30 : -10, gamma: 0, alpha: 0, accel: 14.5 });
+    assert.equal(result.fired, false, invalid);
+  }
 });
 
 test('普通步行级小幅振动不触发整体甩送', () => {

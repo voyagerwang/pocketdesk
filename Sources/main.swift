@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 AppKit 的 NSApplication/NSWorkspace 与 Foundation 的 FileManager/ProcessInfo；消费 TargetStore/Server/WSServer/FrameServer/PointerExecutor 与 SpriteDesk 离线球体资源的装配。
+ * [INPUT]: 原生解锁依赖 NativeTLSIdentity/UnlockNativeHTTP/UnlockPanel；依赖 AppKit 的 NSApplication/NSWorkspace 与 Foundation 的 FileManager/ProcessInfo；消费 PhoneFilePicker 原生多选入口及 TargetStore/Server/WSServer/FrameServer/PointerExecutor 与 SpriteDesk 离线球体资源的装配。
  * [OUTPUT]: 对外提供 PocketDesk 启动引导：web 根目录定位、端口选择（VOICE_DECK_PORT 环境变量）、辅助功能授权提示、HTTP、控制与独立画面服务启动与 Dock 应用身份（AppDelegate）。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的唯一入口与组装根；其余文件都是可独立理解的职责模块，本文件不再包含任何业务逻辑。
@@ -14,6 +14,8 @@ import Foundation
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let consoleURL: URL
     init(consoleURL: URL) { self.consoleURL = consoleURL }
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? { PhoneFilePicker.shared.menu() }
 
     func applicationShouldHandleReopen(_ application: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         NSWorkspace.shared.open(consoleURL)
@@ -128,9 +130,30 @@ let wsPort: UInt16 = selectedPort < 65534 ? selectedPort + 1 : 46388
 let wsServer = WSServer(port: wsPort, pointer: pointerExecutor, cursor: cursorMonitor)
 server.controlAuthorized = { [weak wsServer] session in wsServer?.isController(session) == true }
 try? wsServer.start()
+try? NativeTLSIdentity.prepareIfMissing()
 let secureTransport = try? SecureTransport()
 if let secureTransport { try server.startSecure(secureTransport); try wsServer.startSecure(secureTransport) }
 _ = LockScreenInput.shared
+// 快捷解锁装配（docs/quick-unlock-zcode-plan.md）：默认禁用，能力经本机网页或原生兼容面板开启后生效；
+// 原生端仅通过本地 HTTPS 直连，不启动 relay；密码与配对授权由本机 ConsoleActions / UnlockPanel 共享管理。
+let unlockCredentials = UnlockCredentialStore()
+let unlockConfigProvider: () -> UnlockConfig? = { nil }
+let unlockCoordinator = UnlockCoordinator(credentials: unlockCredentials, configProvider: unlockConfigProvider)
+unlockCoordinator.onUnlocked = { Util.wakeDisplay() }
+unlockCoordinator.onBeforeInput = { Util.wakeDisplay() }
+let nativeUnlock = UnlockNativeHTTP(coordinator: unlockCoordinator)
+server.nativeUnlock = nativeUnlock
+UnlockPanelController.shared.bind(coordinator: unlockCoordinator, credentials: unlockCredentials, native: nativeUnlock)
+server.consoleActions = ConsoleActions(coordinator: unlockCoordinator, native: nativeUnlock, configured: { secureTransport != nil })
+// HTTP 回调来自网络队列；AppKit 窗口必须交回主线程，不能拖垮整个服务。
+server.quickUnlockPanel = { DispatchQueue.main.async { UnlockPanelController.shared.show() } }
+server.quickUnlockStatus = { [
+    "configured": secureTransport != nil,
+    "mode": "native-lan",
+    "enabled": unlockCredentials.enabled,
+    "hasPassword": unlockCredentials.hasPassword,
+    "credentials": unlockCredentials.credentials.map { ["id": $0.credentialId, "label": $0.label, "confirmed": $0.confirmed] },
+] }
 var frameService: AnyObject?
 if #available(macOS 14.0, *) {
     let frames = FrameServer(port: selectedPort < 65534 ? selectedPort + 2 : 46389)
@@ -151,4 +174,5 @@ let application = NSApplication.shared
 let launcherDelegate = AppDelegate(consoleURL: consoleURL)
 application.delegate = launcherDelegate
 application.setActivationPolicy(.regular)
+PhoneFilePicker.shared.installMenu()
 application.run()

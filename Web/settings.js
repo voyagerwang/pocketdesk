@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 index.html 的 #phone-settings 面板与 header 齿轮，以及迁来的 #sens / #scroll-speed / #ruler-mode。
- * [OUTPUT]: 提供唯一手机设置面板的开关、遮罩关闭、焦点恢复与偏好读写；翻腕组保存用户意愿与灵敏度档位，
+ * [OUTPUT]: 安卓容器的连接设置并入现有齿轮入口；提供唯一手机设置面板的开关、遮罩关闭、焦点恢复与偏好读写；翻腕组保存用户意愿与灵敏度档位，
  *           按 motion-send 的四级状态（unsupported / needs-permission / unverified / running）渲染：
  *           环境不过关保留开关并禁用，其余状态就地写回 #wrist-note，失败只给一句「暂时无法使用甩送，
  *           请使用发送按钮」。
@@ -195,3 +195,53 @@ function initWristPanel() {
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initWristPanel);
 else initWristPanel();
+
+// 原生 App 只提供连接管理，业务设置与首页共用网页现有入口。
+const nativeConnectionGroup = document.getElementById('native-connection-group');
+if (/\bPocketDeskAndroid\//.test(navigator.userAgent)) {
+  document.documentElement.classList.add('pocketdesk-android');
+  if (nativeConnectionGroup) nativeConnectionGroup.hidden = false;
+}
+
+// 0.3 起收件由原生文件页承接；旧版 App 仍保留网页收件区。
+const nativeVersion = navigator.userAgent.match(/PocketDeskAndroid\/(\d+)\.(\d+)/);
+if (nativeVersion && +nativeVersion[1] === 0 && +nativeVersion[2] === 3) document.documentElement.classList.add('pocketdesk-native-files');
+
+// 0.4 按状态给快捷入口，普通打开或状态轮询绝不发起解锁。
+(function () {
+  if (!nativeVersion || !(+nativeVersion[1] > 0 || +nativeVersion[2] >= 4)) return;
+  document.documentElement.classList.add('pocketdesk-task-first');
+  document.querySelectorAll('.native-v4-only').forEach(link => { link.hidden = false; });
+  const entry = document.getElementById('quick-unlock-entry');
+  const title = document.getElementById('quick-unlock-title');
+  const note = document.getElementById('quick-unlock-note');
+  const unlock = document.getElementById('quick-unlock-open');
+  let timer, active = false, epoch = 0;
+  function themeLinks() {
+    document.querySelectorAll('a[href^="pocketdesk://"]').forEach(link => {
+      const url = new URL(link.href); url.searchParams.set('theme', document.documentElement.dataset.theme || 'classic'); link.href = url.href;
+    });
+  }
+  document.addEventListener('click', themeLinks, true);
+  async function check() {
+    clearTimeout(timer);
+    if (document.hidden || active || !pairToken()) return;
+    active = true; const current = epoch;
+    const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch('/api/screen/state', {headers: authHeaders(), cache: 'no-store', signal: controller.signal});
+      if (!response.ok) throw new Error('unavailable');
+      const result = await response.json(); if(current !== epoch || document.hidden) return;
+      entry.hidden = result.state === 'unlocked'; unlock.hidden = result.state !== 'locked';
+      title.textContent = result.state === 'locked' ? '电脑已锁定' : '正在确认电脑状态';
+      note.textContent = result.state === 'locked' ? '点一下解锁，再用指纹或手机密码验证。' : '状态未确认，暂不发起解锁。';
+    } catch (_) {
+      if(current !== epoch || document.hidden) return;
+      entry.hidden = false; unlock.hidden = true; title.textContent = '暂时连不上电脑';
+      note.textContent = '确认电脑正在运行且连接同一 Wi-Fi，恢复后自动检查。';
+    } finally { clearTimeout(timeout); active = false; if (!document.hidden) timer = setTimeout(check, 3000); }
+  }
+  document.addEventListener('visibilitychange', () => { epoch++; clearTimeout(timer); if (!document.hidden) check(); });
+  window.addEventListener('online', check);
+  check();
+})();
