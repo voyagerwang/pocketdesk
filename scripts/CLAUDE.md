@@ -15,3 +15,6 @@ ax-probe.swift: LIVE_INPUT_PROPOSAL.md 的 P0 兼容性探针——对**用户�
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 
 setup-secure-channel.sh: 生成本机 HTTPS 身份与手机信任用 CA 证书，私有文件权限隔离、保留已有身份，签发后删除 CA 私钥，不自动改变系统信任；已有身份时只补派生内存装配所需 DER 副本（`server-key.der`/`server-cert.der`），绝不重签——重签会让手机已信任的 CA 与已授权的传感器权限全部作废。
+
+pull-rebuild.sh: 仅快进当前分支上游后重装；拒绝脏工作区、分叉、游离HEAD及未完成Git操作，保留正常SSH校验。
+rebuild-safe.sh: 构建并签名Mac应用，停止旧实例后将旧安装移到废纸篓并启动新版本；不同步Git分支。

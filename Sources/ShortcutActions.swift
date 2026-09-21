@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 Foundation；产出的按键串交由 Models 的 ShortcutKeys 解析（同一链路，不另起炉灶）。
+ * [INPUT]: 依赖 Foundation；产出的按键串交由 Models 的 ShortcutKeys 解析；锁定使用系统组合键，不以息屏替代。
  * [OUTPUT]: 对外提供 Platform（按键投递目标平台）与 ShortcutAction（预设动作库：语义 id ↔ 各平台按键串 ↔ 中文名 ↔ 投递方式 delivery）。
  *           delivery 区分 .hotkey/.systemCommand 与 .deviceLocal——后者（draft.clear「清空会话」）由手机本地执行、hotkey 为空串，
  *           服务端只配合电脑侧清空；误发到 /api/shortcut-trigger 必须明确拒绝，不能退化成"注入空串快捷键"。
@@ -76,7 +76,7 @@ enum ShortcutAction: String, CaseIterable {
 // 故系统级动作改为「直接调用系统能力」，窗口级动作走 AX，只有纯应用内菜单键才依赖 CGEvent。
 enum ActionDelivery {
     case keyEvent          // CGEvent 注入前台应用：退出应用
-    case systemCommand     // 直接跑系统命令：锁屏（关屏 + 系统"需要密码"即等效锁）
+    case systemCommand     // 平台命令通道；不得将显示器休眠当作会话锁定
     case switchPreviousApp // AppKit 按窗口 z-order 切到上一个应用，不碰系统快捷键
     case axCloseWindow     // 辅助功能按前台窗口的关闭按钮；取不到按钮时回退 keyEvent（Cmd+W）
     case hideFrontApp      // AppKit 隐藏前台应用：不经按键也不经 AX，任何应用都吃
@@ -86,7 +86,7 @@ enum ActionDelivery {
 extension ShortcutAction {
     var delivery: ActionDelivery {
         switch self {
-        case .lockScreen: return .systemCommand
+        case .lockScreen: return .keyEvent
         case .switchApp: return .switchPreviousApp
         case .closeWindow: return .axCloseWindow
         case .hideApp: return .hideFrontApp
@@ -96,10 +96,10 @@ extension ShortcutAction {
     }
 
     // 系统命令形式的实现（与按键无关，故不经过 ShortcutKeys）。
-    // macOS 关屏即锁（需系统已开启"需要密码"）；Windows 用标准的 LockWorkStation。
+    // macOS 锁定走 Cmd+Ctrl+Q 并核验会话状态；不提供息屏替代命令。
     func command(_ platform: Platform) -> String? {
         switch (self, platform) {
-        case (.lockScreen, .macOS): return "/usr/bin/pmset displaysleepnow"
+        case (.lockScreen, .macOS): return nil
         case (.lockScreen, .windows): return "rundll32.exe user32.dll,LockWorkStation"
         default: return nil
         }

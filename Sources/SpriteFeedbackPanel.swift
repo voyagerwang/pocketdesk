@@ -1,17 +1,19 @@
 /**
- * [INPUT]: 依赖 AppKit、SpriteOrbView 的原版动态组件与 SpriteFeedback.ViewModel；监听前台、锁屏和减少动态设置。
- * [OUTPUT]: 非激活透明精灵面板：按输入/提交/执行/终态切换的标题和正文、原版表情与有界结果滚动；空闲无提示文字、无收起按钮；切走隐藏、重选开心唤醒。
+ * [INPUT]: 依赖 SpriteFileDropView、PhoneFileStore 的批量拖入发送，以及 AppKit、SpriteOrbView 的原版动态组件与 SpriteFeedback.ViewModel；监听前台、锁屏和减少动态设置。
+ * [OUTPUT]: 360pt 交接基线回执、单行回执背景随文字收紧；非激活透明精灵面板：按输入/提交/执行/终态切换的标题和正文、原版表情与有界结果滚动、
+ *           文件拖入发送反馈与拖拽期间短暂显现；空闲无提示文字、无收起按钮；切走隐藏、重选开心唤醒。
  * [POS]: 桌面展示层；球体单独在 WebKit 内矢量绘制，正文由原生字体按屏幕比例绘制，不随球体缩放或旋转。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 
 final class SpriteFeedbackPanel: NSPanel {
-    private static let panelWidth: CGFloat = 720
+    // 文件传输只增加拖入接缝，保留交接基线的转写浮层宽度。
+    private static let panelWidth: CGFloat = 360
     private static let horizontalInset: CGFloat = 16
     private static let textWidth = panelWidth - horizontalInset * 2
     private static let orbSize: CGFloat = 176
-    private let container = NSView()
+    private let container = SpriteFileDropView(frame: .zero)
     private let transcriptSurface = NSView()
     private let bubble = NSTextField(labelWithString: "")
     private let answer = NSTextView()
@@ -19,6 +21,13 @@ final class SpriteFeedbackPanel: NSPanel {
     private let orbView: SpriteOrbView
     private let statusLine = NSTextField(labelWithString: "")
     private let connectionNotice = NSTextField(labelWithString: "")
+    private var fileNotice = ""
+    private var fileNoticeUntil = Date.distantPast
+    private var preparingFiles = false
+    /// 拖拽显现：访达是前台时面板按既有意图收起，用户拖文件时短暂放行，拖完恢复收起；
+    /// 不改变"切应用隐藏"的本意，也不把球体永久置顶。
+    private var dragRevealed = false
+    private var dragMonitorActive = false
     private var reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     private var lastViewModel: SpriteFeedback.ViewModel?
     private var hiddenByApplication = false
@@ -51,6 +60,9 @@ final class SpriteFeedbackPanel: NSPanel {
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor.clear.cgColor
         contentView = container
+        container.allowed = { [weak self] in self?.screenIsLocked == false && self?.preparingFiles == false }
+        container.receive = { [weak self] paths in self?.receiveFiles(paths) }
+        orbView.unregisterDraggedTypes()
         transcriptSurface.wantsLayer = true
         transcriptSurface.layer?.backgroundColor = NSColor(calibratedWhite: 0.99, alpha: 0.94).cgColor
         transcriptSurface.layer?.cornerRadius = 12
@@ -90,14 +102,15 @@ final class SpriteFeedbackPanel: NSPanel {
             hiddenByApplication = false
         }
         lastViewModel = model
-        guard model.visible, !screenIsLocked, !hiddenByApplication else { orderOutAndKeepIntent(); return }
+        let revealAllowed = dragRevealed || (preparingFiles && fileNoticeUntil > Date())
+        guard model.visible, !screenIsLocked, !hiddenByApplication || revealAllowed else { orderOutAndKeepIntent(); return }
         bubble.stringValue = model.phase == .drafting ? model.displayText : ""
         bubble.isHidden = bubble.stringValue.isEmpty
         let answerText = model.phase == .drafting ? "" : model.displayText
         if answer.string != answerText { answer.string = answerText }
         answerScroll.isHidden = answerText.isEmpty
         // 表情传达情绪，标题交代执行事实；两者不能互相替代。
-        statusLine.stringValue = model.headline
+        statusLine.stringValue = Date() < fileNoticeUntil ? fileNotice : model.headline
         connectionNotice.stringValue = model.phoneConnected ? "" : "手机输入已断开"
         connectionNotice.isHidden = model.phoneConnected
         statusLine.isHidden = statusLine.stringValue.isEmpty
@@ -106,8 +119,45 @@ final class SpriteFeedbackPanel: NSPanel {
         updateOrb(model)
     }
 
+    /// 拖入就是电脑端用户的发送意图；手机仍须点击接收，不要求手机当前选中任务。
+    private func receiveFiles(_ paths: [String]) {
+        guard !preparingFiles, !screenIsLocked else { return }
+        preparingFiles = true
+        showFileNotice("正在准备 \(paths.count) 个文件…", duration: 600)
+        let batchId = UUID().uuidString
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let message: String
+            do {
+                let offer = try PhoneFileStore.shared.prepare(paths: paths, subject: PhoneFileStore.subject, taskId: batchId)
+                message = "已准备好「\(offer.name)」，请在手机接收"
+            } catch { message = error.localizedDescription }
+            DispatchQueue.main.async {
+                self?.preparingFiles = false
+                self?.showFileNotice(message, duration: 15)
+                // 拖放后面板可能本来就因切应用收起；结果要在这 15 秒里可见，随后按既有意图恢复收起。
+                if self?.hiddenByApplication == true {
+                    self?.dragRevealed = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+                        guard let self, self.dragRevealed else { return }
+                        self.dragRevealed = false
+                        if self.hiddenByApplication { self.orderOutAndKeepIntent() }
+                    }
+                }
+            }
+        }
+    }
+
+    private func showFileNotice(_ text: String, duration: TimeInterval) {
+        fileNotice = text
+        fileNoticeUntil = Date().addingTimeInterval(duration)
+        statusLine.stringValue = text
+        statusLine.isHidden = false
+        layoutContent()
+    }
+
     private func updateOrb(_ model: SpriteFeedback.ViewModel) {
-        orbView.update(visible: isVisible && model.visible && !screenIsLocked && !hiddenByApplication,
+        let revealed = dragRevealed || (preparingFiles && fileNoticeUntil > Date())
+        orbView.update(visible: isVisible && model.visible && !screenIsLocked && (!hiddenByApplication || revealed),
                        revision: model.presentationRevision, emotion: model.emotion, reduced: reduceMotion, taskId: model.taskId)
     }
 
@@ -142,7 +192,13 @@ final class SpriteFeedbackPanel: NSPanel {
         answer.alignment = documentHeight < 50 ? .center : .left
         bubble.frame = NSRect(x: horizontalInset, y: textBottom + 12 + answerHeight + gap, width: textWidth, height: questionHeight)
         transcriptSurface.isHidden = !hasText
-        transcriptSurface.frame = NSRect(x: 4, y: textBottom, width: width - 8, height: max(0, height - textBottom))
+        // 单行回执背景随文字收紧；长结果仍沿用有界滚动区域。
+        let titleOnly = questionHeight == 0 && answerHeight == 0 && titleHeight > 0
+        let titleWidth = ceil((statusLine.stringValue as NSString).size(withAttributes:
+            [.font: statusLine.font ?? NSFont.systemFont(ofSize: 15)]).width) + 32
+        let surfaceWidth = titleOnly ? min(width - 8, max(120, titleWidth)) : width - 8
+        transcriptSurface.frame = NSRect(x: (width - surfaceWidth) / 2, y: textBottom,
+                                        width: surfaceWidth, height: max(0, height - textBottom))
         setFrame(clamped(frame), display: true)
     }
 
@@ -182,7 +238,37 @@ final class SpriteFeedbackPanel: NSPanel {
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(windowMoved),
                                                name: NSWindow.didMoveNotification, object: self)
+        // 全局拖拽监听只读事件，不消费：用户在访达选中文件开始拖动时，把收起的球体短暂放行，
+        // 让"访达多选 → 拖到球球"这条主路径真的可达；松开（或落点不在这里）即恢复收起。
+        globalMouseUp = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, self.dragRevealed, self.dragMonitorActive else { return }
+                self.dragMonitorActive = false
+                guard !self.preparingFiles else { return }
+                self.dragRevealed = false
+                if self.hiddenByApplication { self.orderOutAndKeepIntent() }
+            }
+        }
+        globalMouseDragged = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, self.dragMonitorActive else { return }
+                guard !self.screenIsLocked, !self.preparingFiles,
+                      let model = self.lastViewModel, model.visible else { return }
+                if self.hiddenByApplication && !self.dragRevealed {
+                    self.dragRevealed = true
+                    self.showFileNotice("可把文件拖到这里发送到手机", duration: 60)
+                    if let model = self.lastViewModel { self.apply(model) }
+                }
+            }
+        }
+        globalMouseDown = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
+            DispatchQueue.main.async { self?.dragMonitorActive = true }
+        }
     }
+
+    private var globalMouseUp: Any?
+    private var globalMouseDragged: Any?
+    private var globalMouseDown: Any?
 
     /// 切到普通应用收起整个反馈窗；后台任务照常进行，迟到结果不弹回。
     /// 本进程（控制台）激活不算切换。

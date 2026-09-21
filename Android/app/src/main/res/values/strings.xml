@@ -1,0 +1,4 @@
+<resources>
+    <string name="pairing_code">核对码：%1$s\n请确认电脑上显示相同数字，再在电脑端点击确认。完成后点“我已在电脑上确认”。</string>
+    <string name="auth_canceled">验证未完成：%1$s。未发送解锁指令。</string>
+</resources>

@@ -11,3 +11,8 @@ review/
 # 本地记忆与运行时状态（含 .workbuddy/memory），不随仓库分发
 .workbuddy/
 AGENTS.md
+
+# Android 本地构建缓存与 SDK 路径
+Android/.gradle/
+Android/.kotlin/
+Android/local.properties

@@ -2,13 +2,14 @@
  * [INPUT]: 依赖 /api/v1/model-config 的读写与 /api/v1/model-test 的实测回执。
  * [OUTPUT]: 控制台「小精灵 · 模型服务」卡片：Base URL / 模型名 / API Key 三格配置、
  *           保存，以及一次真实连通性实测（文本 + 工具调用闭环）并原样展示服务端证据。
- * [POS]: Web 的电脑端模型服务配置面板；只在本机控制台运行，手机页不加载它、
+ * [POS]: IIFE 隔离 save/clear/render 等内部函数，避免覆盖控制台应用配置保存；Web 的电脑端模型服务配置面板；只在本机控制台运行，手机页不加载它、
  *        也不接收任何模型配置字段。
  * [PROTOCOL]: 变更时更新此头部，然后检查 Web/CLAUDE.md
  *
  * 红线：API Key 只在用户键入时离开键盘，页面不缓存、不写 localStorage、不进任何提示文案。
  * 服务端只回脱敏提示（hasKey/keyHint），输入框永远拿不回已保存的完整 Key。
  */
+(function () {
 'use strict';
 
 const agentState = document.getElementById('agentState');
@@ -153,3 +154,5 @@ elSave.addEventListener('click', save);
 elTest.addEventListener('click', test);
 elClear.addEventListener('click', clear);
 readConfig();
+
+})();

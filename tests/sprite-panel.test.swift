@@ -7,7 +7,13 @@
 import AppKit
 import WebKit
 // 独立编译此测试时不链接生产 LockScreenInput，避免操作真实锁屏。
-enum LockScreenInput { static var locked = false }
+// 文件发送接入后编译闭包扩大（ExecutionTrace/WSServer 也引用该类型），替身补齐成员保持只读隔离。
+enum LockScreenInput {
+    static var locked = false
+    static var state = "unlocked"
+    static let shared = StubUnlockSession()
+    final class StubUnlockSession { func cancel() {} }
+}
 @main struct SpritePanelTests {
     static func main() {
         _ = NSApplication.shared
@@ -33,8 +39,8 @@ enum LockScreenInput { static var locked = false }
         panel.contentView?.layoutSubtreeIfNeeded()
         assert(panel.contentView?.layer?.backgroundColor?.alpha == 0, "容器透明")
         let transcript = panel.contentView!.subviews.compactMap { $0 as? NSTextField }.first { $0.stringValue == "测试问题" }!
-        assert(panel.frame.width == 720 && transcript.frame.height < 30 && transcript.frame.width > 680,
-               "电脑反馈框宽度翻倍且短句单行")
+        assert(panel.frame.width == 360 && transcript.frame.height < 30 && transcript.frame.width > 320,
+               "电脑反馈框保持交接基线360宽度且短句单行")
         assert(panel.isVisible && !panel.canBecomeKey && !panel.canBecomeMain)
         if let bitmap = panel.contentView!.bitmapImageRepForCachingDisplay(in: panel.contentView!.bounds) {
             panel.contentView!.cacheDisplay(in: panel.contentView!.bounds, to: bitmap)

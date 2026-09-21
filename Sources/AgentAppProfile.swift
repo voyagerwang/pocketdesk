@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 TargetConfig 的应用身份与 Foundation 的包元数据。
- * [OUTPUT]: 提供 AgentConversationMode、AgentAppProfile 与新任务页面证据判断。
+ * [OUTPUT]: 提供 AgentConversationMode、AgentAppProfile 与新任务页面证据判断；WorkBuddy 已知占位文本允许 AX 换行/空白差异，非占位草稿仍拒绝。
  * [POS]: 派单的纯策略层；应用名称只作别名，真实 bundle ID 决定适配器，界面动作由 AgentTaskComposer 执行。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -52,7 +52,8 @@ enum AgentAppProfile: String {
         let content = Self.clean(value)
         if content.isEmpty { return true }
         if self == .workbuddy {
-            return content == "今天帮你做些什么？ @ 引用对话文件，/ 调用技能与指令"
+            return content.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+                == "今天帮你做些什么？ @ 引用对话文件，/ 调用技能与指令"
         }
         return false
     }

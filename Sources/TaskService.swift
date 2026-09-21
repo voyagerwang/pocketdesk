@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation，消费 TaskStore、AgentRunner、ModelConfigStore、PageReader。
- * [OUTPUT]: 提交幂等查账并保存执行控制会话；对外提供任务生命周期：submit/supplement/abandon/snapshot、当前网页绑定查询、执行器能力报告。
+ * [OUTPUT]: 保存结构化派单回执，未核实提交以 submitted 结束而非要求补充；提交幂等查账并保存执行控制会话；对外提供任务生命周期：submit/supplement/abandon/snapshot、当前网页绑定查询、执行器能力报告。
  * [POS]: Sources 的 Agent 服务层：唯一决定任务状态如何流转的地方，HTTP 层不做状态判断。
  *        首版串行执行一个活动任务；飞书候选选择通过 needsInput 续接，状态里没有「已停止」这种会骗人的说法。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -187,9 +187,10 @@ enum TaskService {
             updated.revision += 1
             updated.updatedAt = Date().timeIntervalSince1970
             updated.usage = outcome.usage
+            updated.appDispatchReceipt = outcome.appDispatchReceipt
             updated.messages.append(TaskMessage(role: .assistant, text: outcome.content ?? outcome.error ?? ""))
             if let content = outcome.content {
-                updated.status = outcome.needsInput ? .needsInput : .succeeded
+                updated.status = outcome.appDispatchReceipt?.taskStatus ?? (outcome.needsInput ? .needsInput : .succeeded)
                 updated.result = content
                 updated.error = nil
                 // 漂移如实标注：读到的页面和提交时绑定的不是同一页，必须让人知道。

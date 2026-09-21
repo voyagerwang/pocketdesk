@@ -1,6 +1,6 @@
 """
 [INPUT]: 依赖 Playwright、Pillow 与本地 Web 文件，以模拟 HTTP/WS 隔离真实桌面。
-[OUTPUT]: 验证选择与草稿进入桌面展示上报链路；验证柔光选中、主题无框与减少动态效果；另验证启动前台跟随、草稿/IME/提交保护、置顶应用栏选择及首页/全屏无冗余切换按钮； 验证小精灵甩送入口、连续任务、简短呈现、接续切换与迟到回执保护；发送历史覆盖成功、拒绝及存储失败。
+[OUTPUT]: 验证默认派单只读跟随、手机接收者一致、手动回小精灵及同前台不抢回； 验证选择与草稿进入桌面展示上报链路；验证柔光选中、主题无框与减少动态效果；另验证启动前台跟随、草稿/IME/提交保护、置顶应用栏选择及首页/全屏无冗余切换按钮； 验证小精灵甩送入口、连续任务、简短呈现、接续切换与迟到回执保护；发送历史覆盖成功、拒绝及存储失败。
 [POS]: tests 的浏览器集成验证；手机软键盘和实际捕获性能仍需真机验证。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -22,6 +22,7 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True, device_scale_factor=2, user_agent='Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36')
     errors, writes, key_writes = [], [], []
     sprite_reports = []
+    activations = []
     flags = {"frame_failed": False, "locked": False, "fail_submit": False, "fail_live": False, "mode": "selection"}
     page.on('pageerror', lambda e: errors.append(str(e)))
     page.add_init_script('window.testJpeg = ' + json.dumps(base64.b64encode(jpeg).decode()) + ';')
@@ -76,8 +77,10 @@ with sync_playwright() as p:
             elif path == '/api/v1/tasks' and r.request.method == 'POST':
                 writes.append(r.request.post_data_json)
                 data = {'task':{'id':'task-'+str(len(writes)), 'status':'succeeded','statusText':'已完成','text':r.request.post_data_json['text'],'result':'完成详细内容'*30}}
+            elif path == '/api/activate':
+                activations.append(r.request.post_data_json)
             elif path == '/api/status':
-                data = {'targets': [{'id':'wb','name':'WorkBuddy'}], 'shortcuts': [], 'accessibility': True, 'frontmostName': 'Test editor', 'theme': 'classic'}
+                data = {'targets': [{'id':'wb','name':'WorkBuddy'}], 'shortcuts': [], 'accessibility': True, 'frontmostId': flags.get('front_id'), 'frontmostName': flags.get('front_name', 'Test editor'), 'theme': 'classic'}
             elif path == '/api/screen/displays':
                 data = {'displays': [{'id': 1, 'name': 'Display 1', 'width': 1600, 'height': 900}, {'id': 2, 'name': 'Display 2', 'width': 900, 'height': 1600}], 'streamPort': 46389}
             elif path == '/api/input-context': data = {'context': 'editor-1', 'name': 'Test editor', 'scope': 'element', 'text': '电脑原文，不属于手机草稿'}
@@ -120,6 +123,13 @@ with sync_playwright() as p:
     assert page.locator('[data-recipient-toggle]').count() == 0
     page.locator('[data-target-id="__sprite__"]').click()
     assert page.locator('#compose-recipient').inner_text() == '发给 小精灵'
+    flags.update(front_id='wb', front_name='WorkBuddy')
+    activation_count = len(activations)
+    page.evaluate("manualUntil = 0; lastActivateAt = 0; followFrontmost({frontmostId:'wb',frontmostName:'WorkBuddy'})")
+    assert page.locator('#compose-recipient').inner_text() == '发给 WorkBuddy'
+    assert page.locator('#screen-recipient').inner_text() == '发给 WorkBuddy'
+    assert len(activations) == activation_count, '前台跟随不再次激活电脑'
+    page.locator('[data-target-id="__sprite__"]').click()
     page.evaluate("followFrontmost({frontmostId:'wb',frontmostName:'WorkBuddy'})")
     assert page.locator('#compose-recipient').inner_text() == '发给 小精灵'
     page.locator('#text').fill('保留的小精灵指令')
@@ -168,16 +178,24 @@ with sync_playwright() as p:
       pocketdeskAgent.current = () => taskFixture;
       pocketdeskAgentPanel.render();
     }""")
-    assert page.locator('#agent-status').inner_text() == '已交给 WorkBuddy'
-    assert page.locator('#compose-recipient').inner_text() == '发给 小精灵'
+    page.wait_for_timeout(150)
+    assert page.locator('#compose-recipient').inner_text() == '发给 WorkBuddy'
+    assert page.locator('#screen-recipient').inner_text() == '发给 WorkBuddy'
+    assert page.locator('[data-target-id="wb"]').get_attribute('aria-checked') == 'true'
+    assert len(activations) == activation_count, '派单自动接续只读，不点击或激活电脑'
     page.screenshot(path='/tmp/pocketdesk-sprite-handoff.png')
+    page.evaluate('selectSprite(); pocketdeskAgentPanel.render()')
+    page.wait_for_timeout(100)
+    assert page.locator('#compose-recipient').inner_text() == '发给 小精灵', '返回后旧回执不能抢走选择'
     page.locator('#agent-continue').click()
     page.wait_for_timeout(100)
     assert page.locator('#compose-recipient').inner_text() == '发给 WorkBuddy'
     page.evaluate('selectSprite()')
-    page.evaluate("taskFixture = {...taskFixture,id:'auto',handoffRequested:true}; pocketdeskAgentPanel.render()")
+    page.evaluate("submittingDraft = true; taskFixture = {...taskFixture,id:'auto',handoffRequested:false}; pocketdeskAgentPanel.render()")
+    assert page.locator('#compose-recipient').inner_text() == '发给 小精灵'
+    page.evaluate("submittingDraft = false; pocketdeskAgentPanel.render()")
     page.wait_for_timeout(100)
-    assert page.locator('#compose-recipient').inner_text() == '发给 WorkBuddy'
+    assert page.locator('#compose-recipient').inner_text() == '发给 WorkBuddy', '默认接续不依赖模型 switchAfter'
     page.evaluate('selectSprite()')
     page.locator('#text').fill('尚未发送的新任务')
     page.evaluate("taskFixture = {...taskFixture,id:'late'}; pocketdeskAgentPanel.render()")

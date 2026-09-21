@@ -29,6 +29,26 @@ orb-turn-preview.html: 独立动效评审，内嵌原版全部表情与彩带，
 
 接收者交互以 sprite-agent-implementation-plan.md 的 2026-09-18 修订为准：默认跟随前台，手动进入小精灵，输入栏往返，草稿保护。
 
-agent-new-task-dispatch.md: Agent 新建任务契约、四应用页面核验、失败语义与实际验证边界。
+agent-new-task-dispatch.md: Agent 新建任务契约、四应用页面核验、失败语义与实际验证边界；记录 9 月 20 日 WorkBuddy 新页核验故障、AX 兼容加固及隔离部署范围。
 
 orb-interaction-preview.html: 手机尺寸点击/输入节奏试验，原版默认图与等待表情；点击轻抬、首字点头、输入柔光、停笔暂停，含模拟输入与减少动态效果；不修改生产应用。
+
+phone-file-transfer-plan.md: ZCode 9月20日9点前文件传输执行工单；多文件拖入/查找/访达选择、手机确认、初稿编译缺口与隔离交付验收。
+
+quick-unlock-zcode-plan.md: ZCode 免手装证书快捷解锁工单；可信网页与出站转发、本机 Keychain 与授权验签、锁屏状态适配、隔离实现及双手机验收；未部署、未验收。
+
+phone-file-transfer-delivery.md: 电脑向手机文件发送的交付记录；最终行为、相对 HANDOFF_BASELINE 变更清单、精确测试命令与退出码、验收表（含环境受阻与真机未验收项）及剩余限制。
+phone-file-transfer-files.json: 相对交接基线的文件清单与内容SHA-256，用于隔离交付补丁核验。
+phone-file-transfer-delivery.patch: 仅本任务相对handoff-baseline的可应用补丁，不包含原仓库其他任务差异。
+
+android-native-unlock.md: 安卓局域网快捷解锁协议、配对流程与验证边界；原生 App 与现有网页、文件发送共存。
+android-pairing-ux-fix.md: 安卓扫码依赖和三阶段配对体验修复、13 项测试证据及真机限制。
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+
+workspace-recovery-20260920.md: 主线程崩溃证据、统一工作台二维码、Android 0.2.0 集成与实际验收边界。
+
+android-layout-shortcuts-fix.md: Android单顶栏布局与控制台save全局冲突根因、交互回归和真机边界。
+interaction-console-native-20260921.md: 网页文件发送与本机解锁管理、Android原生文件设备页、亮屏回调的实现边界、验证与交付记录。
+
+product-interaction-review-20260921.md: 0.4任务优先导航、状态解锁、低频管理收纳、设计语言与解锁故障可诊断边界。
+continue-on-another-mac.md: 独立分支交接、另一台Mac及Android构建、配置/签名边界、已验证状态与未完成解锁验收顺序。

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 与 AgentModels 的 AgentTask/TaskStatus；消费 SpriteSession 快照。
- * [OUTPUT]: 提供 SpriteFeedback 桌面反馈协调层：合并展示会话与任务事实（taskProvider 注入），
+ * [OUTPUT]: 派单已交接/未核实用单行短回执并按任务时间退场，可见本次执行直接退场； 提供 SpriteFeedback 桌面反馈协调层：合并展示会话与任务事实（taskProvider 注入），
  *           仅恢复活动或本会话任务，以任务身份与修订跟踪最新问题，显式重选驱动唤醒；project 纯函数产出 ViewModel（明确交互阶段/原版表情 ID/阶段标题/正文/提交及活动任务忙碌态/历史轮次/连接状态）；自适应轮询（活动期 1s/静默期 5s）。
  * [POS]: Sources 桌面反馈的协调层；不执行工具、不修改任务状态机、不写任务存储；
  *        只读 TaskStore 事实（由 main.swift 注入 provider），UI 一律经主线程面板呈现。
@@ -20,7 +20,7 @@ final class SpriteFeedback {
     }
 
     enum Phase {
-        case idle, drafting, submitting, working, waiting, succeeded, handedOff, failed, abandoned
+        case idle, drafting, submitting, working, waiting, succeeded, handedOff, unconfirmed, failed, abandoned
     }
 
     struct ViewModel: Equatable {
@@ -147,7 +147,7 @@ final class SpriteFeedback {
         // taskId 标识任务，supplement 的最新正文标识当前问题；执行中不能复用旧追问。
         let answer: String?
         switch task.status {
-        case .succeeded, .needsInput: answer = task.result ?? task.error
+        case .succeeded, .submitted, .needsInput: answer = task.result ?? task.error
         case .failed: answer = task.error ?? "未知错误。"
         case .abandoned: answer = task.result ?? task.error ?? "手机已放弃等待；Mac 上的执行可能仍会完成。"
         case .accepted, .running, .verifying: answer = nil
@@ -235,9 +235,10 @@ final class SpriteFeedback {
         } else if let task {
             switch task.status {
             case .needsInput:
-                viewModel.phase = .waiting
-                viewModel.statusLine = "等你补充"
-                viewModel.emotion = "11"
+                let dispatchNeedsReview = task.messages.contains { $0.toolName == "dispatch_to_app" }
+                viewModel.phase = dispatchNeedsReview ? .unconfirmed : .waiting
+                viewModel.statusLine = dispatchNeedsReview ? "已尝试发送，接收待核实" : "等你补充"
+                viewModel.emotion = dispatchNeedsReview ? "02" : "11"
             case .succeeded:
                 if let name = task.handoffTargetName, task.handoffRequested != nil || task.handoffTargetId != nil {
                     viewModel.phase = .handedOff
@@ -248,6 +249,10 @@ final class SpriteFeedback {
                     viewModel.statusLine = "已完成"
                     viewModel.emotion = "33"
                 }
+            case .submitted:
+                viewModel.phase = .unconfirmed
+                viewModel.statusLine = "已尝试发送，接收待核实"
+                viewModel.emotion = "02"
             case .failed:
                 viewModel.phase = .failed
                 viewModel.statusLine = "未完成"
@@ -264,6 +269,26 @@ final class SpriteFeedback {
             viewModel.statusLine = "已接收，准备执行"
             viewModel.busy = true
             viewModel.emotion = "31"
+        }
+        // 派单通知只展示一次短回执；按任务时间收起，轮询或重选不会重播。
+        // 旧版误归为 needsInput 的派单记录也不继续索要补充。
+        if let task, !session.submitting, session.draft.isEmpty {
+            let legacyUnconfirmed = task.status == .needsInput && task.appDispatchReceipt == nil
+                && task.messages.contains { $0.toolName == "dispatch_to_app" }
+            if viewModel.phase == .handedOff || viewModel.phase == .unconfirmed || legacyUnconfirmed {
+                let unconfirmed = viewModel.phase == .unconfirmed || legacyUnconfirmed
+                viewModel.answer = nil
+                viewModel.busy = false
+                viewModel.phase = unconfirmed ? .unconfirmed : .handedOff
+                viewModel.emotion = unconfirmed ? "02" : "19"
+                if unconfirmed { viewModel.statusLine = "已尝试发送，接收待核实" }
+                let lifetime: TimeInterval = unconfirmed ? 4 : 2
+                if task.appDispatchReceipt?.executionVisible == true || now - task.updatedAt >= lifetime {
+                    viewModel.phase = .idle
+                    viewModel.statusLine = ""
+                    viewModel.emotion = "02"
+                }
+            }
         }
         return viewModel
     }

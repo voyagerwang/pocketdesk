@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 CGSession、Carbon 键盘布局和 Secure Event Input、已认证控制租约。
- * [OUTPUT]: 提供一次性锁屏挑战与串行密码按键提交；不记录密码，不使用剪贴板，不自动重试。
+ * [OUTPUT]: 唤醒后有界等待安全输入门禁、提供一次性挑战与串行密码提交；具体门禁失败可诊断，不记录密码、不使用剪贴板、不重试密码。
  * [POS]: Sources 的锁屏专用输入边界；只有 HTTPS 路由可调用，与普通草稿执行完全隔离。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -36,7 +36,16 @@ final class LockScreenInput {
     func cancel() { mutex.lock(); epoch &+= 1; challenge = nil; mutex.unlock() }
 
     func prepare(session: String) -> [String: Any] {
+        // 上层验签后请求亮屏，密码框可能稍后才启用安全输入；只等门禁，不发键唤醒。
+        let deadline = ProcessInfo.processInfo.systemUptime + 2
+        while Self.locked && AXIsProcessTrusted() && !IsSecureEventInputEnabled()
+                && ProcessInfo.processInfo.systemUptime < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
         mutex.lock(); defer { mutex.unlock() }
+        guard AXIsProcessTrusted() else { return ["error": "电脑未授予辅助功能权限，本次未输入。"] }
+        guard Self.locked else { return ["error": "系统未处于锁定状态，本次未输入；息屏不等于锁定。"] }
+        guard IsSecureEventInputEnabled() else { return ["error": "已请求亮屏，但系统密码输入尚不可用，本次未输入。请检查电脑锁屏界面。"] }
         guard !busy, allowed(), ProcessInfo.processInfo.systemUptime - lastAttempt >= 5 else {
             return ["error": "锁屏输入暂不可用，请确认密码框已显示后重试。"]
         }

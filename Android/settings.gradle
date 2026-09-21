@@ -1,0 +1,6 @@
+// [INPUT]: 官方依赖仓库与 app 模块。 [OUTPUT]: 构建模块图。 [POS]: 安卓构建根。
+// [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+rootProject.name = 'PocketDeskAndroid'
+include ':app'

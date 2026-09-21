@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 app.js 的目标/连接状态、compose.js 的草稿事务与 agent-panel.js 的任务反馈。
- * [OUTPUT]: 重选小精灵显式恢复桌面反馈；提供实时输入浮层与原版动态球球生命周期与开心/等待/工作状态与接收者渲染、显式应用选择、置顶应用栏进入小精灵与只读前台跟随；启动沿用电脑前台。
+ * [OUTPUT]: 派单后默认只读跟随真实前台，手动回小精灵以当前前台为新基线； 重选小精灵显式恢复桌面反馈；提供实时输入浮层与原版动态球球生命周期与开心/等待/工作状态与接收者渲染、显式应用选择、置顶应用栏进入小精灵与只读前台跟随；启动沿用电脑前台。
  * [POS]: 手机接收者路由层；显式应用选择才激活电脑，进入小精灵和被动前台跟随不操作桌面；未发送草稿阻止被动换目标。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -121,6 +121,7 @@ function markSelected() {
 // 选择代际：只有最新一次选择的定位才允许生效。快速点 A 再点 B 时，A 的迟到回执
 // 既不能挪动光标（服务端按代际拒绝），也不能改动面板、提示或草稿同步。
 let selectGeneration = 0;
+let latestFrontmostStatus = null;
 
 async function activateTarget(targetId, locate = false) {
   lastActivateAt = Date.now();
@@ -188,6 +189,8 @@ async function selectTarget(button) {
 // 小精灵是手机端接收者，与 Mac 前台应用是两种状态，不共用一个变量表达。
 function selectSprite() {
   ++selectGeneration;
+  // 手动回到小精灵后，同一前台应用的轮询不能立即把接收者切回去。
+  if (latestFrontmostStatus) lastSeenFront = latestFrontmostStatus.frontmostId || latestFrontmostStatus.frontmostName || null;
   if (selected === SPRITE_ID) {
     // 已选中再点一次只回到输入并聚焦：不清草稿、不新建任务（方案 §4）。
     window.pocketdeskSpriteSelect?.(selectGeneration);
@@ -258,6 +261,7 @@ function hasRecipientDraft() {
 }
 
 function applyFrontmost(status) {
+  latestFrontmostStatus = status;
   const target = targets.find(item => item.id === status.frontmostId);
   const next = target ? target.id : status.frontmostName ? FRONTMOST_ID : null;
   const key = status.frontmostId || status.frontmostName || null;
@@ -266,6 +270,7 @@ function applyFrontmost(status) {
     ++selectGeneration;
     beginDraftForExplicitTarget(next, true);
   }
+  if (selected === SPRITE_ID && next !== SPRITE_ID) window.pocketdeskSpriteDeselect?.(selectGeneration);
   selected = next;
   frontmostLabel = target ? null : status.frontmostName || null;
   lastSeenFront = key;
@@ -273,9 +278,29 @@ function applyFrontmost(status) {
 }
 
 function followFrontmost(status) {
-  if (selected === SPRITE_ID || hasRecipientDraft()) return;
+  latestFrontmostStatus = status;
+  if (hasRecipientDraft()) return;
+  // 派单仍在填写/提交时不开放应用输入，避免手机输入和自动派单争用撰写框。
+  const task = window.pocketdeskAgent?.current();
+  if (selected === SPRITE_ID && task && ['accepted', 'running', 'verifying'].includes(task.status)) return;
   if (Date.now() <= manualUntil || Date.now() - lastActivateAt < 2500) return;
   const key = status.frontmostId || status.frontmostName || null;
   if (key === lastSeenFront) return;
   applyFrontmost(status);
 }
+
+// 派单也可能交给本来就在前台的应用；回执补足无前台边沿的场景。
+// 重新读取真实前台，且不激活、不点击、不聚焦输入框。
+window.pocketdeskFollowHandoff = async (targetId) => {
+  if (selected !== SPRITE_ID || hasRecipientDraft()) return;
+  const generation = selectGeneration;
+  try {
+    const response = await fetch('/api/status', { headers: authHeaders() });
+    if (!response.ok) return;
+    const status = await response.json();
+    if (generation !== selectGeneration || selected !== SPRITE_ID || hasRecipientDraft()) return;
+    if (status.frontmostId !== targetId || !targets.some(target => target.id === targetId)) return;
+    latestFrontmostStatus = status;
+    applyFrontmost(status);
+  } catch (_) { /* 心跳恢复后继续观察真实前台。 */ }
+};

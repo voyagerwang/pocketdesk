@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation；不依赖 AX、Network 或任何运行时——本文件只描述任务事实的形状。
- * [OUTPUT]: 可选派单接续目标、飞书个人/群候选及通用操作去重/确认记录； 任务保存控制会话用于执行租约核验；对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
+ * [OUTPUT]: 结构化 AppDispatchReceipt 与提交未核实终态 submitted；可选派单接续目标、飞书个人/群候选及通用操作去重/确认记录； 任务保存控制会话用于执行租约核验；对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
  *           AgentTask、TaskEvent，以及 AgentTask 与字典互转的 json/alternative 方法。
  * [POS]: Sources 的 Agent 领域模型层；HTTP 层只做字典与它的互转，任务语义不散落到路由里。
  *        与系统注入解耦：本文件可单独编译，供 tests 直接引用。
@@ -19,6 +19,7 @@ enum TaskStatus: String, Codable, CaseIterable {
     case accepted      // 已持久接收，尚未派发给 runtime
     case running       // 执行中
     case needsInput    // 待补充（模型反问或需要用户决定）
+    case submitted     // 提交已尝试，接收未核实；终态，不自动重试
     case succeeded     // 已完成，有结果
     case failed        // 失败，有原因
     case abandoned     // 手机端放弃等待（Mac 上可能仍在跑）
@@ -28,14 +29,14 @@ enum TaskStatus: String, Codable, CaseIterable {
     var isActive: Bool {
         switch self {
         case .accepted, .running, .needsInput, .verifying: return true
-        case .succeeded, .failed, .abandoned: return false
+        case .succeeded, .submitted, .failed, .abandoned: return false
         }
     }
 
     /// 用户能否在同一任务上继续输入。
     var acceptsFollowUp: Bool {
         switch self {
-        case .succeeded, .needsInput, .failed, .abandoned: return true
+        case .succeeded, .submitted, .needsInput, .failed, .abandoned: return true
         case .accepted, .running, .verifying: return false
         }
     }
@@ -45,6 +46,7 @@ enum TaskStatus: String, Codable, CaseIterable {
         case .accepted: return "已接收"
         case .running: return "执行中"
         case .needsInput: return "待补充"
+        case .submitted: return "接收待核实"
         case .succeeded: return "已完成"
         case .failed: return "失败"
         case .abandoned: return "已放弃"
@@ -170,6 +172,33 @@ struct FeishuDelivery: Codable, Equatable {
     var messageId: String?
 }
 
+// MARK: 应用派单回执
+
+/// 执行事实与用户文案分离；未核实是结束观察，不是等待用户补充。
+struct AppDispatchReceipt: Codable, Equatable {
+    enum State: String, Codable { case confirmed, unconfirmed, failed, needsInput }
+    var state: State
+    var detail: String
+    var targetName: String? = nil
+    var executionVisible: Bool = false
+
+    var summary: String {
+        switch state {
+        case .confirmed: return "已交给 " + (targetName ?? "目标应用")
+        case .unconfirmed: return "已尝试发送，接收待核实"
+        case .failed, .needsInput: return detail
+        }
+    }
+    var taskStatus: TaskStatus {
+        switch state {
+        case .confirmed: return .succeeded
+        case .unconfirmed: return .submitted
+        case .failed: return .failed
+        case .needsInput: return .needsInput
+        }
+    }
+}
+
 // MARK: 任务
 
 struct AgentTask: Codable, Equatable {
@@ -212,6 +241,7 @@ struct AgentTask: Codable, Equatable {
     var handoffTargetId: String?
     var handoffTargetName: String?
     var handoffRequested: Bool?
+    var appDispatchReceipt: AppDispatchReceipt?
 
     init(schemaVersion: Int = AgentTask.currentSchemaVersion,
          id: String = UUID().uuidString,
@@ -272,6 +302,12 @@ struct AgentTask: Codable, Equatable {
             "supplementCount": supplementCount,
             "canFollowUp": status.acceptsFollowUp,
         ]
+        if let receipt = appDispatchReceipt {
+            dict["dispatchState"] = receipt.state.rawValue
+            dict["dispatchDetail"] = receipt.summary
+            dict["dispatchExecutionVisible"] = receipt.executionVisible
+            if let targetName = receipt.targetName { dict["dispatchTargetName"] = targetName }
+        }
         if let handoffTargetId { dict["handoffTargetId"] = handoffTargetId }
         if let handoffTargetName { dict["handoffTargetName"] = handoffTargetName }
         if let handoffRequested { dict["handoffRequested"] = handoffRequested }

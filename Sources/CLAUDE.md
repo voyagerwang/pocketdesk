@@ -78,13 +78,13 @@ FeishuGateway.swift: 全 CLI 业务域的能力发现与按帮助执行；读取
 Codex 派单身份修订：AgentAppDispatch 除配置名称外识别 com.openai.codex（可安装为 ChatGPT.app），路径的真实 bundle ID 优先于旧配置；多候选仍拒绝。Server 静态白名单新增 recipients.js。
 
 AgentAppProfile.swift: 应用身份和会话模式的纯策略；真实 bundle ID 优先于名称，兼容 Workbody/z code 别名，定义各应用空白框与新页面证据及 Codex 官方深链编码。
-AgentTaskComposer.swift: 有界 AX 新任务导航；WorkBuddy/Cola/ZCode 按唯一语义入口新建，核验应用特定页面后绑定精确撰写框。Cola 未选模型则停止并提示；Codex 深链预填正文后逐字读回，不重复输入。每次动作核验租约与焦点。
+AgentTaskComposer.swift: 有界 AX 新任务导航；WorkBuddy/Cola/ZCode 按唯一语义入口新建，核验应用特定页面后绑定精确撰写框。选中状态兼容数字与字符串，页面最长观察 6 秒，不重点击；失败区分窗口未就绪、缺输入框、草稿不可读/非空、候选歧义与缺页面证据。Cola 未选模型则停止并提示；Codex 深链预填正文后逐字读回，不重复输入。每次动作核验租约与焦点。
 
 派单事务补充：TaskStore.reserveAppDispatch 在锁内先持久占用，save 保留已有占用证据，旧快照不能解除去重。InputExecutor.mirror 的可选 preflight 在串行队列写入前核验空白框；AgentTaskComposer.submitPrepared 核验预填正文后点击唯一可用发送按钮，观察当前撰写框清空；未确认不重试、不写成功接续。TargetWindowLocator.axWindowElement 对适配层提供窗口 AX 根，不扩大窗口检索范围。
 
 手机原版球球：Server 静态资源白名单增加 orb-rings/emotions/ball/engine/mobile.js，沿用已有静态文件处理。
 
-小精灵锁屏契约：AgentRunner.lock_computer 只接受空参数，用户明确要求时复用 Server 注入的 ShortcutAction.lockScreen → InputExecutor.triggerShortcut；队列内再核验控制租约。系统命令成功退出只表示已发出关屏请求，读取 LockScreenInput.locked 后才报告锁屏已生效；未确认、拒绝和失败不能写成锁屏成功。锁屏回执直接结束模型轮次，同批后续工具标记未执行，不因控制会话断开继续请求模型。
+小精灵锁屏契约：AgentRunner.lock_computer 只接受空参数，用户明确要求时复用 Server 注入的 ShortcutAction.lockScreen → InputExecutor.triggerShortcut；队列内再核验控制租约。发送 ⌃⌘Q 只表示已发出锁定请求，读取 LockScreenInput.locked 后才报告锁屏已生效；未确认、拒绝和失败不能写成锁屏成功。锁屏回执直接结束模型轮次，同批后续工具标记未执行，不因控制会话断开继续请求模型。
 
 AgentDesktopActions.swift: 小精灵固定桌面动作协议、运行应用与窗口身份解析、AX 精确关闭及输入框全选/清空事务；应用隐藏/正常退出使用 AppKit，不强退或处理保存提示。输入按键注入复用 InputExecutor，选区与清空结果必须读回核验。
 桌面动作接线：Server 注入 desktop_action 至 InputExecutor 串行队列；AgentRunner 公开固定动作及 list_windows，写前 TaskStore.reserveDesktopAction 原子去重，失败/未确认直接结束本轮。TaskStore.save 保留桌面动作占用，避免旧快照解除去重。关闭指定应用的多个窗口必须给唯一准确标题，当前窗口必须仍属于原聚焦进程。
@@ -107,3 +107,45 @@ SpriteDesk.swift: 桌面展示唯一装配入口；进程级强持有协调层�
 桌面反馈精简：SpriteFeedback 仅恢复活动/待补充或本展示会话提交的任务，历史终态不作为默认内容。SpriteFeedbackPanel 使用透明容器与 360pt 转写浮层，短句单行、长句换行，执行中优先反馈任务；非忙碌时新草稿替换结果；默认锚点为 Dock 可用区上方 44pt，原版引擎呈现输入表情，切应用隐藏，重选开心唤醒。
 
 SpriteOrbView.swift: 离线 WebKit 绘制适配；仅允许本地入口导航，就绪重放最新快照，隐藏停帧，Web 内容进程终止后恢复；hitTest 不拦截拖动，不接受键盘焦点。
+
+派单回执修正：预填发送后只读核验增加至 40 次观察、轮间 150ms，焦点或租约失效提前停止；发送前失败与发送后待核实分离。AgentRunner 消费结构化 AppDispatchReceipt 结束本轮、封闭同批后续工具，不再依赖模型续轮。未核实进入 submitted 终态，桌面反馈显示“已尝试发送，接收待核实”并自动退场；确认接收显示“已交给目标应用”，不会冒充目标任务完成，也不会自动重发。
+
+电脑到手机文件传输（ZCode 初版、Codex 接手返修；隔离验证见 ../docs/phone-file-transfer-delivery.md）：
+PhoneFileStore.swift: 本机文件快照与持久收件：锁外复制+锁内发布（发布前重查幂等/数量/配额）、同任务重试与并发同批次信号量接力幂等、批次 ZIP 原子发布（任一失败整批不发布）、24h 过期清扫与崩溃残留回收、单文件/批次 512MiB、总量 1GiB、32 项、10 分钟下载票据；O_NOFOLLOW+fstat 拒绝目录/FIFO/链接竞态。
+PhoneFileHTTP.swift: 列表/确认/移除一律 Bearer（不用回环豁免），下载仅认确认后签发的十分钟票据；256KiB 分块、并发 3 路上限、超时/断线恰好释放一次（finished 旗标），attachment+UTF-8 文件名、no-store/nosniff。
+PhoneFileAgent.swift: send_files_to_phone（paths 数组或 Finder 多选）；回执改用 AgentRunner.ToolOutcome 通用类型；NSAppleScript 主线程同步读取，store/finderSelection 可注入替身测试。
+ComputerFileSearch.swift: Spotlight 文件名有界检索（20 条上限/64KiB 截断/5s 超时如实回报），locate 可注入替身；不读正文。
+SpriteFileDropView.swift: 原生文件 URL 拖入容器，保留 mouseDownCanMoveWindow 面板拖动能力。
+PhoneFileAgent.swift: 小精灵多文件发送适配，paths 数组或 Finder 多选；回执仅表示准备好待接收。
+ComputerFileSearch.swift: Spotlight 文件名有界检索，返回真实候选路径，不读正文。
+SpriteFileDropView.swift: 原生文件 URL 拖入容器，SpriteFeedbackPanel 接入批量准备；真实拖放未验收。
+
+文件传输复核：发布边界复查控制租约/任务状态；批次查重包含主体。PhoneFileHTTP 可注入暂存库和超时供 loopback 集成测试，单次完成释放 timer/连接回调/文件句柄并归还流计数；不访问生产配对数据。面板保持交接基线 360pt。
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+
+PhoneFilePicker.swift: Dock右键和应用文件菜单的本机多选入口，NSOpenPanel仅选择普通文件，后台准备快照，手机仍需确认；不依赖小精灵可见性。
+PhoneFileHTTP 的票据下载同时支持GET正文和HEAD元数据，用于系统下载器探测。
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+
+原生安卓配对集成：main 同时保留 PhoneFilePicker 文件菜单及三通道，新增默认禁用的本机解锁装配；Server 并列委托文件收件与原生解锁路由。
+NativeTLSIdentity.swift: 缺少 TLS 目录时生成本机身份；保留已有证书和私钥，安卓通过扫码固定指纹。
+UnlockConfig.swift: 原生/旧 WebAuthn 凭据和值类型及私有状态文件；不保存电脑密码。
+UnlockKeychain.swift: 本机钥匙串保存登录密码与签名密钥；测试可注入内存实现。
+UnlockLockState.swift: 提供可注入的锁屏、用户和授权代际观测，供解锁逐键检查。
+UnlockCoordinator.swift: 签名配对、核对码确认、一次性挑战、撤销和锁屏输入协调；原生路由与面板共同消费，不启动中转连接。
+UnlockNativeHTTP.swift: 局域网 TLS 原生协议；邀请注册、确认后凭据状态、签名挑战与解锁结果，拒绝明文和未知身份。
+UnlockPanel.swift: 唯一本机密码保存及配对管理窗口；生成邀请后可复制配对链接、收到手机请求才显示核对确认，不能经网页提交密码。
+UnlockWebAuthn.swift: Base64URL/CBOR 与 P256 旧协议验证底座；复用编码能力，旧网页解锁不是当前产品入口。
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+
+快捷解锁面板入口必须从 HTTP 网络队列调度回主线程；AppKit 窗口事务不能在 Server 队列执行，否则触发系统断言并中断全部网页服务。
+
+Server.swift：status 仅向 loopback 返回带授权的 workspaceURL，供控制台复制与二维码等价的连接链接。
+
+ConsoleActions.swift: 本机网页常用操作适配层；回环+精确Host+同源Origin+专用JSON头限制敏感写入，独立串行队列管理密码/开关/配对核对/设备撤销，密码不回传；文件发送委托主线程系统选择器。
+网页解锁配置与原生兼容面板共享 UnlockCoordinator/凭据，onUnlocked 在系统状态确认解锁后调用 Util.wakeDisplay，请求亮屏不当作已亮屏证据。PhoneFilePicker.presentPicker 返回取消/准备结果供网页就地展示，菜单沿用弹窗。
+
+锁定不再使用 pmset 息屏：发送 ⌃⌘Q 后核验会话锁定。原生解锁在签名验证后先请求亮屏，输入准备最多等待2秒安全输入门禁，保留具体失败原因；确认解锁后仍请求亮屏。真机锁定/解锁尚待验收。
+经典钥匙串后台操作通过 SecKeychainSetUserInteractionAllowed 禁止系统弹窗，各操作串行保护并恢复进程开关；本机网页的 keychain-authorize 在已解锁状态允许用户授权，随后用非交互读取检查密码和设备密钥，后台不等待该弹窗、不改ACL、不自动重建不可读身份。
+
+UnlockNativeHTTP保留内存中最近一次授权/执行失败与结果的阶段、时间、错误、说明；ConsoleActions仅向本机同源控制台展示，不保存密码、签名或挑战，不自动重试。

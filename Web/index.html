@@ -1,6 +1,6 @@
 <!--
  [INPUT]: 依赖 app/pad/compose 的首页、多图批次和输入能力，以及 screen 系列模块的画面工作台。
- [OUTPUT]: 实时草稿浮层、简洁任务卡、接续动作、首页和全屏的输入接收者标识，切换统一使用置顶应用栏； 小精灵完成后直接输入下一项，无独立新任务按钮；提供首页 Dock、原生多图文件选择与缩略图容器、触控板、草稿和 PiP/全屏工作台。
+ [OUTPUT]: Android 连接管理嵌入现有手机设置，浏览器隐藏； 独立手机收件区与批量确认下载；实时草稿浮层、简洁任务卡、接续动作、首页和全屏的输入接收者标识，切换统一使用置顶应用栏； 小精灵完成后直接输入下一项，无独立新任务按钮；提供首页 Dock、原生多图文件选择与缩略图容器、触控板、草稿和 PiP/全屏工作台。
  [POS]: Web 唯一手机入口；只收集文本与手势，听写由手机输入法提供。
  [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -20,8 +20,9 @@
         } catch (e) { /* 无属性 = 经典蓝 */ }
       })();
     </script>
-    <link rel="stylesheet" href="/style.css?v=1.3.0.14-expression-original-sticky-restored" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
-    <link rel="stylesheet" href="/app-extras.css?v=1.3.0.13-glow">
+    <link rel="stylesheet" href="/style.css?v=1.4.0" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
+    <link rel="stylesheet" href="/app-extras.css?v=1.3.0.14-native">
+    <link rel="stylesheet" href="/phone-files.css?v=2">
     <link rel="stylesheet" href="/screen.css?v=3.1.1">
   </head>
   <body data-page-node-id="2eqrPm23J7ToUXDDq0CibO">
@@ -37,6 +38,15 @@
           </svg>
         </button>
       </header>
+      <section id="quick-unlock-entry" class="quick-unlock-entry" aria-label="电脑锁定状态" hidden>
+        <div><strong id="quick-unlock-title">电脑已锁定</strong><p id="quick-unlock-note">验证手机身份后即可继续使用。</p></div>
+        <a id="quick-unlock-open" href="pocketdesk://unlock">解锁电脑</a>
+      </section>
+      <section id="phone-files" class="phone-files" aria-label="电脑发来的文件" hidden>
+        <h2>电脑发来的文件</h2>
+        <p id="phone-files-notice" role="status"></p>
+        <div id="phone-files-list"></div>
+      </section>
       <section class="deck" aria-label="输入到哪个应用" data-page-node-id="EaAbvM2CmNpnHkFvWSHnbk">
         <div id="targets" class="targets edge-fade scroll-cue" role="radiogroup" aria-label="目标应用列表" data-page-node-id="jpwaQeF5pcFlSohw7u7sUz"></div>
       </section>
@@ -160,6 +170,12 @@
         </div>
         <p class="sheet-note">仅影响这台手机</p>
         <div class="sheet-body">
+          <section id="native-connection-group" class="sheet-group" aria-label="电脑连接" hidden>
+            <a href="pocketdesk://files" class="native-connection-link native-v4-only" hidden>电脑发来的文件<span aria-hidden="true">›</span></a>
+            <a href="pocketdesk://unlock?mode=settings" class="native-connection-link native-v4-only" hidden>解锁设置与配对<span aria-hidden="true">›</span></a>
+            <a href="pocketdesk://settings" class="native-connection-link">连接设置<span aria-hidden="true">›</span></a>
+            <p class="sheet-hint">重新连接、扫描其他电脑或管理快捷解锁。</p>
+          </section>
           <section class="sheet-group" aria-label="设备信息">
             <h2>设备信息</h2>
             <p id="device-description" class="sheet-hint"></p>
@@ -191,26 +207,27 @@
     </dialog>
     <script src="/device-info.js?v=2"></script>
     <script src="/agent-client.js?v=2"></script>
-    <script src="/agent-panel.js?v=5-expression"></script>
+    <script src="/agent-panel.js?v=6-frontmost-handoff"></script>
     <script src="/app.js?v=3.0.34"></script>
     <script src="/orb-rings.js?v=1"></script>
     <script src="/orb-emotions.js?v=1"></script>
     <script src="/orb-ball.js?v=1"></script>
     <script src="/orb-engine.js?v=1"></script>
     <script src="/orb-mobile.js?v=4"></script>
-    <script src="/recipients.js?v=5-transcript"></script>
+    <script src="/recipients.js?v=6-frontmost-handoff"></script>
     <script src="/pad.js?v=3.0.12"></script>
-    <script src="/settings.js?v=3.1.5"></script>
+    <script src="/settings.js?v=3.2.0"></script>
     <script src="/compose-queue.js?v=3.0.17"></script>
-    <script src="/compose.js?v=3.0.35-motion-gate"></script>
+    <script src="/compose.js?v=6-frontmost-handoff"></script>
     <script src="/sprite-report.js?v=4-live"></script>
     <script src="/screen-geometry.js?v=3.0.2"></script>
     <script src="/screen-gestures.js?v=3.0.12"></script>
     <script src="/screen-pip.js?v=3.0.0"></script>
-    <script src="/screen-frames.js?v=3.1.0"></script>
-    <script src="/screen.js?v=3.1.0"></script>
+    <script src="/screen-frames.js?v=3.1.6"></script>
+    <script src="/screen.js?v=3.1.6"></script>
     <script src="/motion-recognizer.js?v=3.1.7"></script>
     <script src="/motion-send.js?v=3.1.7"></script>
     <script>boot();</script>
+    <script src="/phone-files.js?v=2"></script>
   </body>
 </html>

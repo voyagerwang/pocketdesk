@@ -1,0 +1,64 @@
+/*
+ * [INPUT]: style.css 主题令牌与 phone-files.js 的收件区节点。
+ * [OUTPUT]: 随主题的文件名、清单和接收/拒绝操作；长文件名换行，触控区域至少 44px。
+ * [POS]: 首页收件区局部样式，独立于小精灵任务卡与全屏画面，不创建另一套主题。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+.phone-files {
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--surface-1);
+  margin-block: var(--s-3);
+}
+.phone-files h2 {
+  margin: 0;
+  font-size: var(--text-md);
+}
+.phone-file {
+  padding-block: var(--s-3);
+  overflow-wrap: anywhere;
+}
+.phone-file + .phone-file {
+  border-top: 1px solid var(--border);
+}
+.phone-file p, #phone-files-notice {
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  margin-block: var(--s-2);
+}
+.phone-file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+.phone-file-actions button,
+.phone-file-actions .phone-file-download {
+  min-height: var(--screen-hit);
+  display: inline-flex;
+  align-items: center;
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-field);
+  background: var(--surface-1);
+  color: var(--fg);
+  text-decoration: none;
+}
+.phone-file-actions button:first-child,
+.phone-file-actions .phone-file-download {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+.phone-file summary {
+  min-height: var(--screen-hit);
+  align-content: center;
+}
+.phone-file-actions .phone-file-secondary {
+  background: var(--surface-1);
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+.phone-file p.phone-file-error {
+  color: var(--danger);
+}

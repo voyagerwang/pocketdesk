@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 pocketdeskLockState 同步独立解锁表单； 依赖 ScreenFrames/Geometry/Gestures/Pip、共享控制通道与可见输入区。
- * [OUTPUT]: 编排浮窗和正立全屏、默认点击/滚动合一与长按放大瞄准、小窗屏幕直选与全屏显示器快捷轮换、可见键盘视口与首页隔离、画面新鲜度、锁屏/断屏恢复、控制权与光标呈现。
+ * [INPUT]: 锁屏时提示使用 App；依赖 ScreenFrames/Geometry/Gestures/Pip、共享控制通道与可见输入区。
+ * [OUTPUT]: 编排浮窗和正立全屏、默认点击/滚动合一与长按放大瞄准、小窗屏幕直选与全屏显示器快捷轮换、可见键盘视口与首页隔离、画面新鲜度、锁屏/断屏恢复、控制权与光标呈现，暴露不含画面内容的传输诊断。
  * [POS]: Web 画面工作台入口；几何、网络与手势分别委托独立模块，退出统一释放资源。keyboardOpen 把手势的键盘态接到 window.pocketdeskKeyboardActive，使点屏 pointerdown 能打“定位”标记而不影响真收起。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -38,7 +38,7 @@
     return '';
   }
   function inputBlockReason() {
-    if (screenLocked) return '电脑已锁屏，请先解锁';
+    if (screenLocked) return '电脑已锁屏，请使用 PocketDesk App 解锁';
     return controlBlockReason() || (!frames.fresh() ? frameNote || '正在获取新画面，请稍候' : '');
   }
   function feedback(text) {
@@ -135,14 +135,17 @@
     },
     state(text) { frameNote = text; paintNotice(); paintCursor(); },
   });
+  window.pocketdeskScreenDiagnostics = () => frames.diagnose();
   function subscribeCursor() { window.pocketdeskSend({ t: 'cursor-subscribe', enabled: fullscreen() && !document.hidden }); }
   function startFrames() {
     if (display && panel.open && !document.hidden) frames.start(display, fullscreen(), port);
     subscribeCursor();
   }
-  async function loadDisplays(epoch = openEpoch) {
+  async function loadDisplays(epoch = openEpoch, restart = true) {
+    let received = false;
     try {
-      const r = await fetch('/api/screen/displays', { headers: authHeaders(), cache: 'no-store' });
+      const r = await fetch('/api/screen/displays', { headers: authHeaders(), cache: 'no-store', signal: AbortSignal.timeout(6000) });
+      received = true;
       const data = await r.json();
       if (!panel.open || epoch !== openEpoch) return;
       if (!r.ok) {
@@ -151,15 +154,18 @@
         if (!requestedPermission && data.canRequest) requestPermission();
         throw new Error(data.error || '请在电脑上开启屏幕录制权限');
       }
+      const previousDisplay = display, previousPort = port;
       displays = data.displays || []; port = data.streamPort;
       if (!displays.length) throw new Error('未发现可用显示器');
       if (!displays.some(d => d.id === display)) display = displays[0].id;
       $('screen-display').replaceChildren(...displays.map(d => new Option(d.name, d.id)));
-      paintDisplay(); startFrames();
+      paintDisplay();
+      if (restart || display !== previousDisplay || port !== previousPort) startFrames();
       clearTimeout(permissionTimer);
     } catch (error) {
       if (!panel.open || epoch !== openEpoch) return;
-      frameNote = error.message; paintNotice();
+      if (!restart) return; // 后台枚举不覆盖取帧分级提示，也不重置连续失败时钟。
+      frameNote = received ? error.message : '暂时无法连接画面服务，正在自动重试'; paintNotice();
     }
   }
   async function requestPermission() {
@@ -346,7 +352,7 @@
       const wasLocked = screenLocked; screenLocked = state.locked === true;
       if (screenLocked) { if (!wasLocked) { cancel(); window.pocketdeskHideKeyboard(); } }
       else if ((wasLocked || (!frames.fresh() && Date.now() - lastRecovery > 8000)) && !frames.abort) {
-        lastRecovery = Date.now(); await loadDisplays(epoch);
+        lastRecovery = Date.now(); await loadDisplays(epoch, wasLocked || !frames.active);
       }
       paintNotice();
     } catch { /* 断网时由控制连接与原始取帧错误提示，不覆盖成未知错误。 */ }
