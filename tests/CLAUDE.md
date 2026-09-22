@@ -1,8 +1,21 @@
 # tests/
+task-ledger.test.swift: 真实 TaskStore 临时目录验证 tasks.json 单文件原子台账、完整正文/网页绑定冲突、后续补充不改原请求、旧双文件缺索引恢复、清理墓碑、坏库拒写与磁盘写失败；仅编译 AgentModels.swift/TaskStore.swift 与本夹具，不接生产数据或桌面。
+workbench-overview.test.cjs: 真实首页与 HTTP 替身验证 G2 授权/任务分页/记忆/本轮成果、XSS、身份迟到、收起/离线清理、320/390/1100 布局与只读；不替代真机验收。
+workbench-bridge.test.swift 增补：G2 路径白名单正反例、Swift 到隔离 Workbench 的真实任务/记忆读取；不修改桌面 App。
+workbench-notes.test.cjs: 全量手机首页配合受控 HTTP/WS 替身验证 G1 保存、丢包查账、刷新只读恢复、同号原正文重试、配对切换、存储失败门禁、附件拒绝、文本安全与响应式；输出桌面/手机截图，不触达真实桌面或生产笔记。
+agent-client.test.cjs 补充：同文并发只发一次、异文拒绝、未知请求改正文仅查账、detach 保留未知编号；共享 Map 的全新 JS 实例验证刷新零重发、同号原快照重试、存储失败与坏日志拒发、错 requestId 回执拒绝、旧配对隔离、确认后正文清理、已确认终态恢复及旧恢复不覆盖新任务。
 混合甩送回归：motion-recognizer.test.cjs 覆盖加速度相对小幅前翻提前 40ms 到滞后 120ms 的五种时序，均只触发一次；超时或反向帧上的脉冲不得复活旧动作。34 项轨迹与 motion-send 集成回归通过，未替代真机验收。
 侧握轨迹回归：motion-recognizer 覆盖正负 45/60 度起始侧握、双向横屏、反向不触发、慢速换姿与转屏作废；motion-send 检查识别到提交入口的时间诊断。合成数据不替代手机实际动作验收。
 chrome-bookmarks.test.swift：临时 Chrome 书签树验证嵌套文件夹、名称、网页和文件地址、多配置文件 ID 隔离及重新读取；motion-send 回归新增仅加速度不能通过探测、探测中关闭与挂起不得迟到启动。
 > L2 | 父级: ../CLAUDE.md
+
+workbench-bridge 配置补充：隔离临时目录验证 0600 本机 JSON、缺失/损坏/0644 拒绝以及显式环境关闭覆盖本机开启；不读取真实凭据。
+
+执行领取补充：task-ledger.test.swift 以 16 路并发验证只领取一次、重新加载不重领、已放弃/终态不启动，快照写失败保持 accepted，事件文件不可写仍能读到持久接收/运行修订。agent-client.test.cjs 显式推进 tick，验证空事件但新修订/旧端缺修订仍读回真实完成快照，无额外 POST。
+
+workbench-bridge.test.swift: G1 配置/稳定编号/跨语言摘要验证；--integration 经真实 URLSession 连接隔离 Workbench HTTP，重投/查账/读回只留一条笔记；不代表真机切流。
+
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 
 screen-core.test.js: Node 内建断言验证常规/横向旋转正反坐标、位移换算、瞄准取消/失控及双指接管不补点击、独立滚动/滚轮结束、60/120Hz 惯性一致与取消、黑边排除、取消手势松键与提交队列隔离，不依赖电脑输入权限。
 workspace_browser.py: 覆盖慢请求在途时切换取消排队快照不冻结、返回首页继续同步，以及 Android 悬浮键盘下长按全过程不主动失焦、冗余粘贴按钮已移除；Playwright 以本地静态文件和模拟接口验证触控板、画面、原生输入及草稿提交回归；图片提交使用有序数组状态，不连接真实桌面控制服务。

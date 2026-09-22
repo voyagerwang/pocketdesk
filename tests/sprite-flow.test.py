@@ -1,6 +1,6 @@
 """
 [INPUT]: 依赖 Playwright、Pillow 与本地 Web 文件，以模拟 HTTP/WS 隔离真实桌面。
-[OUTPUT]: 验证默认派单只读跟随、手机接收者一致、手动回小精灵及同前台不抢回； 验证选择与草稿进入桌面展示上报链路；验证柔光选中、主题无框与减少动态效果；另验证启动前台跟随、草稿/IME/提交保护、置顶应用栏选择及首页/全屏无冗余切换按钮； 验证小精灵甩送入口、连续任务、简短呈现、接续切换与迟到回执保护；发送历史覆盖成功、拒绝及存储失败。
+[OUTPUT]: 用合成配对与 identity 回执验证真实提交入口，核验三宽度暂存说明及切换隐藏；验证默认派单只读跟随、手机接收者一致、手动回小精灵及同前台不抢回； 验证选择与草稿进入桌面展示上报链路；验证柔光选中、主题无框与减少动态效果；另验证启动前台跟随、草稿/IME/提交保护、置顶应用栏选择及首页/全屏无冗余切换按钮； 验证小精灵甩送入口、连续任务、简短呈现、接续切换与迟到回执保护；发送历史覆盖成功、拒绝及存储失败。
 [POS]: tests 的浏览器集成验证；手机软键盘和实际捕获性能仍需真机验证。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -24,10 +24,11 @@ with sync_playwright() as p:
     sprite_reports = []
     activations = []
     flags = {"frame_failed": False, "locked": False, "fail_submit": False, "fail_live": False, "mode": "selection"}
-    page.on('pageerror', lambda e: errors.append(str(e)))
+    page.on('pageerror', lambda e: errors.append(e.stack))
     page.add_init_script('window.testJpeg = ' + json.dumps(base64.b64encode(jpeg).decode()) + ';')
     page.add_init_script("document.addEventListener('DOMContentLoaded', () => {  })")
     page.add_init_script('''
+      localStorage.setItem('voicedeck.pair-token', 'isolated-browser-test-pair');
       window.sentControls = [];
       class FakeSocket {
         static OPEN = 1;
@@ -72,11 +73,15 @@ with sync_playwright() as p:
             data = {'ok': True}
             if path == '/api/v1/sprite/session':
                 sprite_reports.append(r.request.post_data_json)
+            elif path == '/api/v1/tasks/identity':
+                data = {'protocolVersion': 1, 'journalScope': 'pocketdesk:' + 'a' * 64}
+            elif path == '/api/v1/phone-files':
+                data = {'files': []}
             elif path == '/api/recipients':
                 data = {'order':['__sprite__','wb']}
             elif path == '/api/v1/tasks' and r.request.method == 'POST':
                 writes.append(r.request.post_data_json)
-                data = {'task':{'id':'task-'+str(len(writes)), 'status':'succeeded','statusText':'已完成','text':r.request.post_data_json['text'],'result':'完成详细内容'*30}}
+                data = {'task':{'id':'task-'+str(len(writes)), 'requestId':r.request.post_data_json['requestId'], 'status':'succeeded','statusText':'已完成','text':r.request.post_data_json['text'],'result':'完成详细内容'*30}}
             elif path == '/api/activate':
                 activations.append(r.request.post_data_json)
             elif path == '/api/status':
@@ -277,13 +282,16 @@ with sync_playwright() as p:
     page.locator('[data-target-id="__sprite__"]').click()
     page.locator('#text').fill('现在说的文字应当实时显示')
     assert page.locator('#sprite-transcript').inner_text() == '现在说的文字应当实时显示'
-    for width in [320, 390]:
+    for width in [320, 390, 1100]:
         page.set_viewport_size({'width': width, 'height': 844})
         page.screenshot(path=f'/tmp/pocketdesk-transcript-{width}.png')
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        assert page.locator('#sprite-recovery-note').is_visible()
+        assert '刷新不会重发' in page.locator('#sprite-recovery-note').inner_text()
     page.locator('#text').fill('长句需要在宽度耗尽后自然换行。' * 12)
     assert page.locator('#sprite-transcript').evaluate('(el) => el.scrollWidth <= el.clientWidth')
     page.evaluate("selected = 'wb'; markSelected()")
     assert page.locator('#sprite-transcript').is_hidden()
+    assert page.locator('#sprite-recovery-note').is_hidden()
     browser.close()
     print('sprite flow: 甩送入口 / 连续派单 / 简短状态 / 手动接续 / 自动接续 / 迟到保护 / 球球图标 passed')

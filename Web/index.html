@@ -1,6 +1,6 @@
 <!--
- [INPUT]: 依赖 app/pad/compose 的首页、多图批次和输入能力，以及 screen 系列模块的画面工作台。
- [OUTPUT]: Android 连接管理嵌入现有手机设置，浏览器隐藏； 独立手机收件区与批量确认下载；实时草稿浮层、简洁任务卡、接续动作、首页和全屏的输入接收者标识，切换统一使用置顶应用栏； 小精灵完成后直接输入下一项，无独立新任务按钮；提供首页 Dock、原生多图文件选择与缩略图容器、触控板、草稿和 PiP/全屏工作台。
+ [INPUT]: 依赖 app/pad/compose 的首页、多图批次和输入能力、workbench-notes/overview 的显式业务入口，以及 screen 系列模块的画面工作台。
+ [OUTPUT]: 小精灵原文暂存恢复说明；Android 连接管理嵌入现有手机设置，浏览器隐藏； 独立手机收件区与批量确认下载；实时草稿浮层、简洁任务卡、接续动作、首页和全屏的输入接收者标识，切换统一使用置顶应用栏； 小精灵完成后直接输入下一项，无独立新任务按钮；提供首页 Dock、原生多图文件选择与缩略图容器、触控板、草稿和 PiP/全屏工作台。
  [POS]: Web 唯一手机入口；只收集文本与手势，听写由手机输入法提供。
  [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -21,8 +21,10 @@
       })();
     </script>
     <link rel="stylesheet" href="/style.css?v=1.4.1" data-page-node-id="Jz2kc4OQFzuCz2I2aKNELB">
-    <link rel="stylesheet" href="/app-extras.css?v=1.3.0.14-native">
+    <link rel="stylesheet" href="/app-extras.css?v=1.3.0.15-recovery">
     <link rel="stylesheet" href="/phone-files.css?v=2">
+    <link rel="stylesheet" href="/workbench-notes.css?v=1">
+    <link rel="stylesheet" href="/workbench-overview.css?v=1">
     <link rel="stylesheet" href="/screen.css?v=3.1.1">
   </head>
   <body data-page-node-id="2eqrPm23J7ToUXDDq0CibO">
@@ -60,6 +62,7 @@
       </section>
 
       <div id="sprite-transcript" class="sprite-transcript" aria-live="polite" hidden></div>
+      <p id="sprite-recovery-note" class="sprite-recovery-note" hidden>发送前会在本机暂存原文以便断线查账；确认接收后清除该副本。刷新不会重发。</p>
       <section id="agent-panel" class="agent-panel" aria-label="小精灵当前任务" hidden>
         <div id="agent-status" class="agent-status" role="status"></div>
         <div id="agent-result" class="agent-result"></div>
@@ -106,6 +109,45 @@
           <button id="send" type="button" data-page-node-id="lFyNzZ6hu8yMEIr9gF4sTE">发送</button>
         </div>
         <p id="message" role="status" aria-live="polite" data-page-node-id="e6wlP1uFgkcWptXxGMIOmZ"></p>
+        <!-- THESIS: 显式保存与发给应用分开，回执决定成功。
+             OWN-WORLD: 延续经典蓝/米白、系统字体与 44px 操作区。
+             STORY: 写草稿，存随手记，断线查原请求，查看真实正文。
+             FIRST VIEWPORT: 输入框原有发送行下方的次级文字入口；小精灵选中时可见。
+             FORM: 既有 Operate 界面局部扩展，无新世界或随机结构。 -->
+        <section id="workbench-notes" class="workbench-notes" aria-label="工作台随手记" hidden>
+          <div class="workbench-note-actions">
+            <button id="workbench-note-save" type="button" disabled>存到工作台随手记</button>
+            <button id="workbench-note-recover" type="button">检查连接</button>
+            <button id="workbench-note-retry" type="button" hidden>重试原请求</button>
+            <button id="workbench-note-view" type="button" hidden>查看已存正文</button>
+          </div>
+          <p id="workbench-note-status" role="status" aria-live="polite"></p>
+          <details id="workbench-note-snapshot" hidden>
+            <summary>查看待确认的原文</summary>
+            <p>重试保存的是下面这段原文，不是当前输入框的草稿。</p>
+            <pre id="workbench-note-original" class="workbench-note-content"></pre>
+          </details>
+          <small>待确认正文暂存在这台手机，保存确认后清除副本。</small>
+          <pre id="workbench-note-content" class="workbench-note-content" hidden></pre>
+        </section>
+        <!-- THESIS: 只读查看工作台事实，不增加手机调度器。
+             OWN-WORLD: 沿用经典蓝/米白、系统字体、44px 操作与单列文字清单。
+             STORY: 主动展开，查看任务/本轮成果或显式记忆，按需刷新。
+             FIRST VIEWPORT: 随手记下方一行折叠入口，不挤占原发送行。
+             FORM: 既有 Operate 界面的局部扩展，无新视觉世界。 -->
+        <details id="workbench-overview" class="workbench-overview" hidden>
+          <summary>查看工作台任务与记忆</summary>
+          <small>只读 · 仅工作台身份，不含微信/飞书记忆；需机主单独授权。</small>
+          <div class="workbench-overview-actions">
+            <button type="button" data-workbench-view="tasks" aria-pressed="true">任务</button>
+            <button type="button" data-workbench-view="memories" aria-pressed="false">记忆与规则</button>
+            <button type="button" id="workbench-overview-refresh">刷新当前视图</button>
+          </div>
+          <p id="workbench-overview-status" role="status" aria-live="polite"></p>
+          <div id="workbench-overview-list"></div>
+          <button id="workbench-overview-more" type="button" hidden>查看更早任务</button>
+          <section id="workbench-overview-result" aria-label="本轮成果" tabindex="-1"></section>
+        </details>
       </section>
     </main>
 
@@ -206,7 +248,7 @@
       </div>
     </dialog>
     <script src="/device-info.js?v=2"></script>
-    <script src="/agent-client.js?v=2"></script>
+    <script src="/agent-client.js?v=4-durable-recovery"></script>
     <script src="/agent-panel.js?v=6-frontmost-handoff"></script>
     <script src="/app.js?v=3.0.34"></script>
     <script src="/orb-rings.js?v=1"></script>
@@ -214,11 +256,13 @@
     <script src="/orb-ball.js?v=1"></script>
     <script src="/orb-engine.js?v=1"></script>
     <script src="/orb-mobile.js?v=4"></script>
-    <script src="/recipients.js?v=6-frontmost-handoff"></script>
+    <script src="/recipients.js?v=7-recovery-note"></script>
     <script src="/pad.js?v=3.0.12"></script>
     <script src="/settings.js?v=3.2.0"></script>
     <script src="/compose-queue.js?v=3.0.17"></script>
     <script src="/compose.js?v=6-frontmost-handoff"></script>
+    <script src="/workbench-notes.js?v=1"></script>
+    <script src="/workbench-overview.js?v=1"></script>
     <script src="/sprite-report.js?v=4-live"></script>
     <script src="/screen-geometry.js?v=3.0.2"></script>
     <script src="/screen-gestures.js?v=3.0.12"></script>
