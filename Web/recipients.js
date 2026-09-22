@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 app.js 的目标/连接状态、compose.js 的草稿事务与 agent-panel.js 的任务反馈。
- * [OUTPUT]: 派单后默认只读跟随真实前台，手动回小精灵以当前前台为新基线； 重选小精灵显式恢复桌面反馈；提供实时输入浮层与原版动态球球生命周期与开心/等待/工作状态与接收者渲染、显式应用选择、置顶应用栏进入小精灵与只读前台跟随；启动沿用电脑前台。
+ * [INPUT]: 依赖 app.js 的目标/连接状态、compose.js 的草稿事务、agent-panel.js 的任务反馈及 workbench-notes/overview 的局部显示。
+ * [OUTPUT]: 随小精灵选中状态显示本机原文恢复说明；派单后默认只读跟随真实前台，手动回小精灵以当前前台为新基线； 重选小精灵显式恢复桌面反馈；提供实时输入浮层与原版动态球球生命周期与开心/等待/工作状态与接收者渲染、显式应用选择、置顶应用栏进入小精灵与只读前台跟随；启动沿用电脑前台。
  * [POS]: 手机接收者路由层；显式应用选择才激活电脑，进入小精灵和被动前台跟随不操作桌面；未发送草稿阻止被动换目标。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -69,6 +69,8 @@ function renderTargets() {
 
 // 表情只消费任务与草稿事实；选中柔光由 selected 独立控制。
 function syncSpriteExpression() {
+  const recoveryNote = document.getElementById('sprite-recovery-note');
+  if (recoveryNote) recoveryNote.hidden = selected !== SPRITE_ID;
   const transcript = document.getElementById('sprite-transcript');
   if (transcript) {
     transcript.textContent = typeof liveValue === 'function' && liveValue() || '';
@@ -100,6 +102,8 @@ function markSelected() {
   // 展示层用这个类型问句判断任务卡是否应出现；不让 agent-panel 反向猜 Dock DOM。
   window.pocketdeskIsSpriteSelected = () => selected === SPRITE_ID;
   window.pocketdeskAgentPanel?.render();
+  window.pocketdeskWorkbenchNotes?.render();
+  window.pocketdeskWorkbenchOverview?.render();
   // 没有目标时按钮置灰并明说：点了也不会有去向。
   const hasTarget = Boolean(front) || selected === FRONTMOST_ID || isSprite;
   sendEl.disabled = !hasTarget;

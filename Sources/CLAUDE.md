@@ -1,10 +1,24 @@
 # Sources/
+TaskStore 请求台账修复（2026-09-22）：tasks.json 的 storageVersion=2 将任务和 requestLedger 同次原子写入；旧 dedupe.json 仅迁移读取，漏索引从首次 user 消息重建，完整正文/网页绑定 SHA256 防前缀碰撞，补充后仍认首次请求。清理保留无正文墓碑；坏 JSON/未知版本/冲突索引拒绝新写，AgentHTTP 返回 503。首次写入升级格式，正式更新前备份，不能直接用旧二进制回写新版目录。
+WorkbenchBridge.readPath / WorkbenchBridgeHTTP: G1 与 G2 固定路径映射；严格手机 Bearer、同机用途凭证，机主只读授权完全由 Workbench 精确主体名单判定，不代理任意 URL/owner 或新任务控制。
 打开回执恢复：AgentRunner 单独跟踪打开工具的失败，同任务后续打开工具成功回执消除此前打开失败；没有成功回执仍失败，其他桌面操作或控制权失败不被打开成功覆盖。
 自然名称打开：AgentRunner.open_target 先解析本机应用，再查询 ChromeBookmarks；唯一书签直接在 Chrome 打开，多候选先询问。书签匹配忽略首尾空白并统一 Unicode/大小写，无需用户指定“Chrome 书签”。
 ChromeBookmarks.swift：实时读取 Chrome Default/Profile 配置文件书签树，保留名称、文件夹路径、地址和配置文件唯一 ID；search_bookmarks 按需检索，open_bookmark 重新核对 ID 后在 Chrome 打开 http/https/file 地址，打开回执依据 NSWorkspace 回调，不声称网页已加载。
 > L2 | 父级: ../CLAUDE.md
 
+手机恢复协议：AgentHTTP 的 GET /api/v1/tasks/identity 仍强制 Bearer，仅回完整配对 SHA256 日志域和协议版本，不返回凭据；AgentModels.json 输出 requestId 供回执核对。这个日志域不改变旧任务库的 prefix(8) 主体约定，也不宣称已实现独立手机身份迁移。
+
 成员清单
+
+Bridge 本机部署配置：WorkbenchBridge.loadLocal 读取 VoiceDeck/workbench-bridge.json，仅常规文件且其他用户无读写权限时准入；显式环境开关优先，可强制关闭。HTTP 逐请求加载，普通 App 重启后保留同机连接，凭据不放仓库或手机。
+
+执行领取与事件降级：TaskStore.beginExecution 在同一锁与原子快照内只允许 accepted → running，重复队列回调/已经放弃的任务不得再启动；TaskService 领取失败只记既有 ExecutionLog，不调用模型。事件追加采用可抛错 FileHandle API，事件失败不推翻已落盘快照。AgentHTTP 事件接口附 taskRevision，手机据快照修订补读，不能因缺事件卡住终态。
+
+WorkbenchBridge.swift: 默认关闭的同机 Workbench G1 客户端；canonical note.create、稳定请求/操作/调用编号、配对主体摘要、用途凭证、禁止重定向；超时只查账不回退本机执行。
+WorkbenchBridgeHTTP.swift: AgentHTTP 委托的显式手机笔记/查账/成果端点；含回环均要求手机 Bearer，内部身份来自 Auth，不接受手机指定设备/URL/凭证；未替换旧 TaskService。
+G1 手机静态入口：Server 的资源白名单登记 workbench-notes.js/css；前端只显式创建 note，不能借静态入口绕过 Bridge 鉴权。
+
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 
 ExecutionTrace.swift: 可观测性层——ExecutionOutcome（delivered 已观察到生效 / sent 已发出无法确认 / blocked 前置条件不满足 / failed 执行出错）与 ExecutionFeedback 回执、ExecutionRecord 与 ExecutionLog（NSLock 守护的进程内环形缓冲，最近 40 条），EnvironmentGate（辅助功能与会话状态门禁；本机验证使用 CGSSessionScreenIsLocked，锁屏或未知会话拒绝普通输入）。InputExecutor 与 Server 共写日志，/api/status 下发最近 30 条给控制台第 5 面板「最近动作」展示；写入与消费同进程但加锁，日志面板只读不重。
 ScreenCapture.swift: 按需显示器枚举与单帧 JPEG，用于 PiP 和持续画面失败后的降级，默认包含鼠标。
@@ -33,7 +47,7 @@ NetworkPeer.swift: 基于真实远端地址判断回环，控制与画面握手�
 小精灵（M1，仅只读能力）
 
 AgentModels.swift: 任务领域模型——TaskStatus（accepted/running/needsInput/succeeded/failed/**abandoned**/verifying）、TaskMessage、PageBinding、TaskUsage、AgentTask、TaskEvent。abandoned 是刻意的命名：M1 的 runtime 不支持真正取消，用户点「放弃」只表示手机不再等待，任务仍会在 Mac 上跑完，叫「已停止」就是谎报。PageBinding 的 tabId **可选**（自有 AX 拿不到标签页 ID），漂移校验以 URL + 标题为准。用量读不到时整体 unknown，不允许拿 0 冒充。
-TaskStore.swift: 任务与事件的唯一权威存储——`tasks.json`（原子整体写）+ `events.jsonl`（append-only，逐行解析跳过半行）+ `dedupe.json`（主体 + requestId 去重）。claim 是幂等接受：同键同内容回到同一任务，同键不同内容抛 conflict（绝不派第二个）。写失败必须抛出，静默吞掉会让手机以为任务接住了。schema 不认识就弃用并留 .bak，不猜着解析。目录与三个文件路径可替换，测试指向临时目录。
+TaskStore.swift: 任务与原请求台账同存 `tasks.json` 原子快照（storageVersion=2），`events.jsonl` 仍独立追加，旧 `dedupe.json` 仅迁移读取。claim 以主体/requestId 和完整首次输入 SHA256 幂等接收，后续补充不改原身份；清理任务保留墓碑，不能迟到重建。坏 JSON、未知版本、缺台账或写失败拒绝操作且保留原字节，不悄悄重置空库。测试目录可替换；升级前备份，旧程序不得回写新快照。
 TaskService.swift: 生命周期与状态机唯一决定处——submit/supplement/abandon/能力报告/当前网页绑定。串行一个活动任务；supplement 上限 5 轮、软超时 5 分钟（只提示）、硬超时 10 分钟；单条输入 16 KiB。abandon 不叫停止，回包里明确写「Mac 上已发出的这次调用可能仍会跑完」。
 AgentRunner.swift: 模型 ↔ 本地工具的循环，**工具执行权始终在 PocketDesk 侧**：模型发起网页、应用与飞书工具请求，本文件核验租约并本地执行后回传，模型不能直接操作电脑。工具集写死在代码里，不接受请求体自定义工具（防止模型给自己发工具）。最多 12 轮；读不到页面不判失败，把原因写进上下文让模型如实说明。
 PageReader.swift: BrowserAdapter 的自有实现，用 AX 读前台浏览器的 URL/标题/正文，**只做只读**——不点击、不填表、不执行脚本。节点/深度/字符三重预算，截断如实上报。M1 用它替代 tt-bridge：后者 CC BY-NC 许可与内置分发冲突且未实测；接口一致，替换实现不动 TaskService。

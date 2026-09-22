@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 JSONSerialization/JSONEncoder，消费 ModelConfigStore 与 ModelClient。
- * [OUTPUT]: 展示上报核验控制租约并绑定连接身份；建任务时传递控制会话以便执行核验；对外提供 AgentHTTP.handle——承接 /api/v1 下「本机管理类」端点：模型服务配置的读写与连通性实测。
+ * [OUTPUT]: 事件接口返回权威任务修订，缺事件也能触发快照补读；坏库返回 503；已鉴权 identity 返回完整配对摘要；展示上报核验控制租约，建任务传递控制会话；AgentHTTP.handle 承接 /api/v1 模型管理与任务接口。
  * [POS]: Sources 的 Agent 路由层；Server 只做一行委托，避免它继续膨胀越过 800 行红线。
  *        这些端点**只允许回环访问**（本机控制台），与手机侧的任务接口（M1 的 /api/v1/tasks/…）分开：
  *        任务接口面向配对手机、必须带 Bearer；本文件的管理端点面向本机浏览器，靠回环判定。
@@ -30,7 +30,7 @@ enum AgentHTTP {
     /// 任务类路径：**含回环在内**都要求 Bearer。回环豁免会让本机任意进程读到全部任务正文。
     /// 小精灵展示会话同权：观看者或失效租约不能改桌面展示。
     static func requiresBearer(_ path: String) -> Bool {
-        path.hasPrefix("/api/v1/tasks") || path.hasPrefix("/api/v1/sprite")
+        path.hasPrefix("/api/v1/tasks") || path.hasPrefix("/api/v1/sprite") || path.hasPrefix("/api/v1/workbench/")
             || path == "/api/v1/executors" || path == "/api/v1/context/page"
     }
 
@@ -39,6 +39,10 @@ enum AgentHTTP {
                        authorization: String?, query: String = "",
                        queue: DispatchQueue,
                        respond: @escaping (Int, [String: Any]) -> Void) -> Bool {
+        if path.hasPrefix("/api/v1/workbench/") {
+            WorkbenchBridgeHTTP.handle(method: method, path: path, body: body, authorization: authorization, respond: respond)
+            return true
+        }
         if requiresBearer(path) {
             handleTaskRoutes(method: method, path: path, body: body, query: query,
                              authorization: authorization, respond: respond)
@@ -209,7 +213,14 @@ enum AgentHTTP {
             return
         }
         let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+        if path.hasPrefix("/api/v1/tasks") {
+            do { try TaskStore.checkReadable() }
+            catch { respond(503, ["error": "任务存储无法可靠读取，请在电脑端核对版本与备份；未重新执行。"]); return }
+        }
         switch (method, path) {
+        case ("GET", "/api/v1/tasks/identity"):
+            // 仅给已鉴权手机不透明的日志分域；不暴露 token，不改变旧任务主体迁移规则。
+            respond(200, ["protocolVersion": 1, "journalScope": "pocketdesk:" + WorkbenchBridge.subject(Auth.token)])
         case ("GET", "/api/v1/executors"):
             respond(200, ["executors": TaskService.executors()])
         case ("GET", "/api/v1/context/page"):
@@ -369,11 +380,11 @@ enum AgentHTTP {
             respond(404, ["error": "找不到这个任务。"])
             return
         }
-        _ = task
         let after = Int(queryValue("after", in: query) ?? "") ?? 0
         let result = TaskStore.events(taskId: taskId, after: after)
         respond(200, ["events": result.events.map { $0.json() },
                       "needRefresh": result.needRefresh,
+                      "taskRevision": task.revision,
                       "latestSeq": TaskStore.latestSeq()])
     }
 

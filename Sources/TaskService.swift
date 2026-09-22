@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation，消费 TaskStore、AgentRunner、ModelConfigStore、PageReader。
- * [OUTPUT]: 保存结构化派单回执，未核实提交以 submitted 结束而非要求补充；提交幂等查账并保存执行控制会话；对外提供任务生命周期：submit/supplement/abandon/snapshot、当前网页绑定查询、执行器能力报告。
+ * [OUTPUT]: 执行先原子领取，存储失败不调用模型；结构化派单回执与 submitted 未核实终态；提交先按首次请求查账，再检查配置；提供 submit/supplement/abandon/snapshot、网页绑定与执行器报告。
  * [POS]: Sources 的 Agent 服务层：唯一决定任务状态如何流转的地方，HTTP 层不做状态判断。
  *        首版串行执行一个活动任务；飞书候选选择通过 needsInput 续接，状态里没有「已停止」这种会骗人的说法。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -59,12 +59,13 @@ enum TaskService {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw TaskServiceError.emptyText }
         guard trimmed.utf8.count <= maxInputBytes else { throw TaskServiceError.textTooLarge(limit: maxInputBytes) }
-        guard ModelConfigStore.load().isConfigured else { throw TaskServiceError.notConfigured }
+        try TaskStore.checkReadable()
         // 同一请求重试直接查账，不能重新排入执行队列。
-        if let existing = TaskStore.task(subject: subject, requestId: requestId) {
-            guard existing.text == trimmed && existing.context == context else { throw TaskServiceError.revisionMismatch }
-            return existing
+        if TaskStore.task(subject: subject, requestId: requestId) != nil {
+            // Store 按首次请求摘要核验；existing.text 可能已被后续补充更新。
+            return try TaskStore.claim(subject: subject, requestId: requestId, text: trimmed, context: context)
         }
+        guard ModelConfigStore.load().isConfigured else { throw TaskServiceError.notConfigured }
         if let blocking = blockingActiveTask(subject: subject) {
             throw TaskServiceError.busy(taskId: blocking.id)
         }
@@ -165,21 +166,20 @@ enum TaskService {
     private static func execute(taskId: String) {
         activeTaskId = taskId
         defer { if activeTaskId == taskId { activeTaskId = nil } }
-        guard var task = TaskStore.task(id: taskId) else { return }
+        let task: AgentTask
+        do {
+            guard let claimed = try TaskStore.beginExecution(id: taskId, now: Date().timeIntervalSince1970,
+                softTimeout: softTimeoutSeconds, hardTimeout: hardTimeoutSeconds) else { return }
+            task = claimed
+        } catch {
+            ExecutionLog.shared.append(kind: "agent", label: "任务未启动", outcome: .blocked,
+                detail: "无法保存执行状态；未调用模型或桌面工具，请在电脑端核对任务存储。")
+            return
+        }
         guard let config = Optional(ModelConfigStore.load()), config.isConfigured else {
             finish(task, status: .failed, error: TaskServiceError.notConfigured.localizedDescription)
             return
         }
-        let now = Date().timeIntervalSince1970
-        task.status = .running
-        task.revision += 1
-        task.updatedAt = now
-        task.softDeadline = now + softTimeoutSeconds
-        task.hardDeadline = now + hardTimeoutSeconds
-        try? TaskStore.save(task)
-        var started = TaskEvent(seq: 0, taskId: taskId, kind: .status, status: .running)
-        try? TaskStore.append(&started)
-
         // 硬超时由 URLSession 的单次超时兜底（AgentRunner 每轮 90s、最多 6 轮），
         // 这里不再起额外计时器：起一个又取消不掉的计时器等于制造假象。
         AgentRunner.run(config: config, task: task) { outcome in

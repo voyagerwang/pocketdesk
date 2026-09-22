@@ -1,0 +1,85 @@
+/*
+ * [INPUT]: 首页既有主题/间距/44px 控件令牌。
+ * [OUTPUT]: 可折叠只读清单、文本成果与清晰的任务/记忆分组。
+ * [POS]: G2 局部 Operate 扩展，不改变主发送行或其他控制通道。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+.workbench-overview {
+  margin-top: var(--s-3);
+  border-top: 1px solid var(--border-strong);
+  overflow-wrap: anywhere;
+}
+.workbench-overview[hidden], .workbench-overview [hidden] {
+  display: none;
+}
+.workbench-overview summary {
+  min-height: var(--control-size);
+  padding: var(--s-3) 0;
+  cursor: pointer;
+  color: var(--fg);
+  font-size: var(--text-md);
+}
+.workbench-overview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+.workbench-overview button {
+  min-height: var(--control-size);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-field);
+  background: var(--surface-2);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+.workbench-overview button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.workbench-overview button:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+.workbench-overview button:active:not(:disabled) {
+  background: var(--accent-soft);
+}
+.workbench-overview button:disabled {
+  color: var(--fg-muted);
+  cursor: default;
+}
+.workbench-overview :is(button, summary):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.workbench-overview h3 {
+  margin: var(--s-4) 0 var(--s-2);
+  font-size: var(--text-md);
+  color: var(--fg);
+}
+.workbench-overview p {
+  margin: var(--s-2) 0;
+  line-height: 1.6;
+  font-size: var(--text-md);
+  color: var(--fg);
+}
+.workbench-overview small {
+  display: block;
+  margin: var(--s-2) 0;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+.workbench-overview-item {
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--border);
+}
+.workbench-overview-content {
+  white-space: pre-wrap;
+  font: inherit;
+  line-height: 1.6;
+  margin: var(--s-3) 0;
+}
+#workbench-overview-status {
+  color: var(--fg-muted);
+}

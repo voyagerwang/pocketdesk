@@ -4,6 +4,8 @@
 职责：承接 Workbench 既有小精灵规划，定义 PocketDesk 的增量接入，不另立产品总方案或替换既有技术底座。事实先读基线，实施再读主架构和专项；历史研究不覆盖实施契约。
 
 成员清单
+
+deployment-manifest.md: 保留安装前基线和授权过程，追加当前 Mac 备份/配置/安装、真实两端 HTTP 闭环与重启查账证据；真机与模型验证分列，不含凭据正文。
 assistant-product-and-routing.md: 产品与路由补充，说明统一助手/双入口、工具发现、GUI 观察闭环与共享记忆；新增场景为规划，未改冻结 wire。
 current-state-and-integration-baseline.md: 事实入口，两端当前/目标调用图、S01–S22 校准、源码与七项隔离测试证据、部署拓扑未知项。
 pocketdesk-workbench-unified-assistant-architecture.md: 主架构 v0.3，职责权威、部署门禁、调用方向、身份、恢复与 G0–G4 迁移；继承 Workbench 技术裁决。

@@ -1,6 +1,6 @@
 /*
  * [INPUT]: 消费 style.css 的基础令牌与首页设置、历史、多图预览、快捷键节点。
- * [OUTPUT]: 提供小精灵实时转写浮层、首页辅助控件、横向可滚动的定尺寸多图缩略条及米白主题覆盖。
+ * [OUTPUT]: 提供小精灵原文暂存提示、实时转写浮层、首页辅助控件、横向可滚动的定尺寸多图缩略条及米白主题覆盖。
  * [POS]: Web 首页基础样式的后置补充；全屏布局另由 screen.css 提供。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -781,6 +781,12 @@ main.pad-mode .pad-title {
   border: 1px solid var(--border);
   font-size: 13px;
   color: var(--fg-muted);
+}
+.sprite-recovery-note {
+  margin: var(--s-1) 0 var(--s-4);
+  color: var(--fg-muted);
+  font-size: var(--text-md);
+  line-height: 1.5;
 }
 .agent-page-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #agent-page-label { display: flex; gap: 4px; min-width: 0; }

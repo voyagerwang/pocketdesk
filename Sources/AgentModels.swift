@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Foundation；不依赖 AX、Network 或任何运行时——本文件只描述任务事实的形状。
  * [OUTPUT]: 结构化 AppDispatchReceipt 与提交未核实终态 submitted；可选派单接续目标、飞书个人/群候选及通用操作去重/确认记录； 任务保存控制会话用于执行租约核验；对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
- *           AgentTask、TaskEvent，以及 AgentTask 与字典互转的 json/alternative 方法。
+ *           AgentTask、TaskEvent，以及 AgentTask 与字典互转的 json/alternative 方法；HTTP 快照保留原 requestId 供客户端核对回执。
  * [POS]: Sources 的 Agent 领域模型层；HTTP 层只做字典与它的互转，任务语义不散落到路由里。
  *        与系统注入解耦：本文件可单独编译，供 tests 直接引用。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -291,6 +291,7 @@ struct AgentTask: Codable, Equatable {
     func json() -> [String: Any] {
         var dict: [String: Any] = [
             "id": id,
+            "requestId": requestId,
             "status": status.rawValue,
             "statusText": status.displayName,
             "revision": revision,
