@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation；不依赖 AX、Network 或任何运行时——本文件只描述任务事实的形状。
- * [OUTPUT]: 结构化 AppDispatchReceipt 与提交未核实终态 submitted；可选派单接续目标、飞书个人/群候选及通用操作去重/确认记录； 任务保存控制会话用于执行租约核验；对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
+ * [OUTPUT]: 打开工具接收事实 openedApplication 随任务持久化与下发； 结构化 AppDispatchReceipt 与提交未核实终态 submitted；可选派单接续目标、飞书个人/群候选及通用操作去重/确认记录； 任务保存控制会话用于执行租约核验；对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
  *           AgentTask、TaskEvent，以及 AgentTask 与字典互转的 json/alternative 方法；HTTP 快照保留原 requestId 供客户端核对回执。
  * [POS]: Sources 的 Agent 领域模型层；HTTP 层只做字典与它的互转，任务语义不散落到路由里。
  *        与系统注入解耦：本文件可单独编译，供 tests 直接引用。
@@ -241,6 +241,8 @@ struct AgentTask: Codable, Equatable {
     var handoffTargetId: String?
     var handoffTargetName: String?
     var handoffRequested: Bool?
+    /// 打开工具已收到系统接收回执；手机在任务成功后只读跟随真实前台。
+    var openedApplication: Bool?
     var appDispatchReceipt: AppDispatchReceipt?
 
     init(schemaVersion: Int = AgentTask.currentSchemaVersion,
@@ -312,6 +314,7 @@ struct AgentTask: Codable, Equatable {
         if let handoffTargetId { dict["handoffTargetId"] = handoffTargetId }
         if let handoffTargetName { dict["handoffTargetName"] = handoffTargetName }
         if let handoffRequested { dict["handoffRequested"] = handoffRequested }
+        if let openedApplication { dict["openedApplication"] = openedApplication }
         if let delivery = feishuDelivery, delivery.messageId != nil { dict["deliveryRecipient"] = delivery.recipient }
         if let result { dict["result"] = result }
         if let error { dict["error"] = error }

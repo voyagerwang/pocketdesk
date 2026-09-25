@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 消费浮窗、8 个缩放柄与移动结束回调，依赖 Pointer Events/localStorage。
+ * [INPUT]: 消费浮窗、顶部拖动把手、8 个缩放柄与移动结束回调，依赖 Pointer Events/localStorage。
  * [OUTPUT]: 提供 ScreenPip 的位置恢复、拖动缩放、夹取与手势取消。
- * [POS]: Web 的浮窗几何边界；不处理全屏画面手势，拖动尾部不穿透为远端点击。
+ * [POS]: Web 的浮窗几何边界；画面交给共用 ScreenGestures，窗口仅由把手/缩放柄操作，拖动尾部不穿透为远端点击。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 class ScreenPip {
@@ -13,11 +13,12 @@ class ScreenPip {
     window.addEventListener('pointermove', e => this.move(e));
     window.addEventListener('pointerup', e => this.end(e));
     window.addEventListener('pointercancel', () => this.cancel());
+    panel.querySelector('#screen-pip-move').addEventListener('keydown', e => this.nudge(e));
   }
   active() { return this.panel.open && this.panel.classList.contains('pip'); }
   clamp() {
-    const b = this.box;
-    b.w = Math.max(160, Math.min(b.w, innerWidth - 16, (innerHeight - 16) * 16/9)); b.h = b.w * 9/16;
+    const b = this.box, toolbar = parseFloat(getComputedStyle(this.panel).getPropertyValue('--pip-toolbar-height')) || 44;
+    b.w = Math.max(160, Math.min(b.w, innerWidth - 16, (innerHeight - toolbar - 16) * 16/9)); b.h = b.w * 9/16 + toolbar;
     b.x = Math.max(8, Math.min(b.x, innerWidth - b.w - 8)); b.y = Math.max(8, Math.min(b.y, innerHeight - b.h - 8));
   }
   paint() {
@@ -26,8 +27,11 @@ class ScreenPip {
     Object.assign(this.panel.style, { left: `${this.box.x}px`, top: `${this.box.y}px`, width: `${this.box.w}px`, height: `${this.box.h}px`, transform: '' });
   }
   down(e) {
-    if (!this.active() || this.drag || e.button > 0 || e.target.closest('button,select,textarea')) return;
+    if (!this.active() || this.drag || e.button > 0) return;
     const handle = e.target.closest('.screen-resize');
+    if (!handle && !e.target.closest('#screen-pip-move')) return;
+    e.preventDefault();
+    this.panel.setPointerCapture(e.pointerId);
     this.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, box: { ...this.box }, edge: handle?.dataset.edge || '', moved: false };
   }
   move(e) {
@@ -55,6 +59,16 @@ class ScreenPip {
     this.paint(); this.changed();
     try { localStorage.setItem('voicedeck.pip', JSON.stringify(this.box)); } catch {}
   }
-  cancel() { this.drag = null; this.suppressClick = true; this.paint(); setTimeout(() => { this.suppressClick = false; }, 0); }
+  nudge(e) {
+    if (!this.active()) return;
+    const direction = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if (!direction) return;
+    e.preventDefault();
+    const step = e.shiftKey ? 24 : 8;
+    this.box.x += direction[0] * step; this.box.y += direction[1] * step;
+    this.paint(); this.changed();
+    try { localStorage.setItem('voicedeck.pip', JSON.stringify(this.box)); } catch {}
+  }
+  cancel() { if (this.drag) { try { this.panel.releasePointerCapture(this.drag.id); } catch {} } this.drag = null; this.suppressClick = true; this.paint(); setTimeout(() => { this.suppressClick = false; }, 0); }
 }
 globalThis.ScreenPip = ScreenPip;

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 PhoneFileAgent 文件检索与多文件发送、模型客户端、页面读取、ChromeBookmarks、TaskStore、飞书命令发现/通用执行和组装处注入的控制租约及应用派单。
- * [OUTPUT]: 提供实时常用菜单能力发现、窗口布局及固定桌面动作协议与持久去重；锁屏工具复用系统执行回执直接结束本轮；派单按结构化已接收/未核实/未执行回执直接结束本轮，传递 new/current 会话模式并保存用户明确的切换意图； 对外提供 AgentRunner.run——跑完一次「模型 ↔ 本地工具」循环，产出回答、用量与错误分类。
+ * [OUTPUT]: 打开工具成功后记录前台跟随意图，网页加载与输入聚焦仍须独立核验； 提供实时常用菜单能力发现、窗口布局及固定桌面动作协议与持久去重；锁屏工具复用系统执行回执直接结束本轮；派单按结构化已接收/未核实/未执行回执直接结束本轮，传递 new/current 会话模式并保存用户明确的切换意图； 对外提供 AgentRunner.run——跑完一次「模型 ↔ 本地工具」循环，产出回答、用量与错误分类。
  * [POS]: Sources 的 Agent 执行层：**工具永远由 PocketDesk 本地执行**，模型只能发起工具请求，
  *        拿到的结果由本文件回传，模型不能直接操作电脑（方案 §8.1）。
  *        明确打开意图直接执行，Agent 派单由共享输入执行器完成；新调用不创建二次确认票据。
@@ -249,6 +249,11 @@ enum AgentRunner {
                             else { failure = payload }
                         } else if opening && payload.hasPrefix("已向") {
                             openFailure = nil
+                            if var current = TaskStore.task(id: taskId) {
+                                current.openedApplication = true
+                                do { try TaskStore.save(current) }
+                                catch { failure = "打开请求已提交，但接续状态保存失败。" }
+                            }
                         }
                         history.append(["role": "tool", "tool_call_id": callId, "content": payload])
                         next(index + 1)

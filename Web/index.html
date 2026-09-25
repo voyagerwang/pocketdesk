@@ -1,6 +1,6 @@
 <!--
  [INPUT]: 依赖 app/pad/compose 的首页、多图批次和输入能力、workbench-notes/overview 的显式业务入口，以及 screen 系列模块的画面工作台。
- [OUTPUT]: 小精灵原文暂存恢复说明；Android 连接管理嵌入现有手机设置，浏览器隐藏； 独立手机收件区与批量确认下载；实时草稿浮层、简洁任务卡、接续动作、首页和全屏的输入接收者标识，切换统一使用置顶应用栏； 小精灵完成后直接输入下一项，无独立新任务按钮；提供首页 Dock、原生多图文件选择与缩略图容器、触控板、草稿和 PiP/全屏工作台。
+ [OUTPUT]: 小窗顶部把手独立移动窗口，更多菜单复用全屏指针设置； 小精灵原文暂存恢复说明；Android 连接管理嵌入现有手机设置，浏览器隐藏； 独立手机收件区与批量确认下载；实时草稿浮层、简洁任务卡、接续动作、首页和全屏的输入接收者标识，切换统一使用置顶应用栏； 小精灵完成后直接输入下一项，无独立新任务按钮；提供首页 Dock、原生多图文件选择与缩略图容器、触控板、草稿和 PiP/全屏工作台。
  [POS]: Web 唯一手机入口；只收集文本与手势，听写由手机输入法提供。
  [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 -->
@@ -25,7 +25,7 @@
     <link rel="stylesheet" href="/phone-files.css?v=2">
     <link rel="stylesheet" href="/workbench-notes.css?v=1">
     <link rel="stylesheet" href="/workbench-overview.css?v=1">
-    <link rel="stylesheet" href="/screen.css?v=3.1.1">
+    <link rel="stylesheet" href="/screen.css?v=9-pip-control">
   </head>
   <body data-page-node-id="2eqrPm23J7ToUXDDq0CibO">
     <main data-page-node-id="vqfJmN7gi1ptl0qmDEQ4Iv">
@@ -164,6 +164,8 @@
       </div>
       <nav id="screen-pip-displays" class="screen-pip-displays" aria-label="小窗显示器切换"></nav>
       <div id="screen-pip-tools" class="screen-pip-tools">
+        <button id="screen-pip-move" type="button" aria-label="拖动小窗，方向键微调位置" title="拖动小窗"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h14M5 15h14"/></svg></button>
+        <button id="screen-pip-more" type="button" aria-label="小窗操作设置" title="操作设置"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
         <button id="screen-fullscreen" type="button" aria-label="进入全屏" title="进入全屏"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg></button>
         <button id="screen-pip-close" type="button" aria-label="关闭画面" title="关闭画面"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
@@ -249,26 +251,26 @@
     </dialog>
     <script src="/device-info.js?v=2"></script>
     <script src="/agent-client.js?v=4-durable-recovery"></script>
-    <script src="/agent-panel.js?v=6-frontmost-handoff"></script>
+    <script src="/agent-panel.js?v=8-open-input"></script>
     <script src="/app.js?v=3.0.34"></script>
     <script src="/orb-rings.js?v=1"></script>
     <script src="/orb-emotions.js?v=1"></script>
     <script src="/orb-ball.js?v=1"></script>
     <script src="/orb-engine.js?v=1"></script>
     <script src="/orb-mobile.js?v=4"></script>
-    <script src="/recipients.js?v=7-recovery-note"></script>
+    <script src="/recipients.js?v=8-open-input"></script>
     <script src="/pad.js?v=3.0.12"></script>
     <script src="/settings.js?v=3.2.0"></script>
     <script src="/compose-queue.js?v=3.0.17"></script>
-    <script src="/compose.js?v=6-frontmost-handoff"></script>
+    <script src="/compose.js?v=8-open-input"></script>
     <script src="/workbench-notes.js?v=1"></script>
     <script src="/workbench-overview.js?v=1"></script>
     <script src="/sprite-report.js?v=4-live"></script>
     <script src="/screen-geometry.js?v=3.0.2"></script>
     <script src="/screen-gestures.js?v=3.0.12"></script>
-    <script src="/screen-pip.js?v=3.0.0"></script>
+    <script src="/screen-pip.js?v=9-pip-control"></script>
     <script src="/screen-frames.js?v=3.1.6"></script>
-    <script src="/screen.js?v=3.1.6"></script>
+    <script src="/screen.js?v=9-pip-control"></script>
     <script src="/motion-recognizer.js?v=3.1.7"></script>
     <script src="/motion-send.js?v=3.1.8-native"></script>
     <script>boot();</script>
