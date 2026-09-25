@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 app.js 的草稿/目标/历史与多图处理门闩、ComposeQueue、原生 IME、全屏输入区。
- * [OUTPUT]: 小精灵提交锁释放后再呈现接续回执，防止快速派单漏掉自动跟随； 展示回执绑定本次提交票据；接收者观察到前台身份变化时允许强制作废旧绑定（含未配置应用间切换）； 小精灵任务确认接收后写入统一发送历史，历史保存失败不影响发送收尾；小精灵甩送独立于桌面同步冻结，但复用发送锁；动作采集可略过输入静默等待，实际提交仍强制稳定门禁； 小精灵终态后直接派发新任务、待补充时续接；更新草稿驱动的球球表情；提供可见输入栏、手机全文同步与图文提交；发送等待图片处理、补传完整批次并冻结附件编辑，失败保留草稿及附件；用户显式切换目标时保留内容并开启隔离的新草稿轮次。
+ * [OUTPUT]: 全屏首字才建立上下文，展开键盘不换发已有绑定，迟到上下文不得污染新草稿； 小精灵提交锁释放后再呈现接续回执，防止快速派单漏掉自动跟随； 展示回执绑定本次提交票据；接收者观察到前台身份变化时允许强制作废旧绑定（含未配置应用间切换）； 小精灵任务确认接收后写入统一发送历史，历史保存失败不影响发送收尾；小精灵甩送独立于桌面同步冻结，但复用发送锁；动作采集可略过输入静默等待，实际提交仍强制稳定门禁； 小精灵终态后直接派发新任务、待补充时续接；更新草稿驱动的球球表情；提供可见输入栏、手机全文同步与图文提交；发送等待图片处理、补传完整批次并冻结附件编辑，失败保留草稿及附件；用户显式切换目标时保留内容并开启隔离的新草稿轮次。
  *           另提供 clearDraft（注册为 window.pocketdeskClearDraft）：发带 clear:true 的幂等请求，
  *           **先让电脑侧确认删净、成功后才清手机**——反过来的话一次没生效的删除就吃掉了用户草稿；
  *           文档类目标的豁免原因由服务端原样带回提示。
@@ -68,6 +68,7 @@ function beginDraftForExplicitTarget(targetId, force = false) {
   liveState = 'active';
   inputContext = null;
   contextPromise = null;
+  contextFailedBeforeWrite = false;
   paintLive('off');
   return true;
 }
@@ -95,11 +96,14 @@ function paintLive(state, note) {
 
 const fullComposeOpen = () => !document.querySelector('#screen-compose').hidden;
 let inputContext = null;
+let contextFailedBeforeWrite = false;
 let contextPromise = null;
 function makeLiveQueue() {
   return new ComposeQueue(async command => {
     if (command.contextPromise) {
-      const binding = await command.contextPromise;
+      let binding;
+      try { binding = await command.contextPromise; }
+      catch (error) { error.beforeWrite = true; throw error; }
       command = { ...command, context: binding.context, session: binding.session };
     }
     if (window.pocketdeskScreenCanInput && command.contextPromise && !window.pocketdeskScreenCanInput()) throw new Error('画面或控制尚未就绪，草稿已保留');
@@ -123,6 +127,8 @@ let liveQueue = makeLiveQueue();
 function pushLive(text, submit = false, withImage = false, retry = false, reconcileOnFailure = false) {
   if (selected === SPRITE_ID) return Promise.resolve(null); // AI 草稿绝不进入桌面输入队列
   liveTarget ??= selected || FRONTMOST_ID;
+  // 首次写字才捕获输入框；展开键盘时页面可能尚未加载或用户尚未点进输入框。
+  if (fullComposeOpen() && !liveMode && !contextPromise) refreshInputContext();
   const command = { draftId: liveDraftId, text, submit, retry, reconcileOnFailure, usePendingImage: withImage, imageBatchId: withImage && pendingImages.length ? imageBatchId : undefined, imageIds: withImage && pendingImages.length ? pendingImages.map(item => item.id) : undefined, targetId: liveTarget, contextPromise: fullComposeOpen() ? contextPromise : null };
   const task = liveQueue.push(command).then(result => {
     if (command.draftId !== liveDraftId) return result;
@@ -134,6 +140,7 @@ function pushLive(text, submit = false, withImage = false, retry = false, reconc
     paintLive(liveMode === 'deferred' ? 'off' : 'on', submit ? '提交动作已发出' : (liveMode === 'selection' ? '实时输入已发出' : '已同步')); return result;
   }).catch(error => {
     if (command.draftId !== liveDraftId || error.name === 'ComposeCancelledError') throw error;
+    contextFailedBeforeWrite = error.beforeWrite === true && !liveMode;
     livePaused = true;
     liveState = error.state || 'interrupted';
     liveFailure = error.message;
@@ -202,7 +209,16 @@ async function probeLive() {
   if (!livePaused || liveProbing || submittingDraft || !selected) return;
   liveProbing = true;
   recoveryAttempts += 1;
+  const recoveringDraft = liveDraftId;
   try {
+    // 上下文请求被拒绝时尚未发出 live-input；只重读焦点，不把未知写入当成首轮。
+    if (contextFailedBeforeWrite) {
+      const binding = await refreshInputContext();
+      if (recoveringDraft !== liveDraftId) return;
+      if (binding.scope !== 'element') { scheduleProbe(RECOVERY_INTERVAL); return; }
+      contextFailedBeforeWrite = false; livePaused = false; liveFailure = ''; liveState = 'active';
+      stopRecovery(); scheduleLive(); return;
+    }
     const session = window.pocketdeskControlInfo?.().session || '';
     const response = await fetch('/api/live-input', {
       method: 'POST', headers: authHeaders(),
@@ -212,8 +228,10 @@ async function probeLive() {
       }),
     });
     const result = await response.json();
+    if (recoveringDraft !== liveDraftId) return;
     if (!response.ok) { scheduleProbe(RECOVERY_INTERVAL); return; }
     if (result.state === 'recoverable') {
+      if (result.mode === 'unknown' && !liveMode) { inputContext = null; contextPromise = null; }
       livePaused = false; liveFailure = ''; liveState = 'active';
       stopRecovery();
       paintLive('on', '已恢复同步');
@@ -226,8 +244,9 @@ async function probeLive() {
       scheduleProbe(RECOVERY_INTERVAL);
     }
   } catch {
-    scheduleProbe(RECOVERY_INTERVAL);
+    if (recoveringDraft === liveDraftId) scheduleProbe(RECOVERY_INTERVAL);
   } finally {
+    if (recoveringDraft !== liveDraftId) return;
     liveProbing = false;
     // 收尾后补排：恢复成功时 stopRecovery 已经把 pending 清空，这里不会误续期。
     if (recoveryPending) {
@@ -526,6 +545,7 @@ const CONTEXT_RETRY_DELAY = 250;
 // AX 可能还只暴露到容器（scope=application）。这里给一个**有上限**的短暂等待，让下一轮首字
 // 能自动绑定上——而不是立刻要求用户去点电脑输入框。等待到上限才提示，绝不无休止轮询。
 function refreshInputContext() {
+  const draftId = liveDraftId;
   const session = window.pocketdeskControlInfo().session;
   const attempt = remaining => fetch('/api/input-context', {
     headers: { ...authHeaders(), 'X-PocketDesk-Session': session }, cache: 'no-store',
@@ -536,6 +556,7 @@ function refreshInputContext() {
       await new Promise(resolve => setTimeout(resolve, CONTEXT_RETRY_DELAY));
       return attempt(remaining - 1);
     }
+    if (draftId !== liveDraftId) { const error = new Error('输入目标已切换'); error.name = 'ComposeCancelledError'; throw error; }
     context.session = session;
     inputContext = context;
     kbProxy.setAttribute('aria-label', '输入到：' + context.name);
@@ -543,7 +564,7 @@ function refreshInputContext() {
     return context;
   });
   contextPromise = attempt(CONTEXT_RETRY_LIMIT);
-  contextPromise.catch(error => paintLive('error', error.message));
+  contextPromise.catch(error => { if (draftId === liveDraftId) paintLive('error', error.message); });
   return contextPromise;
 }
 
@@ -555,7 +576,7 @@ function showKeyboard() {
   const shouldSyncExistingDraft = Boolean(textEl.value);
   paintLive('off');
   if (!kbActive) liveQueue.clear();
-  refreshInputContext();
+  // 已有草稿继续沿用原绑定，收起再展开不能换发令牌。
 
   if (kbSuspect || (document.activeElement === kbProxy && !kbGotInput)) {
     recreateKbProxy();
@@ -695,6 +716,7 @@ function clearCompose({ preserveImages = false } = {}) {
   const keyboardFocused = document.activeElement === kbProxy;
   stopRecovery();
   liveDraftId = newDraftId(); liveMode = null; liveTarget = null; livePaused = false;
+  inputContext = null; contextPromise = null; contextFailedBeforeWrite = false;
   liveFailure = '';
   liveState = 'active';
   textEl.value = '';

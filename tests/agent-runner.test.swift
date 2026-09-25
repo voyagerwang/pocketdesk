@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 注入 AgentRunner 的模型/打开/派单替身，TaskStore 使用临时目录；包含 WorkBuddy AX 状态与占位文本的兼容性样本。
- * [OUTPUT]: 验证派单回执直接收尾、待核对不报失败及同批后续调用不执行； 覆盖桌面动作参数/去重、输入选区与焦点保护；覆盖锁屏工具发现、执行回执、无效参数、租约与同批去重；验证直接执行无确认、工具串行、租约失效拦截、派单失败不冒充成功、目标匹配（含 Codex 包身份别名和歧义拒绝）、新建页面证据、正文深链编码及并发派单原子去重。
+ * [OUTPUT]: 打开工具成功才持久化前台跟随标记； 验证派单回执直接收尾、待核对不报失败及同批后续调用不执行； 覆盖桌面动作参数/去重、输入选区与焦点保护；覆盖锁屏工具发现、执行回执、无效参数、租约与同批去重；验证直接执行无确认、工具串行、租约失效拦截、派单失败不冒充成功、目标匹配（含 Codex 包身份别名和歧义拒绝）、新建页面证据、正文深链编码及并发派单原子去重。
  * [POS]: Agent 工具循环的无桌面副作用回归，不联网、不打开真实应用、不发消息。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -108,6 +108,10 @@ import Foundation
             }
             assert(TaskStore.task(id: task.id)?.status == .running, "工具执行不再挂起任务等确认")
             assert(pageReads == 0, "打开应用不得预读无关网页")
+            if ["open_page", "open_app", "open_target", "open_bookmark"].contains(tool) {
+                let opened = TaskStore.task(id: task.id)?.json()["openedApplication"] as? Bool == true
+                assert(opened == (allowed && outcome?.error == nil), "只认打开工具成功回执，不从模型结论生成前台跟随")
+            }
             if tool == "lock_computer", allowed, arguments == "{}" {
                 assert(turns == 1, "锁屏后直接按回执结束，不再请求模型编造结果")
             }

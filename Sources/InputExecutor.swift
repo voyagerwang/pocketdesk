@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard、ApplicationServices 的 AXUIElement、CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的命令词汇、ImageBatchStore 的有界多图资源、ImagePastePolicy 的目标专属时序、ExecutionTrace 的门禁与结果分级、TargetStore/InputFocus/InputBinding/LiveDraft 的目标和草稿事务。
- * [OUTPUT]: 桌面动作在入队前绑定窗口身份，菜单发现和布局复用串行队列； 桌面 Agent 动作复用串行队列和按键原语；快捷操作支持队列内租约核验，锁屏通过系统状态确认才报成功；对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、显式整段清空（幂等、可从冻结态破冰；文档类目标只清手机侧）、统一的 UU 文字剪贴板时序、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点；白板等无输入框画布退化为纯粘贴序列并用方向键分离相邻图片）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
+ * [OUTPUT]: 复用首轮已验证的上下文，仅已证明尚未写入的草稿允许点框后首次恢复； 桌面动作在入队前绑定窗口身份，菜单发现和布局复用串行队列； 桌面 Agent 动作复用串行队列和按键原语；快捷操作支持队列内租约核验，锁屏通过系统状态确认才报成功；对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、显式整段清空（幂等、可从冻结态破冰；文档类目标只清手机侧）、统一的 UU 文字剪贴板时序、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点；白板等无输入框画布退化为纯粘贴序列并用方向键分离相邻图片）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/live-input、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
  * [NOTES]: 删除键经 postDeleteKey 发送（不携带 DEL 字符），避免 Chromium 把 Backspace 当成 Delete 键；clearScopeAllowsComputer 不再按进程白名单一刀切拦掉聊天类应用（飞书/钉钉等同进程文档与消息无法从 bundle 区分），改由 focusedInDocument 按需保护真实文档正文；frontmostMatches/preferredFrontApp 以键盘焦点归属（focusedApplicationPID）为准、窗口层序只作回退——半激活态（窗口在最上、活跃应用是别人，实测 Electron/飞书）按层序判会假通过或误报"不在前台"；verifyActivation 轮询期内每两拍补发一次激活；变更时更新此头部，然后检查 CLAUDE.md
@@ -237,6 +237,8 @@ final class InputExecutor {
     }
 
     /* ---------- 实时草稿：整值或选区替换；UU 特殊通道才暂存 ---------- */
+    // 仅记录本进程明确尚未进入写入器的首轮请求；失忆或已写入的草稿绝不按首轮恢复。
+    private var unstartedDrafts: [String: (target: String, pid: pid_t)] = [:]
     private var liveDraft: LiveDraft?
     // 当前轮次的写入器。**必须可替换**：清空之后要重新捕获焦点控件并重建基线——旧元素在
     // Electron 重建编辑器、或被外部（快捷键/应用自身）清空之后，可能已不再代表那个输入框。
@@ -393,6 +395,10 @@ final class InputExecutor {
             throw LiveDraftFailure(message: "目标应用已不在前台，草稿已保留；切回它就会自动继续。",
                                    state: .interrupted)
         }
+        if liveDraft?.id != id, command.expectedMode == nil {
+            if unstartedDrafts.count >= 40 { unstartedDrafts.removeAll() }
+            unstartedDrafts[id] = (target, front.processIdentifier)
+        }
         let context: String
         var resumeAtCurrentFocus = false
         if let draft = liveDraft, draft.id == id, command.retry == true, command.submit == true,
@@ -409,6 +415,9 @@ final class InputExecutor {
             // 同一轮只验证原绑定，不能重新探测并换发令牌。空框开始时 AX 可能只识别到
             // 应用，首字落入后才暴露编辑元素；能力提升不代表用户切换了输入位置。
             context = draft.context
+        } else if let requested = command.context, InputBinding.shared.validate(requested) {
+            // 手机已经绑定的输入框直接复用；重新 establish 会因 Chromium AX 刷新换发令牌。
+            context = requested
         } else {
             context = try establishContext(imagesPending: imageSubmit(command))
         }
@@ -424,6 +433,7 @@ final class InputExecutor {
                 throw LiveDraftFailure(message: "同步会话已失效，请检查电脑已有内容；手机草稿已保留。",
                                        state: .needsUserFocus)
             }
+            unstartedDrafts.removeValue(forKey: id)
             liveWriter = makeLiveWriter(pid: front.processIdentifier, context: context)
             liveDraft = LiveDraft(id: id, context: context, target: target, editor: AXDraftEditor.capture(front),
                 // 闭包经 self.liveWriter 取用"当前"写入器：清空会换掉它，闭包不能抓旧实例不放。
@@ -606,7 +616,15 @@ final class InputExecutor {
                                         mode: done.receipt.mode, committed: true,
                                         state: DraftState.committed.rawValue, note: "本轮已提交，请开始新的草稿。")
             }
-            let note = "请在电脑上点一下原输入框即可继续；手机文字已保留。"
+            if let pending = unstartedDrafts[id], pending.target == (command.targetId ?? Self.frontmostPseudoId),
+               pending.target == Self.frontmostPseudoId || frontmostMatches(targetId: pending.target),
+               let front = preferredFrontApp(), front.processIdentifier == pending.pid,
+               InputFocus.probeFocus(pid: front.processIdentifier).verdict == .editable {
+                let note = "输入框已就绪，即将开始同步。"
+                return LiveInputReceipt(feedback: .init(outcome: .buffered, detail: note), mode: "unknown",
+                                        committed: false, state: DraftState.recoverable.rawValue, note: note)
+            }
+            let note = "尚未绑定输入框；请点一下电脑输入框，无法恢复时在手机重选目标应用。"
             return LiveInputReceipt(feedback: .init(outcome: .buffered, detail: note), mode: "unknown",
                                     committed: false, state: DraftState.needsUserFocus.rawValue, note: note)
         }

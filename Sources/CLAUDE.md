@@ -164,3 +164,5 @@ ConsoleFileUpload.swift: 控制台拖放的分块上传会话；单块6MiB、会
 经典钥匙串后台操作通过 SecKeychainSetUserInteractionAllowed 禁止系统弹窗，各操作串行保护并恢复进程开关；本机网页的 keychain-authorize 在已解锁状态允许用户授权，随后用非交互读取检查密码和设备密钥，后台不等待该弹窗、不改ACL、不自动重建不可读身份。
 
 UnlockNativeHTTP保留内存中最近一次授权/执行失败与结果的阶段、时间、错误、说明；ConsoleActions仅向本机同源控制台展示，不保存密码、签名或挑战，不自动重试。
+
+AgentModels/AgentRunner：打开工具收到成功回执后持久化 openedApplication，任务成功时手机可补一次真实前台跟随；InputExecutor 复用有效上下文，仅记录尚未创建写入器的首轮失败用于只读恢复，已写入/未知草稿仍核验原位置。

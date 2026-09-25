@@ -1,6 +1,6 @@
 """
 [INPUT]: 依赖 Playwright、Pillow 与本地 Web 文件，以模拟 HTTP/WS 隔离真实桌面。
-[OUTPUT]: 用合成配对与 identity 回执验证真实提交入口，核验三宽度暂存说明及切换隐藏；验证默认派单只读跟随、手机接收者一致、手动回小精灵及同前台不抢回； 验证选择与草稿进入桌面展示上报链路；验证柔光选中、主题无框与减少动态效果；另验证启动前台跟随、草稿/IME/提交保护、置顶应用栏选择及首页/全屏无冗余切换按钮； 验证小精灵甩送入口、连续任务、简短呈现、接续切换与迟到回执保护；发送历史覆盖成功、拒绝及存储失败。
+[OUTPUT]: 覆盖同前台打开网页接续及首字进入桌面输入； 用合成配对与 identity 回执验证真实提交入口，核验三宽度暂存说明及切换隐藏；验证默认派单只读跟随、手机接收者一致、手动回小精灵及同前台不抢回； 验证选择与草稿进入桌面展示上报链路；验证柔光选中、主题无框与减少动态效果；另验证启动前台跟随、草稿/IME/提交保护、置顶应用栏选择及首页/全屏无冗余切换按钮； 验证小精灵甩送入口、连续任务、简短呈现、接续切换与迟到回执保护；发送历史覆盖成功、拒绝及存储失败。
 [POS]: tests 的浏览器集成验证；手机软键盘和实际捕获性能仍需真机验证。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -23,6 +23,7 @@ with sync_playwright() as p:
     errors, writes, key_writes = [], [], []
     sprite_reports = []
     activations = []
+    contexts = []
     flags = {"frame_failed": False, "locked": False, "fail_submit": False, "fail_live": False, "mode": "selection"}
     page.on('pageerror', lambda e: errors.append(e.stack))
     page.add_init_script('window.testJpeg = ' + json.dumps(base64.b64encode(jpeg).decode()) + ';')
@@ -88,7 +89,11 @@ with sync_playwright() as p:
                 data = {'targets': [{'id':'wb','name':'WorkBuddy'}], 'shortcuts': [], 'accessibility': True, 'frontmostId': flags.get('front_id'), 'frontmostName': flags.get('front_name', 'Test editor'), 'theme': 'classic'}
             elif path == '/api/screen/displays':
                 data = {'displays': [{'id': 1, 'name': 'Display 1', 'width': 1600, 'height': 900}, {'id': 2, 'name': 'Display 2', 'width': 900, 'height': 1600}], 'streamPort': 46389}
-            elif path == '/api/input-context': data = {'context': 'editor-1', 'name': 'Test editor', 'scope': 'element', 'text': '电脑原文，不属于手机草稿'}
+            elif path == '/api/input-context':
+                contexts.append(True)
+                if flags.get('fail_context'):
+                    r.fulfill(status=422, json={'error':'请先点击电脑上的输入框。'}); return
+                data = {'context': 'editor-1', 'name': 'Test editor', 'scope': 'element', 'text': '电脑原文，不属于手机草稿'}
             elif path == '/api/shortcut-trigger':
                 key_writes.append(r.request.post_data_json)
                 data = {'ok': True, 'outcome': 'sent'}
@@ -188,6 +193,23 @@ with sync_playwright() as p:
     assert page.locator('#screen-recipient').inner_text() == '发给 WorkBuddy'
     assert page.locator('[data-target-id="wb"]').get_attribute('aria-checked') == 'true'
     assert len(activations) == activation_count, '派单自动接续只读，不点击或激活电脑'
+    # 打开网页没有派单目标：Chrome 原本已在前台也要补一次跟随，且无须预先添加到应用栏。
+    page.evaluate('selectSprite()')
+    flags.update(front_id=None, front_name='Google Chrome')
+    page.evaluate("followFrontmost({frontmostName:'Google Chrome'}); selectSprite(); taskFixture = {id:'opened-chrome', status:'succeeded', openedApplication:true}; pocketdeskAgentPanel.render()")
+    page.wait_for_timeout(150)
+    assert page.locator('#compose-recipient').inner_text() == '发给 Google Chrome'
+    assert page.locator('#screen-recipient').inner_text() == '发给 Google Chrome'
+    assert len(activations) == activation_count, '打开回执不能再次激活桌面'
+    page.locator('#text').fill('网页接续首字')
+    page.wait_for_timeout(200)
+    assert any(item.get('targetId') == '__frontmost__' and item.get('text') == '网页接续首字' for item in writes)
+    page.evaluate('clearCompose(); selectSprite()')
+    page.evaluate('pocketdeskAgentPanel.render()')
+    page.wait_for_timeout(100)
+    assert page.locator('#compose-recipient').inner_text() == '发给 小精灵', '旧打开回执不能抢回目标'
+    flags.update(front_id='wb', front_name='WorkBuddy')
+    page.evaluate("taskFixture = {id:'handoff',status:'succeeded',handoffTargetId:'wb',handoffTargetName:'WorkBuddy'}")
     page.screenshot(path='/tmp/pocketdesk-sprite-handoff.png')
     page.evaluate('selectSprite(); pocketdeskAgentPanel.render()')
     page.wait_for_timeout(100)
@@ -293,5 +315,30 @@ with sync_playwright() as p:
     page.evaluate("selected = 'wb'; markSelected()")
     assert page.locator('#sprite-transcript').is_hidden()
     assert page.locator('#sprite-recovery-note').is_hidden()
+    # 全屏打开键盘不提前绑定；首字未写入时点框可以恢复，收起/展开不换令牌。
+    page.evaluate("clearCompose(); selected = 'wb'; beginDraftForExplicitTarget('wb', true); markSelected(); window.pocketdeskScreenCanInput = () => true;")
+    start_contexts = len(contexts)
+    page.evaluate('showKeyboard()')
+    page.wait_for_timeout(100)
+    assert len(contexts) == start_contexts
+    flags['fail_context'] = True
+    live_before = len([w for w in writes if 'draftId' in w])
+    page.evaluate("kbProxy.value = '首字等待点击'; syncKeyboardDraft(); scheduleLive()")
+    page.wait_for_timeout(250)
+    assert page.evaluate('livePaused && contextFailedBeforeWrite')
+    assert len([w for w in writes if 'draftId' in w]) == live_before, '绑定失败时未发写入'
+    flags['fail_context'] = False
+    page.evaluate('probeLive()')
+    page.wait_for_timeout(250)
+    assert not page.evaluate('livePaused')
+    assert len([w for w in writes if w.get('text') == '首字等待点击']) == 1
+    rebound = len(contexts)
+    page.evaluate('showKeyboard()')
+    page.wait_for_timeout(150)
+    assert len(contexts) == rebound, '同一草稿重复展开键盘不换绑定'
+    page.evaluate("clearCompose(); kbProxy.value = '新一轮'; syncKeyboardDraft(); scheduleLive()")
+    page.wait_for_timeout(250)
+    assert len(contexts) == rebound + 1, '提交后的新草稿重新绑定'
+    assert not errors, errors
     browser.close()
     print('sprite flow: 甩送入口 / 连续派单 / 简短状态 / 手动接续 / 自动接续 / 迟到保护 / 球球图标 passed')

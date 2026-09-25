@@ -165,3 +165,7 @@ console-actions-browser.py 验证即使存在HTTPS地址，连接区仍只有一
 task-first-browser.py: App0.4首页锁定、未知和解锁状态的入口显隐、无自动授权、顶部应用栏与主题设置入口的320/390回归。
 Android LocalClientTest与WorkspaceExperienceTest补充具体错误保留、真实手势才能直达解锁和主题传递；NativePagesTest确认低频页无底部Tab、返回保留工作台。
 motion-send.test.cjs 与 Android NativeMotionBridgeTest：锁定 HTTP WebView 原生姿态样本进入既有甩送识别/提交门禁，以及 Android 姿态角和屏幕方向映射；合成测试不替代安卓真机方向与手感验收。
+
+sprite-flow.test.py 增补同前台打开网页、未配置浏览器及首字同步接续回归；agent-runner.test.swift 核验打开成功标记与失败/租约拒绝不产生标记。
+
+workspace_browser.py 小窗回归：画面中心点按坐标、滑动滚动、指针相对移动、窗口把手拖动/边缘缩放零远端点击、真实光标订阅与观看者禁止输入；沿用全屏及输入回归。

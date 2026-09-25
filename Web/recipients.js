@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 app.js 的目标/连接状态、compose.js 的草稿事务、agent-panel.js 的任务反馈及 workbench-notes/overview 的局部显示。
- * [OUTPUT]: 随小精灵选中状态显示本机原文恢复说明；派单后默认只读跟随真实前台，手动回小精灵以当前前台为新基线； 重选小精灵显式恢复桌面反馈；提供实时输入浮层与原版动态球球生命周期与开心/等待/工作状态与接收者渲染、显式应用选择、置顶应用栏进入小精灵与只读前台跟随；启动沿用电脑前台。
+ * [OUTPUT]: 随小精灵选中状态显示本机原文恢复说明；打开工具完成或派单后默认只读跟随真实前台，手动回小精灵以当前前台为新基线； 重选小精灵显式恢复桌面反馈；提供实时输入浮层与原版动态球球生命周期与开心/等待/工作状态与接收者渲染、显式应用选择、置顶应用栏进入小精灵与只读前台跟随；启动沿用电脑前台。
  * [POS]: 手机接收者路由层；显式应用选择才激活电脑，进入小精灵和被动前台跟随不操作桌面；未发送草稿阻止被动换目标。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -303,7 +303,8 @@ window.pocketdeskFollowHandoff = async (targetId) => {
     if (!response.ok) return;
     const status = await response.json();
     if (generation !== selectGeneration || selected !== SPRITE_ID || hasRecipientDraft()) return;
-    if (status.frontmostId !== targetId || !targets.some(target => target.id === targetId)) return;
+    if (targetId && (status.frontmostId !== targetId || !targets.some(target => target.id === targetId))) return;
+    if (!status.frontmostId && !status.frontmostName) return;
     latestFrontmostStatus = status;
     applyFrontmost(status);
   } catch (_) { /* 心跳恢复后继续观察真实前台。 */ }

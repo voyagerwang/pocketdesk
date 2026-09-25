@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 锁屏时提示使用 App；依赖 ScreenFrames/Geometry/Gestures/Pip、共享控制通道与可见输入区。
- * [OUTPUT]: 编排浮窗和正立全屏、默认点击/滚动合一与长按放大瞄准、小窗屏幕直选与全屏显示器快捷轮换、可见键盘视口与首页隔离、画面新鲜度、锁屏/断屏恢复、控制权与光标呈现，暴露不含画面内容的传输诊断。
+ * [OUTPUT]: 小窗与全屏共用点击/指针、流畅画面和真实光标，窗口拖动只归顶部把手； 编排浮窗和正立全屏、默认点击/滚动合一与长按放大瞄准、小窗屏幕直选与全屏显示器快捷轮换、可见键盘视口与首页隔离、画面新鲜度、锁屏/断屏恢复、控制权与光标呈现，暴露不含画面内容的传输诊断。
  * [POS]: Web 画面工作台入口；几何、网络与手势分别委托独立模块，退出统一释放资源。keyboardOpen 把手势的键盘态接到 window.pocketdeskKeyboardActive，使点屏 pointerdown 能打“定位”标记而不影响真收起。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -17,7 +17,7 @@
   // 默认始终轻点点击、滑动滚动，指针模式仅在更多中按需启用。
   let aimPoint = null, homeScroll = 0;
   const fullscreen = () => panel.open && panel.classList.contains('fullscreen');
-  const ready = () => fullscreen() && !document.hidden && !watch && !screenLocked && frames.fresh() && window.pocketdeskControlReady();
+  const ready = () => panel.open && !document.hidden && !watch && !screenLocked && frames.fresh() && window.pocketdeskControlReady();
   const send = command => {
     if (!['up', 'scrollEnd', 'cancel', 'cursor-subscribe', 'take-control'].includes(command.t) && !ready()) return false;
     const sent = window.pocketdeskSend(command);
@@ -55,7 +55,7 @@
     paintCursor();
   }
   function paintCursor() {
-    const visible = fullscreen() && frames.fresh() && !bakedCursor && cursorSample?.displayId === display && geometry.base && performance.now() - cursorAt < 2000;
+    const visible = panel.open && !document.hidden && frames.fresh() && !bakedCursor && cursorSample?.displayId === display && geometry.base && performance.now() - cursorAt < 2000;
     cursor.hidden = !visible;
     if (!visible) return;
     const p = geometry.project(cursorSample.rx, cursorSample.ry);
@@ -103,7 +103,7 @@
     const handle = document.createElement('div'); handle.className = `screen-resize ${edge}`; handle.dataset.edge = edge; panel.appendChild(handle);
   }
   const gestures = new ScreenGestures(viewport, {
-    active: () => fullscreen() && !image.hidden, ready, blockedReason: inputBlockReason, geometry, display: () => display, send,
+    active: () => panel.open && !pip.drag && !image.hidden, ready, blockedReason: inputBlockReason, geometry, display: () => display, send,
     sensitivity: () => typeof sensitivity === 'number' ? sensitivity : 1,
     doubleClickMs: () => window.pocketdeskControlInfo().doubleClickMs || 350,
     feedback, paint, interact: () => frames.interact(),
@@ -119,6 +119,9 @@
     },
     aim: point => { aimPoint = point; paintAim(); },
     context: point => { contextPoint = point; $('screen-context').hidden = false; },
+  });
+  panel.addEventListener('pointerdown', event => {
+    if (pip.active() && event.target.closest('#screen-pip-move, .screen-resize')) cancel();
   });
   const frames = new ScreenFrames({
     async present(blob, meta, generation) {
@@ -136,9 +139,9 @@
     state(text) { frameNote = text; paintNotice(); paintCursor(); },
   });
   window.pocketdeskScreenDiagnostics = () => frames.diagnose();
-  function subscribeCursor() { window.pocketdeskSend({ t: 'cursor-subscribe', enabled: fullscreen() && !document.hidden }); }
+  function subscribeCursor() { window.pocketdeskSend({ t: 'cursor-subscribe', enabled: panel.open && !document.hidden }); }
   function startFrames() {
-    if (display && panel.open && !document.hidden) frames.start(display, fullscreen(), port);
+    if (display && panel.open && !document.hidden) frames.start(display, true, port);
     subscribeCursor();
   }
   async function loadDisplays(epoch = openEpoch, restart = true) {
@@ -266,6 +269,7 @@
       return button;
     }));
   };
+  $('screen-pip-more').onclick = () => $('screen-more').click();
   $('screen-menu-close').onclick = () => { menu.hidden = true; };
   $('screen-permission').onclick = requestPermission;
   $('screen-refresh').onclick = () => { cancel(); loadDisplays(); feedback('正在重新连接画面'); };
@@ -327,7 +331,7 @@
   });
   window.pocketdeskScreenCanInput = ready;
   window.pocketdeskScreenInputReason = inputBlockReason;
-  window.pocketdeskScreenMessage = text => { if (fullscreen()) feedback(text); };
+  window.pocketdeskScreenMessage = text => { if (panel.open) feedback(text); };
   window.pocketdeskKeyboardClosed = layout;
   new ResizeObserver(measure).observe(viewport);
   window.addEventListener('resize', layout);

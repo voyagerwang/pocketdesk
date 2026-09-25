@@ -1,6 +1,6 @@
 """
 [INPUT]: 依赖 Playwright、Pillow 与本地 Web 文件，以模拟 HTTP/WS 隔离真实桌面。
-[OUTPUT]: 切换取消排队快照不冻结同步、Android 长按输入框保持原生焦点且不靠额外粘贴按钮、回车提交清空、历史存储异常不阻断收尾、旧 IME 迟到事件隔离、启动时已有正文同步、暂停后删空保持 ID、电脑原文不反填、已有草稿聚焦/全屏带入全文同步、候选完成失焦保留、点击/滚动合一与放大精确落点、触控板激活隔离与右缘防抖、锁屏/断屏恢复与重认证序号、原生输入法入口与自绘键盘移除、快捷切屏画面匹配、滚动入口、小屏布局、始终可见输入栏、模拟键盘视口偏移/缩小与首页隔离、首页/全屏 IME 重建、失焦探针取消与首页/全屏失败保留与原 ID 重试、全屏操作回归断言与 /tmp 下的浏览器截图。
+[OUTPUT]: 小窗画面点击/滚动/指针与真实光标、窗口拖动/缩放不发电脑指令、小窗控制权门禁； 切换取消排队快照不冻结同步、Android 长按输入框保持原生焦点且不靠额外粘贴按钮、回车提交清空、历史存储异常不阻断收尾、旧 IME 迟到事件隔离、启动时已有正文同步、暂停后删空保持 ID、电脑原文不反填、已有草稿聚焦/全屏带入全文同步、候选完成失焦保留、点击/滚动合一与放大精确落点、触控板激活隔离与右缘防抖、锁屏/断屏恢复与重认证序号、原生输入法入口与自绘键盘移除、快捷切屏画面匹配、滚动入口、小屏布局、始终可见输入栏、模拟键盘视口偏移/缩小与首页隔离、首页/全屏 IME 重建、失焦探针取消与首页/全屏失败保留与原 ID 重试、全屏操作回归断言与 /tmp 下的浏览器截图。
 [POS]: tests 的浏览器集成验证；手机软键盘和实际捕获性能仍需真机验证。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -230,6 +230,54 @@ with sync_playwright() as p:
     page.wait_for_function("document.querySelector('#screen-image').naturalWidth === 1600 && !document.querySelector('#screen-image').hidden")
     assert page.locator('#screen-fullscreen').bounding_box()['width'] == 28
     assert pip_displays.locator('button').first.bounding_box()['height'] == 26
+    # 小窗与全屏共用远控；顶部拖动与边缘缩放不发电脑点击。
+    page.wait_for_function('pocketdeskScreenCanInput()')
+    view = page.locator('.screen-viewport').bounding_box()
+    panel_before = page.locator('#screen-view').bounding_box()
+    page.evaluate('sentControls.length = 0')
+    page.touchscreen.tap(view['x'] + view['width']/2, view['y'] + view['height']/2)
+    page.wait_for_timeout(100)
+    click = page.evaluate("sentControls.find(m => m.t === 'pointer' && m.action === 'click')")
+    assert click and abs(click['rx']-.5)<.02 and abs(click['ry']-.5)<.02, click
+    assert page.locator('#screen-view').bounding_box() == panel_before, '画面点击不移动小窗'
+    page.evaluate('sentControls.length = 0')
+    page.mouse.move(view['x']+view['width']/2, view['y']+view['height']/2)
+    page.mouse.down(); page.mouse.move(view['x']+view['width']/2, view['y']+view['height']/2-30,steps=5); page.mouse.up()
+    assert page.evaluate("sentControls.some(m=>m.t==='scroll')"), '画面滑动滚动电脑'
+    assert page.locator('#screen-view').bounding_box() == panel_before
+    handle = page.locator('#screen-pip-move').bounding_box()
+    page.evaluate('sentControls.length = 0')
+    page.mouse.move(handle['x']+handle['width']/2,handle['y']+handle['height']/2)
+    page.mouse.down(); page.mouse.move(handle['x']+handle['width']/2+20,handle['y']+handle['height']/2+25,steps=4); page.mouse.up()
+    assert page.locator('#screen-view').bounding_box()['y'] > panel_before['y']+15
+    assert not page.evaluate("sentControls.some(m=>['pointer','click','move','down','scroll'].includes(m.t))")
+    edge = page.locator('.screen-resize.se').bounding_box()
+    width_before = page.locator('#screen-view').bounding_box()['width']
+    page.mouse.move(edge['x']+edge['width']/2,edge['y']+edge['height']/2)
+    page.mouse.down(); page.mouse.move(edge['x']+edge['width']/2-25,edge['y']+edge['height']/2-15,steps=4); page.mouse.up()
+    assert page.locator('#screen-view').bounding_box()['width'] < width_before-15
+    assert not page.evaluate("sentControls.some(m=>['pointer','click','move','down','scroll'].includes(m.t))")
+    page.locator('#screen-pip-more').click()
+    page.locator('#screen-mode').click()
+    view = page.locator('.screen-viewport').bounding_box()
+    page.evaluate('sentControls.length = 0')
+    page.mouse.move(view['x']+view['width']/2, view['y']+view['height']/2)
+    page.mouse.down(); page.mouse.move(view['x']+view['width']/2+30, view['y']+view['height']/2,steps=5); page.mouse.up()
+    assert page.evaluate("sentControls.some(m=>m.t==='move')"), '小窗指针模式移动鼠标'
+    page.locator('#screen-pip-more').click(); page.locator('#screen-mode').click()
+    page.evaluate("window.mockStream = true")
+    page.locator('#screen-pip-more').click(); page.locator('#screen-refresh').click()
+    page.locator('#screen-menu-close').click()
+    page.wait_for_function('window.presentedFrames >= 2')
+    page.evaluate("controlSocket.onmessage({data: JSON.stringify({t:'cursor',displayId:1,rx:.5,ry:.5})})")
+    page.locator('#screen-cursor').wait_for(state='visible')
+    assert page.evaluate("sentControls.some(m=>m.t==='cursor-subscribe' && m.enabled)"), '小窗订阅真实光标'
+    page.screenshot(path='/tmp/pocketdesk-pip-control.png')
+    page.evaluate("controlSocket.onmessage({data: JSON.stringify({t:'control',controller:false})}); sentControls.length = 0")
+    page.touchscreen.tap(view['x']+view['width']/2,view['y']+view['height']/2)
+    assert not page.evaluate("sentControls.some(m=>m.t==='pointer'||m.t==='click')"), '观看者不发点击'
+    page.evaluate("controlSocket.onmessage({data: JSON.stringify({t:'control',controller:true})}); window.mockStream = false")
+    page.locator('#screen-pip-more').click(); page.locator('#screen-refresh').click(); page.locator('#screen-menu-close').click()
     page.screenshot(path='/tmp/pocketdesk-pip-displays.png')
     page.locator('#screen-fullscreen').click()
     assert not pip_displays.is_visible()
@@ -323,6 +371,7 @@ with sync_playwright() as p:
     assert page.locator('#text').input_value() == '中文 draft 🧪'
     page.wait_for_timeout(160)
     first_live_id = writes[-1]['draftId']
+    first_live_context = writes[-1].get('context')
     page.locator('#kb-proxy').fill('中文修订 draft 🧪')
     page.wait_for_timeout(160)
     assert writes[-1]['text'] == '中文修订 draft 🧪' and not writes[-1]['submit']
@@ -331,7 +380,8 @@ with sync_playwright() as p:
     page.screenshot(path='/tmp/pocketdesk-compose.png')
     page.locator('#screen-send').click()
     page.wait_for_function("document.querySelector('#text').value === ''")
-    assert writes[-1]['submit'] is True and writes[-1]['context'] == 'editor-1', writes
+    assert writes[-1]['submit'] is True and writes[-1]['draftId'] == first_live_id, writes
+    assert writes[-1].get('context') == first_live_context, '首页草稿进入全屏也沿用原绑定，不能只因展开键盘换令牌'
     assert writes[-1]['text'] == '中文修订 draft 🧪'
     assert page.locator('#text').input_value() == '', '提交动作确认后结束本轮，不能因 sent 回执重复输入'
     # 自绘电脑键盘及入口已移除，原生输入法仍可唤起和收起。

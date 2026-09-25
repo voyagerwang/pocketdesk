@@ -1,6 +1,6 @@
 /*
  * [INPUT]: 消费 style.css 主题令牌与 index.html 工作台语义结构。
- * [OUTPUT]: 按需锁屏表单与  提供 PiP 轻量屏幕标签和紧凑图标操作按钮、正立全屏、四入口自适应工具栏与放大瞄准/始终可见输入栏、键盘视口隔离、菜单和光标样式。
+ * [OUTPUT]: 小窗顶部独立拖动/操作栏与画面命中区分离； 按需锁屏表单与  提供 PiP 轻量屏幕标签和紧凑图标操作按钮、正立全屏、四入口自适应工具栏与放大瞄准/始终可见输入栏、键盘视口隔离、菜单和光标样式。
  * [POS]: Web 画面模块的样式边界；画面坐标层支持横向旋转，键盘和工具栏独立布局。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -44,6 +44,7 @@
   opacity: .5;
 }
 .screen-view.pip {
+  --pip-toolbar-height: 44px;
   right: auto;
   bottom: auto;
   border-radius: var(--r-panel);
@@ -70,7 +71,7 @@
 }
 .pip .screen-viewport {
   position: absolute;
-  inset: 0;
+  inset: var(--pip-toolbar-height) 0 0;
 }
 .screen-surface {
   position: absolute;
@@ -134,8 +135,11 @@
 }
 .screen-pip-tools {
   position: absolute;
-  right: var(--s-3);
-  top: var(--s-3);
+  left: var(--s-2);
+  right: var(--s-2);
+  top: 0;
+  height: var(--pip-toolbar-height);
+  align-items: center;
   display: flex;
   gap: var(--s-1);
   z-index: 5;
@@ -409,3 +413,9 @@ body.screen-fullscreen-open > main { visibility: hidden; }
 .screen-aim::before { width: 18px; height: 1px; }
 .screen-aim::after { height: 18px; width: 1px; }
 #screen-mode svg { display: none; }
+
+/* ---------- 小窗窗口操作与电脑画面分区 ---------- */
+.screen-pip-tools #screen-pip-move { flex: 1; border-radius: var(--r-panel); cursor: grab; }
+.screen-pip-tools #screen-pip-move:active { cursor: grabbing; }
+.pip .screen-notice { top: var(--pip-toolbar-height); max-width: calc(100% - var(--s-6)); }
+.pip .screen-menu { inset: 0; max-height: 100%; }
