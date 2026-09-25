@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 只读 Web/*.js、Web/index.html 与 Sources/Server.swift 的静态文本，不起服务、不连电脑。
  * [OUTPUT]: 静态结构回归，验证跨弹窗恢复协议（冻结态只发只读探测、恢复上限有界、绝不重放正文、翻腕门禁）、
- *           recipients.js 应用选择定位意图（locate/generation 与迟到回执隔离）、以及证书四步向导（下载/安装/完全信任/真探测）都已落地。
+ *           recipients.js 同草稿重选保留输入位置与应用选择定位意图（locate/generation 与迟到回执隔离）、以及证书四步向导（下载/安装/完全信任/真探测）都已落地。
  * [POS]: tests 的前端契约回归；真实弹窗与真机行为另行验收。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -77,7 +77,7 @@ assert.ok(/body: JSON\.stringify\(\{ targetId, locate, generation \}\)/.test(app
   '激活请求必须带上定位意图与代际');
 assert.ok(/if \(generation !== selectGeneration\) return false;/.test(app),
   '迟到的激活/定位回执不得改动面板、提示或草稿');
-assert.ok(/activateTarget\(selected, true\)/.test(app), '只有手动选择应用才请求鼠标就位');
+assert.ok(/activateTarget\(selected, !preserveBinding\)/.test(app), '手动重选已有草稿不得重新定位输入框');
 assert.ok(!/async function activateTarget\(targetId, locate = true\)/.test(app),
   '定位意图默认必须关闭，以兼容旧调用点');
 

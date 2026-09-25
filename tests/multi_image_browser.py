@@ -1,6 +1,6 @@
 """
 [INPUT]: 依赖 Playwright、Pillow 与仓库 Web 静态资源；用模拟 HTTP 接口记录逐图上传和草稿提交。
-[OUTPUT]: 验证长图 JPEG 在 Canvas 不可用时预览/上传保留原始字节、透明图片白底转换，以及多选删除保序、上传失败重试、正文/纯图等待压缩、满额删除追加和横向布局。
+[OUTPUT]: 验证失败后重选同目标保持草稿与附件、切换目标隔离草稿； 验证长图 JPEG 在 Canvas 不可用时预览/上传保留原始字节、透明图片白底转换，以及多选删除保序、上传失败重试、正文/纯图等待压缩、满额删除追加和横向布局。
 [POS]: tests 的多图浏览器集成回归；不连接真实服务、不注入桌面输入，截图仅写入 /tmp。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -108,10 +108,11 @@ with sync_playwright() as p:
     old_batch=page.evaluate('imageBatchId')
     page.evaluate('window.failedTargetQueue = liveQueue')
     page.locator('.target[data-target-id="feishu"]').click()
-    page.wait_for_function("selected === 'feishu' && livePaused === false")
+    page.wait_for_timeout(250)
+    assert page.evaluate("selected === 'feishu' && livePaused"), '图片执行未知时重选不能绕过服务端防重'
     same_target_draft=page.evaluate('liveDraftId')
-    assert same_target_draft != old_draft
-    assert page.evaluate('liveQueue !== window.failedTargetQueue')
+    assert same_target_draft == old_draft
+    assert page.evaluate('liveQueue === window.failedTargetQueue')
     assert page.locator('#text').input_value()=='切换目标后继续发送'
     assert page.locator('#image-preview img').count()==2
     page.locator('#send').click()

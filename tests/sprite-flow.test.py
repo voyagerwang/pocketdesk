@@ -1,6 +1,6 @@
 """
 [INPUT]: 依赖 Playwright、Pillow 与本地 Web 文件，以模拟 HTTP/WS 隔离真实桌面。
-[OUTPUT]: 覆盖同前台打开网页接续及首字进入桌面输入； 用合成配对与 identity 回执验证真实提交入口，核验三宽度暂存说明及切换隐藏；验证默认派单只读跟随、手机接收者一致、手动回小精灵及同前台不抢回； 验证选择与草稿进入桌面展示上报链路；验证柔光选中、主题无框与减少动态效果；另验证启动前台跟随、草稿/IME/提交保护、置顶应用栏选择及首页/全屏无冗余切换按钮； 验证小精灵甩送入口、连续任务、简短呈现、接续切换与迟到回执保护；发送历史覆盖成功、拒绝及存储失败。
+[OUTPUT]: 覆盖写入成功但回执失败后重选同目标仍只保留一份正文； 覆盖同前台打开网页接续及首字进入桌面输入； 用合成配对与 identity 回执验证真实提交入口，核验三宽度暂存说明及切换隐藏；验证默认派单只读跟随、手机接收者一致、手动回小精灵及同前台不抢回； 验证选择与草稿进入桌面展示上报链路；验证柔光选中、主题无框与减少动态效果；另验证启动前台跟随、草稿/IME/提交保护、置顶应用栏选择及首页/全屏无冗余切换按钮； 验证小精灵甩送入口、连续任务、简短呈现、接续切换与迟到回执保护；发送历史覆盖成功、拒绝及存储失败。
 [POS]: tests 的浏览器集成验证；手机软键盘和实际捕获性能仍需真机验证。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -24,6 +24,7 @@ with sync_playwright() as p:
     sprite_reports = []
     activations = []
     contexts = []
+    editor = {'enabled': False, 'text': '', 'drafts': {}, 'fail_receipt': False, 'recoverable': True}
     flags = {"frame_failed": False, "locked": False, "fail_submit": False, "fail_live": False, "mode": "selection"}
     page.on('pageerror', lambda e: errors.append(e.stack))
     page.add_init_script('window.testJpeg = ' + json.dumps(base64.b64encode(jpeg).decode()) + ';')
@@ -99,6 +100,16 @@ with sync_playwright() as p:
                 data = {'ok': True, 'outcome': 'sent'}
             elif path == '/api/live-input':
                 writes.append(r.request.post_data_json)
+                if editor['enabled']:
+                    command = r.request.post_data_json
+                    if command.get('probe'):
+                        r.fulfill(json={'mode': 'selection', 'state': 'recoverable' if editor['recoverable'] else 'needs-user-focus'}); return
+                    draft_id = command['draftId']
+                    prefix = editor['drafts'].setdefault(draft_id, editor['text'])
+                    editor['text'] = prefix + command['text']
+                    if editor['fail_receipt']:
+                        editor['fail_receipt'] = False
+                        r.fulfill(status=422, json={'error': '写入后读回暂不可用', 'state': 'interrupted'}); return
                 if flags['fail_live']:
                     r.fulfill(status=422, json={'error': 'test original input mismatch'}); return
                 if flags['fail_submit'] and r.request.post_data_json.get('submit'):
@@ -339,6 +350,32 @@ with sync_playwright() as p:
     page.evaluate("clearCompose(); kbProxy.value = '新一轮'; syncKeyboardDraft(); scheduleLive()")
     page.wait_for_timeout(250)
     assert len(contexts) == rebound + 1, '提交后的新草稿重新绑定'
+    # 真实编排 + 有状态桌面替身：写入已落地但回执失败，重新点应用不能把正文当作新草稿。
+    page.evaluate("hideKeyboard(); clearCompose(); selected = 'wb'; markSelected();")
+    editor.update(enabled=True, text='电脑原文：', drafts={}, fail_receipt=True, recoverable=False)
+    page.locator('#text').fill('这段话只写一遍')
+    page.wait_for_timeout(250)
+    assert page.evaluate('livePaused')
+    failed_id = page.evaluate('liveDraftId')
+    assert editor['text'] == '电脑原文：这段话只写一遍'
+    page.evaluate("selectTarget({dataset:{targetId:'wb'}})")
+    page.wait_for_timeout(250)
+    assert page.evaluate('liveDraftId') == failed_id, '回执失败不能换草稿编号重放全文'
+    assert page.evaluate('livePaused'), '未证明原绑定恢复时保持冻结'
+    assert activations[-1]['locate'] is False, '已有草稿不能自动点击另一输入位置'
+    assert editor['text'] == '电脑原文：这段话只写一遍'
+    editor['recoverable'] = True
+    page.evaluate("selectTarget({dataset:{targetId:'wb'}})")
+    page.wait_for_timeout(250)
+    assert not page.evaluate('livePaused')
+    assert editor['text'] == '电脑原文：这段话只写一遍', '恢复后只保留一份正文'
+    page.locator('#text').fill('这段话只写一遍，补一句')
+    page.wait_for_timeout(250)
+    assert editor['text'] == '电脑原文：这段话只写一遍，补一句', '恢复后继续编辑原草稿'
+    page.evaluate("selectTarget({dataset:{targetId:'wb'}})")
+    page.wait_for_timeout(150)
+    assert page.evaluate('liveDraftId') == failed_id
+    assert len(editor['drafts']) == 1
     assert not errors, errors
     browser.close()
     print('sprite flow: 甩送入口 / 连续派单 / 简短状态 / 手动接续 / 自动接续 / 迟到保护 / 球球图标 passed')

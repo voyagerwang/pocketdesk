@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 app.js 的目标/连接状态、compose.js 的草稿事务、agent-panel.js 的任务反馈及 workbench-notes/overview 的局部显示。
- * [OUTPUT]: 随小精灵选中状态显示本机原文恢复说明；打开工具完成或派单后默认只读跟随真实前台，手动回小精灵以当前前台为新基线； 重选小精灵显式恢复桌面反馈；提供实时输入浮层与原版动态球球生命周期与开心/等待/工作状态与接收者渲染、显式应用选择、置顶应用栏进入小精灵与只读前台跟随；启动沿用电脑前台。
+ * [OUTPUT]: 重选当前应用保留草稿与原输入位置，失败只读核验后恢复； 随小精灵选中状态显示本机原文恢复说明；打开工具完成或派单后默认只读跟随真实前台，手动回小精灵以当前前台为新基线； 重选小精灵显式恢复桌面反馈；提供实时输入浮层与原版动态球球生命周期与开心/等待/工作状态与接收者渲染、显式应用选择、置顶应用栏进入小精灵与只读前台跟随；启动沿用电脑前台。
  * [POS]: 手机接收者路由层；显式应用选择才激活电脑，进入小精灵和被动前台跟随不操作桌面；未发送草稿阻止被动换目标。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -182,11 +182,17 @@ async function selectTarget(button) {
   const rebuiltDraft = beginDraftForExplicitTarget(targetId);
   selected = targetId;
   markSelected();
-  // 手动选择才请求鼠标就位：用户随后可直接用手机触控板操作目标窗口。
-  const activated = await activateTarget(selected, true);
-  // 切换目标或失败后重选当前目标，代表用户要以此刻输入位置开始新一轮；已有正文
-  // 立即触发新绑定，纯图片发送时绑定。健康状态重复点击不重建，避免把全文再次追加。
-  if (activated && rebuiltDraft && liveValue()) scheduleLive();
+  const selectingDraft = liveDraftId;
+  // 已发过同步的同一草稿只唤醒应用，不重新点击可能不同的输入位置。
+  const preserveBinding = !rebuiltDraft && liveTarget !== null;
+  const activated = await activateTarget(selected, !preserveBinding);
+  if (!activated || selectingDraft !== liveDraftId) return;
+  if (rebuiltDraft && liveValue()) scheduleLive();
+  else if (livePaused) {
+    // 失败不意味着正文没写入；沿用原编号核验，确认后服务端只补差量。
+    startRecovery();
+    scheduleProbe(0);
+  }
 }
 
 // 选中内置接收者：不唤醒应用、不绑定 AX 输入、不移动鼠标（方案 §3/§4）。

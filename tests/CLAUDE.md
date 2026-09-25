@@ -32,7 +32,7 @@ live-draft.test.swift: 隔离编辑器验证整值替换、Unicode 光标、暂�
 image-batch-store.test.swift: 隔离验证不同批次隔离、多图身份幂等、重复提交身份拒绝、显式顺序、缺图整批拒绝、8 张/8MiB 上限、成功消费与损坏图片拒绝。
 image-paste-policy.test.swift: 隔离验证 UU 文字把 1.2s 远端同步等待放在 Cmd+V 前、按键后只留 200ms 消费时间；同时覆盖 Chrome 多图剪贴板稳定与插入点策略，以及画布多图方向键分离节奏（仅右/下键、间隔为正）的合法性，测试本身无剪贴板、鼠标与按键副作用。
 
-multi_image_browser.py: 覆盖 Canvas 不可用时长图 JPEG 预览/上传原字节保留和透明 PNG 转 JPEG 白底；Playwright 模拟接口验证多选删除保序、上传失败保留重试、正文/纯图等待压缩、损坏图片不吞旧选择、满额删除追加及横向布局；覆盖健康状态重复点击当前目标不换草稿，失败后重选当前目标或切换目标才更换草稿/队列，同时保留正文、附件批次并隔离旧目标；截图写入 /tmp，不连接真实桌面服务。
+multi_image_browser.py: 覆盖 Canvas 不可用时长图 JPEG 预览/上传原字节保留和透明 PNG 转 JPEG 白底；Playwright 模拟接口验证多选删除保序、上传失败保留重试、正文/纯图等待压缩、损坏图片不吞旧选择、满额删除追加及横向布局；覆盖健康状态重复点击当前目标不换草稿，失败后重选当前目标保留草稿/队列并只读恢复，切换目标才更换草稿/队列，同时保留正文、附件批次并隔离旧目标；截图写入 /tmp，不连接真实桌面服务。
 
 model-config.test.swift: 隔离验证 `ModelConfigStore` 的纯函数——端点归一化（补尾缀、不重复拼接）与协议白名单（file/ftp/无 scheme 必须拒绝），以及脱敏视图：keyHint 只给首尾、`hasKey` 为真时视图里任何字段都不得出现 Key 主体、短 Key 只回「已保存」；另锁 `isConfigured` 要求三项齐全。不联网、不读写真实配置。
 
@@ -169,3 +169,5 @@ motion-send.test.cjs 与 Android NativeMotionBridgeTest：锁定 HTTP WebView �
 sprite-flow.test.py 增补同前台打开网页、未配置浏览器及首字同步接续回归；agent-runner.test.swift 核验打开成功标记与失败/租约拒绝不产生标记。
 
 workspace_browser.py 小窗回归：画面中心点按坐标、滑动滚动、指针相对移动、窗口把手拖动/边缘缩放零远端点击、真实光标订阅与观看者禁止输入；沿用全屏及输入回归。
+
+输入重复回归：sprite-flow.test.py 以有状态桌面替身模拟正文已写入但回执失败，验证重选同目标不换编号、不点击新位置、绑定未恢复时不写、恢复后不重复追加且可继续编辑。
