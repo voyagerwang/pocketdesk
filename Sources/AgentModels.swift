@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation；不依赖 AX、Network 或任何运行时——本文件只描述任务事实的形状。
- * [OUTPUT]: 结构化 AppDispatchReceipt 与提交未核实终态 submitted；可选派单接续目标、飞书个人/群候选及通用操作去重/确认记录； 任务保存控制会话用于执行租约核验；对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
+ * [OUTPUT]: 工作台创建持久回执与结构化 AppDispatchReceipt 与提交未核实终态 submitted；可选派单接续目标、飞书个人/群候选及通用操作去重/确认记录； 任务保存控制会话用于执行租约核验；对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
  *           AgentTask、TaskEvent，以及 AgentTask 与字典互转的 json/alternative 方法。
  * [POS]: Sources 的 Agent 领域模型层；HTTP 层只做字典与它的互转，任务语义不散落到路由里。
  *        与系统注入解耦：本文件可单独编译，供 tests 直接引用。
@@ -235,6 +235,8 @@ struct AgentTask: Codable, Equatable {
     var controlSession: String?
     var feishuChoice: FeishuChoice?
     var feishuDelivery: FeishuDelivery?
+    /// 工作台创建操作的持久回执；pending 不得自动重放。
+    var workbenchOperations: [String: String]?
     var feishuOperations: [String: String]?
     var feishuConfirmation: FeishuConfirmation?
     /// 仅真实提交成功才设置接续目标，手机不从模型文案猜应用。

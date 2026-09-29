@@ -93,7 +93,7 @@ SpriteSession.swift: 按真实控制连接隔离展示计数，按提交身份�
 
 SpriteFeedback.swift: 以 taskId/revision 合并最新问题和结果，投影交互 Phase、阶段标题/正文与原版表情 ID；提交和忙碌优先于残留草稿，同任务追问隐藏旧回答，展示修订驱动唤醒，不维护手动收起状态，不执行任务。
 
-SpriteFeedbackPanel.swift: AppKit 非激活透明面板；默认只有原版动态球体，无收起按钮和占位文字；输入显示草稿，发送后用执行标题取代原话，完成展示结果；真实正文用 15pt 原生字体居中/换行和独立滚动；应用隐藏与锁屏独立，保持球体底部锚点。
+SpriteFeedbackPanel.swift: AppKit 非激活透明面板；默认只有原版动态球体，无收起按钮和占位文字；输入显示草稿，发送后用执行标题取代原话，完成展示结果；600pt 宽度按屏幕收窄，15pt 原生正文按 TextKit 实际高度展开，长回答按可用屏幕限高；滚动条自动隐藏且仅绘制细圆角滑块，不受系统始终显示槽线影响；应用隐藏与锁屏独立，保持球体底部中心锚点。
 
 DesktopMenuActions.swift: 常用菜单语义目录、当前应用真实菜单发现与唯一匹配执行；菜单路径不能扩大目录范围。绑定焦点/窗口/标题、执行前复核 enabled；新窗口读回新身份，其余菜单操作只报告已发出，不冒充结果完成。
 DesktopWindowLayout.swift: AX 窗口布局与纯几何；可用区域从 NSScreen 换算到 AX 全局点，支持左右/上下/四角/铺满/居中/最小化/恢复。屏幕不存在或全屏空间拒绝；布局必须读回尺寸位置，应用最小尺寸限制不报成功。
@@ -150,3 +150,32 @@ ConsoleFileUpload.swift: 控制台拖放的分块上传会话；单块6MiB、会
 经典钥匙串后台操作通过 SecKeychainSetUserInteractionAllowed 禁止系统弹窗，各操作串行保护并恢复进程开关；本机网页的 keychain-authorize 在已解锁状态允许用户授权，随后用非交互读取检查密码和设备密钥，后台不等待该弹窗、不改ACL、不自动重建不可读身份。
 
 UnlockNativeHTTP保留内存中最近一次授权/执行失败与结果的阶段、时间、错误、说明；ConsoleActions仅向本机同源控制台展示，不保存密码、签名或挑战，不自动重试。
+
+HeadsetLongPress.swift: Quark2 音量减经短租约映射到保留 F20，由事件 tap 吞掉；短按释放回放一格音量，700ms 长按仅开启小精灵、松开结束。拔插清除状态，不改左 Option 映射。
+SpriteDesktopInput.swift: 原小精灵浮层内按住说话，豆包左 Option 按下/释放、松开后非空稳定转写提交、Esc/焦点/断开取消，复用 TaskService 和结果存储；本机提交使用进程私有控制凭证，不改变手机租约或草稿。
+
+SpriteFeedbackPanel 的耳机输入使用透明原生转写接收框 + 最近三行字幕，隐藏边框/底色/光标；仍由原接收框接收豆包，字幕跟随当前组合文字，不修改提交判定。
+
+WebSearch.swift: Bing RSS 只读网站候选与搜索页地址；有限响应、超时、禁外部XML实体、非http(s)过滤。AgentRunner 在本地目标未命中后可搜索并打开网页，失败不得冒充官网已打开。
+
+HeadsetVoiceControl.swift / HeadsetCenterObserver.swift / HeadsetButtonLogic.swift：合并耳机中键只读监听、发送条件与菜单设置；原生 Option 由 Helpers/HeadsetOptionMapping 独立保活，安装迁移由 scripts/install-headset-services.py 负责。
+
+耳机设置统一放在 PocketDesk 应用菜单与 Dock 右键菜单的“耳机语音”子菜单，打开时刷新状态；不创建独立 NSStatusItem。
+
+ChromeTabCleanup.swift: 小精灵 close_duplicate_chrome_tabs 固定工具；Chrome 原生 AppleScript 字典读取普通窗口的 ID/URL/loading，完整 URL 在每个窗口内去重，优先活动页；执行前再核验两个稳定 ID/URL，读回消失后才计数。单任务持久占用一次，直接按工具回执收尾；每页重验控制权，结果未知即停止。不读网页正文或给模型返回 URL，不跨窗口/无痕清理，不监听未来标签。
+
+Chrome 去重关闭核验：Chrome 的 close 是异步生效；固定脚本只返回 requested，主线程让出后每 100ms 发独立只读脚本获取实时标签 ID（统一按 text 比较），最多 2 秒，目标消失且保留页存在才计数。绝不重发 close；超时、失权或未知结果停止整个批次。
+
+WorkbenchContent.swift: 个人工作台四类创建适配（待办、本地日程、知识库存档、随手记）；固定回环 127.0.0.1:8787，不接受模型指定地址。创建前检查服务/租约，TaskStore 原子持久占用，返回 ID 后 GET 核验正文；未知结果不重放，旧任务快照不能抹掉回执。AgentRunner 提供当前本地日期与专用工具，默认工作台目的地，显式飞书另走飞书。
+
+HeadsetProfiles.swift / HeadsetPairing.swift：本机多型号耳机配置及四步原生检测向导，默认 Quark2；只有完整标准媒体键按下/松开验证后才能保存，长按可降级基础模式。原生映射守护与监听器共享 profiles.json，未知设备不接管。
+
+耳机配置收尾：保存成功提供“完成”关闭窗口（支持回车）；“跳过长按”直接保存已检测的基础按键，并明确不启用长按小精灵。
+
+AB13X (31:2849) 的 usesPulsedHold 启用 300ms 松开缓冲，合并约 174ms 的重复媒体键脉冲；HeadsetPairing 的学习逻辑同时识别该模式。
+
+长按现由 HeadsetLongPress 的原始 HID 回调驱动；helper 将减号映射到 Keyboard Usage 0 并迁移旧 F20。SpriteDesktopInput 区分 Option 已发送与豆包实际可观察状态，新长按替换旧待转写，延迟回调带 generation 防串扰。
+
+WorkbenchLookup.swift: 六个只读工具查询个人工作台的日程、随手记、知识库及正文；固定 GET /api/pocketdesk/lookup/*，参数编码与范围校验、查询前租约和服务核验。日期范围、分页和正文截断显式返回；知识只用检索签发的版本凭证；结果作为资料，不授权执行新动作。
+
+2026-09-29 查询修复：首版查询漏了个人工作台待办。WorkbenchLookup 现在包含 `search_workbench_tasks` / `read_workbench_task`，服务端按 `planned_date` 或 `due_at` 返回未删除待办；用户说“明天有哪些待办”必须使用该工具，不能用日程或随手记替代。

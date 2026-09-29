@@ -68,12 +68,12 @@ final class LaggingEditor: DraftEditor {
         editor.focused = true
         assert(live.probe().state == .recoverable, "应用与原焦点都回来 → 可续接")
 
-        // 4) 电脑正文被手改：一律 needs-user-focus，绝不自动恢复、也不整段重放。
+        // 4) 电脑与手机同时改写旧文：needs-user-focus，绝不自动恢复、也不整段重放。
         let edited = StateEditor()
         let changed = draft(edited)
         try! changed.update("手机草稿")
         edited.snapshot = .end(of: "用户手改了电脑内容")
-        rejects("电脑正文被改后写入") { try changed.update("手机草稿加字") }
+        rejects("电脑正文被改后同时改写手机旧文") { try changed.update("另一份手机草稿") }
         assert(changed.state == .needsUserFocus)
         assert(changed.classify() == .needsUserFocus)
         assert(changed.probe().state == .needsUserFocus, "内容对不上就不能自动续接")

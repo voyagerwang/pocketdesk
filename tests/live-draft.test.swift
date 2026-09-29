@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 LiveDraft 的纯状态机、隔离 DraftEditor 与内存输入框替身 FakeField，不读取真实桌面。
- * [OUTPUT]: 验证整值/选区替换、Unicode、冲突停止、显式重试核验与当前焦点续发均不重复写入、未知结果拒绝恢复、提交封闭；WorkBuddy 整页 AX 文本的非编辑区漂移可由“插入片段+光标”局部证据认账，删除仍禁止宽松认账；手机已有全文与连续删空保留电脑前后文；
+ * [OUTPUT]: 验证整值/选区替换、Unicode、电脑改稿后手机仅追加时合并并续写、并发改写冲突停止、显式重试核验与当前焦点续发均不重复写入、未知结果拒绝恢复、提交封闭；WorkBuddy 整页 AX 文本的非编辑区漂移可由“插入片段+光标”局部证据认账，删除仍禁止宽松认账；手机已有全文与连续删空保留电脑前后文；
  *           update 删除按「AX 连败退避（连败 3 次停用、成功清零）→ Cmd+A 整框全选（旧文恰为整框且光标在文末，读回确认后一次覆盖）→ 逐字 Backspace」降级，全选没落 DOM 先按 Right 还原光标再逐字，空替换不补刀（旧版多发一次退格冻结草稿的回归锁在此）；
  *           清空按当前实际内容整段删净且幂等，成功判据始终是"读回为空"；AX 设选区假成功/设不了选区时退到真实键盘 Cmd+A 兜底，删不动（退格被吞）两轮后如实失败并保留正文，门禁失效/不可读照样拒绝，基线分叉后可破冰续写。
  * [POS]: tests 的输入事务回归；真实 AX 控件另行验收。
@@ -104,8 +104,8 @@ final class FakeField {
 
 @main struct LiveDraftTests {
     static func draft(_ editor: DraftEditor?) -> LiveDraft { LiveDraft(id: "test", context: "same-input", target: "test", editor: editor) }
-    static func rejects(_ body: () throws -> Void) {
-        do { try body(); fatalError("应拒绝此操作") } catch {}
+    static func rejects(_ body: () throws -> Void, line: Int = #line) {
+        do { try body(); fatalError("第 \(line) 行应拒绝此操作") } catch {}
     }
     static func main() throws {
         let editor = MemoryEditor(), session = draft(nil)
@@ -125,10 +125,15 @@ final class FakeField {
         for changed in [DraftSnapshot.end(of: "电脑手动改写"), DraftSnapshot(text: "手机", location: 0, length: 1)] {
             let e = MemoryEditor(), s = draft(e)
             try s.update("手机"); e.snapshot = changed
-            rejects { try s.update("手机修订") }; assert(s.stopped && e.writes.count == 1)
+            rejects { try s.update("另起一稿") }; assert(s.stopped && e.writes.count == 1)
             e.snapshot = .end(of: "手机")
             rejects { try s.update("不能偷偷恢复") }
         }
+        let nativeEditor = MemoryEditor(), nativeDraft = draft(nativeEditor)
+        try nativeDraft.update("手机初稿")
+        nativeEditor.snapshot = .init(text: "电脑改稿", location: 2, length: 0)
+        try nativeDraft.update("手机初稿续")
+        assert(nativeEditor.snapshot == .end(of: "电脑改稿续") && nativeDraft.text == "电脑改稿续")
         let e = MemoryEditor(), s = draft(e)
         e.focused = false
         rejects { try s.update("焦点改变") }; assert(e.writes.isEmpty)
@@ -182,6 +187,34 @@ final class FakeField {
         allowed = false
         rejects { try realtime.update("焦点失效不能继续输入") }
         assert(inserts.count == writesBeforeLostFocus)
+
+        // Desktop edits the same field, then the phone appends: keep the desktop revision.
+        let sharedField = FakeField("", caret: 0)
+        let sharedWriter = sharedField.writer()
+        let sharedDraft = LiveDraft(id: "shared", context: "shared", target: "test", editor: nil,
+                                    selectionWriter: { sharedWriter.update(from: $0, to: $1) })
+        do { try sharedDraft.update("手机原稿") } catch { fatalError("首次写入: \(error)") }
+        sharedField.text = "电脑改稿"
+        sharedField.caret = sharedField.text.utf16.count
+        do { try sharedDraft.update("手机原稿续") } catch { fatalError("电脑改稿后续写: \(error); \(sharedWriter.diagnostic)") }
+        if let resolved = sharedWriter.resolvedText {
+            sharedDraft.acceptResolvedText(resolved, mobileText: "手机原稿续")
+        }
+        assert(sharedField.text == "电脑改稿续" && sharedDraft.text == "电脑改稿续")
+        do { try sharedDraft.update("手机原稿续写") } catch { fatalError("再次续写: \(error); \(sharedWriter.diagnostic)") }
+        assert(sharedField.text == "电脑改稿续写")
+        sharedField.text = "电脑再改稿"
+        sharedField.caret = 2
+        try sharedDraft.update("手机原稿续写呀")
+        if let resolved = sharedWriter.resolvedText {
+            sharedDraft.acceptResolvedText(resolved, mobileText: "手机原稿续写呀")
+        }
+        assert(sharedField.text == "电脑再改稿呀", "电脑句中修订后，核验文末光标再接手机追加")
+        sharedField.text = "再次电脑修改"
+        sharedField.caret = 0
+        sharedField.selectable = false
+        rejects { try sharedDraft.update("手机原稿续写呀字") }
+        assert(sharedField.text == "再次电脑修改", "光标不在末尾时不得猜测插入位置")
 
         // ---------- 实时同步的键盘删除降级链（受控输入框 = AX 选区不可信） ----------
         // 受控输入框（Electron/React）AX 选区常设不上/假成功：update 按「AX 连败退避 →

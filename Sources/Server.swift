@@ -53,6 +53,7 @@ final class Server {
         AgentRunner.canControl = { [weak self] taskId in
             guard let task = TaskStore.task(id: taskId), task.status == .running,
                   let session = task.controlSession else { return false }
+            if SpriteDesktopInput.authorizes(task) { return true }
             return self?.controlAuthorized(session) == true
         }
         AgentRunner.desktopAction = { [weak self] request, taskId, done in

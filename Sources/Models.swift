@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 Codable 与 CoreGraphics 的 CGEventFlags/CGKeyCode。
- * [OUTPUT]: 对外提供传输与配置层的全部值类型：SendCommand/LiveInputCommand/LiveInputReceipt（草稿 ID、整值/选区/暂存模式、显式核验重试、显式清空意图、提交动作确认）/PendingImage/ActivateCommand/IconUpload
+ * [OUTPUT]: 对外提供传输与配置层的全部值类型：SendCommand/LiveInputCommand/LiveInputReceipt（草稿 ID、整值/选区/暂存模式、显式核验重试、显式清空意图、可选合并正文、提交动作确认）/PendingImage/ActivateCommand/IconUpload
  *           请求体、ShortcutConfig/TargetConfig 配置实体（TargetConfig 含按应用专属快捷键、默认打开面板、叠加全局组开关）、
  *           ShortcutKeys 语义串解析器（resolve 解析、canonicalize 别名归一、legacyHotkey 旧格式迁移）、
  *           ShortcutError/InputError 错误类型。
@@ -48,9 +48,12 @@ struct LiveInputReceipt {
     // 结构化状态码，前端据它决定"继续写 / 冻结 / 提示用户点一下"，而不是解析人话文案。
     let state: String
     let note: String
+    var text: String? = nil
     var dictionary: [String: Any] {
-        ["ok": true, "outcome": feedback.outcome.rawValue, "detail": feedback.detail,
+        var result: [String: Any] = ["ok": true, "outcome": feedback.outcome.rawValue, "detail": feedback.detail,
          "mode": mode, "committed": committed, "state": state, "note": note]
+        if let text { result["text"] = text }
+        return result
     }
 }
 

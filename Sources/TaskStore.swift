@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Foundation 的 FileManager/JSONEncoder/FileHandle，消费 AgentModels 的任务与事件类型。
  * [OUTPUT]: 对外提供任务与事件的唯一权威存储：整体快照 tasks.json（原子写）、append-only 事件日志
- *           events.jsonl、requestId 去重表 dedupe.json；以及幂等接受 claim 与派单/桌面动作副作用前的原子占用。
+ *           events.jsonl、requestId 去重表 dedupe.json；以及幂等接受 claim 与工作台创建/派单/桌面动作副作用前的原子占用。
  * [POS]: Sources 的 Agent 持久化层；HTTP 层与 TaskService 都通过它读写，不允许两边各自声明权威。
  *        首版用文件化方案而非 SQLite：本项目由 install-app.sh 直接 swiftc 裸编、未链接 -lsqlite3，
  *        引入 SQLite 要改构建并手写 C API 封装，成本与收益不匹配（方案 §9 v1.1 修正）。
@@ -102,6 +102,9 @@ enum TaskStore {
         var updated = task
         let messageIDs = Set(updated.messages.map(\.id))
         updated.messages += tasks[index].messages.filter { ["dispatch_to_app", "desktop_action"].contains($0.toolName ?? "") && !messageIDs.contains($0.id) }
+        if let existing = tasks[index].workbenchOperations {
+            updated.workbenchOperations = (updated.workbenchOperations ?? [:]).merging(existing) { _, persisted in persisted }
+        }
         tasks[index] = updated
         try persistLocked(tasks: tasks, dedupe: dedupeLocked())
     }
@@ -126,6 +129,21 @@ enum TaskStore {
         tasks[index].messages.append(TaskMessage(role: .tool, text: request, toolName: "desktop_action"))
         try persistLocked(tasks: tasks, dedupe: dedupeLocked())
         return true
+    }
+
+    /// 创建前持久占用，旧快照与重启不会解除；所有完成回执也在此锁内更新。
+    static func workbenchOperation(id: String, key: String, receipt: String? = nil) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        var tasks = loadLocked()
+        guard let index = tasks.firstIndex(where: { $0.id == id }), tasks[index].status == .running else {
+            throw TaskStoreError.writeFailed("任务已结束。")
+        }
+        let previous = tasks[index].workbenchOperations?[key]
+        if receipt == nil, previous != nil { return previous }
+        tasks[index].workbenchOperations = tasks[index].workbenchOperations ?? [:]
+        tasks[index].workbenchOperations?[key] = receipt ?? "pending"
+        try persistLocked(tasks: tasks, dedupe: dedupeLocked())
+        return previous
     }
 
     static func remove(id: String) throws {

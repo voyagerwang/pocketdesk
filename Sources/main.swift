@@ -15,7 +15,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let consoleURL: URL
     init(consoleURL: URL) { self.consoleURL = consoleURL }
 
-    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? { PhoneFilePicker.shared.menu() }
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = PhoneFilePicker.shared.menu()
+        menu.addItem(.separator())
+        menu.addItem(HeadsetController.shared.settingsItem())
+        return menu
+    }
 
     func applicationShouldHandleReopen(_ application: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         NSWorkspace.shared.open(consoleURL)

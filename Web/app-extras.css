@@ -738,9 +738,24 @@ main.pad-mode .pad-title {
   color: var(--fg);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 42vh;
+  /* 小精灵结果卡不是固定高度：短答案直接完整展开，只有长正文才进入滚动区。 */
+  max-height: min(60vh, 480px);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg-faint) 48%, transparent) transparent;
+}
+.agent-text::-webkit-scrollbar { width: 5px; }
+.agent-text::-webkit-scrollbar-track { background: transparent; }
+.agent-text::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg-faint) 48%, transparent);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+.agent-text::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--fg-muted) 62%, transparent);
+  background-clip: padding-box;
 }
 .agent-text.is-error { color: var(--danger); }
 .agent-sources { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; }

@@ -13,3 +13,5 @@ AppIcon.iconset/: 10 张透明 PNG，覆盖 16–1024 实际像素与 Retina 命
 
 本次完整集成版为 0.3.1（build 4）；保留录屏与访达自动化用途声明，包含文件发送与原生安卓配对。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+
+NSAppleEventsUsageDescription 同时说明按用户指令访问访达所选文件与清理 Chrome 重复标签页；系统自动化授权仍按应用分别管理。
