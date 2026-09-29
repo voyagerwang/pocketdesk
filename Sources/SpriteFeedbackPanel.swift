@@ -1,20 +1,40 @@
 /**
  * [INPUT]: 依赖 SpriteFileDropView、PhoneFileStore 的批量拖入发送，以及 AppKit、SpriteOrbView 的原版动态组件与 SpriteFeedback.ViewModel；监听前台、锁屏和减少动态设置。
- * [OUTPUT]: 360pt 交接基线回执、单行回执背景随文字收紧；非激活透明精灵面板：按输入/提交/执行/终态切换的标题和正文、原版表情与有界结果滚动、
+ * [OUTPUT]: 600pt 宽松回执、短答案完整展开、长答案按屏幕限高并自动隐藏原生浮动滚动条；单行回执背景随文字收紧；非激活透明精灵面板、原版表情、
  *           文件拖入发送反馈与拖拽期间短暂显现；空闲无提示文字、无收起按钮；切走隐藏、重选开心唤醒。
  * [POS]: 桌面展示层；球体单独在 WebKit 内矢量绘制，正文由原生字体按屏幕比例绘制，不随球体缩放或旋转。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 
+/// 即使系统设置为始终显示滚动条，也只画细圆角滑块，不出现槽线。
+private final class SpriteResultScroller: NSScroller {
+    override class var isCompatibleWithOverlayScrollers: Bool { true }
+    override func draw(_ dirtyRect: NSRect) { drawKnob() }
+    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {}
+    override func drawKnob() {
+        let knob = rect(for: .knob)
+        guard knob.height > 0 else { return }
+        NSColor.secondaryLabelColor.withAlphaComponent(0.35).setFill()
+        NSBezierPath(roundedRect: NSRect(x: knob.midX - 1.5, y: knob.minY + 2,
+                                        width: 3, height: max(0, knob.height - 4)),
+                     xRadius: 1.5, yRadius: 1.5).fill()
+    }
+}
+
 final class SpriteFeedbackPanel: NSPanel {
-    // 文件传输只增加拖入接缝，保留交接基线的转写浮层宽度。
-    private static let panelWidth: CGFloat = 360
+    private static let panelWidth: CGFloat = 600
     private static let horizontalInset: CGFloat = 16
     private static let textWidth = panelWidth - horizontalInset * 2
     private static let orbSize: CGFloat = 176
     private let container = SpriteFileDropView(frame: .zero)
     private let transcriptSurface = NSView()
+    private(set) var desktopMode = false
+    let desktopInput = NSTextField()
+    private let desktopSubtitle = NSTextView()
+    private let subtitleScroll = NSScrollView()
+    private var subtitleText = ""
+    var onDesktopInterrupted: (() -> Void)?
     private let bubble = NSTextField(labelWithString: "")
     private let answer = NSTextView()
     private let answerScroll = NSScrollView()
@@ -83,8 +103,12 @@ final class SpriteFeedbackPanel: NSPanel {
         answer.textContainer?.widthTracksTextView = true
         answerScroll.documentView = answer
         answerScroll.hasVerticalScroller = true
+        answerScroll.verticalScroller = SpriteResultScroller()
+        answerScroll.autohidesScrollers = true
+        answerScroll.borderType = .noBorder
         answerScroll.drawsBackground = false
         answerScroll.scrollerStyle = .overlay
+        answerScroll.verticalScroller?.controlSize = .small
         statusLine.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
         statusLine.textColor = .labelColor
         statusLine.alignment = .center
@@ -93,14 +117,42 @@ final class SpriteFeedbackPanel: NSPanel {
         connectionNotice.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         connectionNotice.textColor = .labelColor
         connectionNotice.alignment = .center
-        for view in [transcriptSurface, bubble, answerScroll, orbView, statusLine, connectionNotice] { container.addSubview(view) }
+        desktopInput.font = NSFont.systemFont(ofSize: 15)
+        desktopInput.isBordered = false
+        desktopInput.isBezeled = false
+        desktopInput.drawsBackground = false
+        desktopInput.focusRingType = .none
+        desktopInput.textColor = .clear
+        desktopSubtitle.isEditable = false
+        desktopSubtitle.isSelectable = false
+        desktopSubtitle.drawsBackground = false
+        desktopSubtitle.font = .systemFont(ofSize: 16, weight: .medium)
+        desktopSubtitle.textColor = .labelColor
+        desktopSubtitle.textContainerInset = NSSize(width: 0, height: 2)
+        desktopSubtitle.textContainer?.widthTracksTextView = true
+        desktopSubtitle.isVerticallyResizable = true
+        desktopSubtitle.autoresizingMask = [.width]
+        subtitleScroll.drawsBackground = false
+        subtitleScroll.hasVerticalScroller = false
+        subtitleScroll.documentView = desktopSubtitle
+        subtitleScroll.isHidden = true
+        desktopInput.placeholderString = ""
+        desktopInput.setAccessibilityLabel("语音转写")
+        desktopInput.isHidden = true
+        for view in [transcriptSurface, bubble, answerScroll, orbView, statusLine, connectionNotice, desktopInput, subtitleScroll] { container.addSubview(view) }
     }
 
     func apply(_ model: SpriteFeedback.ViewModel) {
+        if desktopMode {
+            if model.presentationRevision == presentationRevision { return }
+            onDesktopInterrupted?()
+            desktopMode = false; desktopInput.isHidden = true; subtitleScroll.isHidden = true
+        }
         if model.presentationRevision != presentationRevision {
             presentationRevision = model.presentationRevision
             hiddenByApplication = false
         }
+        subtitleScroll.isHidden = true
         lastViewModel = model
         let revealAllowed = dragRevealed || (preparingFiles && fileNoticeUntil > Date())
         guard model.visible, !screenIsLocked, !hiddenByApplication || revealAllowed else { orderOutAndKeepIntent(); return }
@@ -117,6 +169,54 @@ final class SpriteFeedbackPanel: NSPanel {
         layoutContent()
         if !isVisible { centerAndShow() }
         updateOrb(model)
+    }
+
+    func beginDesktopCapture() -> Bool {
+        guard !LockScreenInput.locked else { return false }
+        desktopMode = true; hiddenByApplication = false
+        desktopInput.stringValue = ""; desktopInput.isHidden = false
+        bubble.isHidden = true; answerScroll.isHidden = true; connectionNotice.isHidden = true
+        statusLine.stringValue = "正在听 · 松开执行"; statusLine.isHidden = false
+        layoutContent(); centerAndShow()
+        NSApp.activate(ignoringOtherApps: true)
+        makeKeyAndOrderFront(nil)
+        makeFirstResponder(desktopInput)
+        if let editor = desktopInput.currentEditor() as? NSTextView {
+            editor.textColor = .clear
+            editor.insertionPointColor = .clear
+            editor.drawsBackground = false
+            editor.selectedTextAttributes = [.foregroundColor: NSColor.clear, .backgroundColor: NSColor.clear]
+            editor.markedTextAttributes = [.foregroundColor: NSColor.clear, .backgroundColor: NSColor.clear]
+        }
+        subtitleText = ""; desktopSubtitle.string = "说出你想做的事…"
+        desktopSubtitle.textColor = .secondaryLabelColor
+        subtitleScroll.isHidden = false
+        layoutContent()
+        orbView.update(visible: true, revision: presentationRevision + 1, emotion: "02", reduced: reduceMotion, taskId: "")
+        return true
+    }
+    /// Render the IME's current composition as subtitles; the focused receiver remains unchanged.
+    func updateDesktopSubtitle() {
+        guard desktopMode, !desktopInput.isHidden else { return }
+        let text = (desktopInput.currentEditor() as? NSTextView)?.string ?? desktopInput.stringValue
+        guard text != subtitleText else { return }
+        subtitleText = text
+        desktopSubtitle.string = text.isEmpty ? "说出你想做的事…" : text
+        desktopSubtitle.textColor = text.isEmpty ? .secondaryLabelColor : .labelColor
+        desktopSubtitle.scrollRangeToVisible(NSRange(location: desktopSubtitle.string.utf16.count, length: 0))
+    }
+    func desktopStatus(_ status: String, result: String? = nil) {
+        guard desktopMode else { return }
+        statusLine.stringValue = status; statusLine.isHidden = false
+        if let result {
+            desktopInput.isHidden = true
+            subtitleScroll.isHidden = true
+            answer.string = result; answerScroll.isHidden = result.isEmpty
+        }
+        layoutContent()
+    }
+    func endDesktopCapture() {
+        desktopMode = false; desktopInput.isHidden = true; subtitleScroll.isHidden = true
     }
 
     /// 拖入就是电脑端用户的发送意图；手机仍须点击接收，不要求手机当前选中任务。
@@ -162,8 +262,9 @@ final class SpriteFeedbackPanel: NSPanel {
     }
 
     private func layoutContent() {
-        let width = Self.panelWidth
-        let textWidth = Self.textWidth
+        let availableFrame = (screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let width = min(Self.panelWidth, availableFrame.width - 32)
+        let textWidth = width - Self.horizontalInset * 2
         let horizontalInset = Self.horizontalInset
         let orbSize = Self.orbSize
         func textHeight(_ text: String) -> CGFloat {
@@ -171,26 +272,49 @@ final class SpriteFeedbackPanel: NSPanel {
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
                 attributes: [.font: NSFont.systemFont(ofSize: 15)]).height)
         }
-        let questionHeight: CGFloat = bubble.isHidden ? 0 : min(textHeight(bubble.stringValue) + 6, 132)
-        let documentHeight: CGFloat = answerScroll.isHidden ? 0 : textHeight(answer.string) + 16
-        let answerHeight: CGFloat = answerScroll.isHidden ? 0 : min(max(documentHeight, 40), 180)
+        let questionHeight: CGFloat = !desktopInput.isHidden ? 68 : bubble.isHidden ? 0 : min(textHeight(bubble.stringValue) + 6, 132)
+        // 按实际 NSTextView 排版测高，避免估算行高与实际换行不一致造成假溢出。
+        answer.setFrameSize(NSSize(width: textWidth, height: max(40, answer.frame.height)))
+        answer.textContainer?.containerSize = NSSize(width: textWidth, height: .greatestFiniteMagnitude)
+        var documentHeight: CGFloat = 0
+        if !answerScroll.isHidden, let layout = answer.layoutManager, let textContainer = answer.textContainer {
+            layout.ensureLayout(for: textContainer)
+            documentHeight = ceil(layout.usedRect(for: textContainer).maxY) + answer.textContainerInset.height * 2
+        }
         let titleHeight: CGFloat = statusLine.isHidden ? 0 : min(textHeight(statusLine.stringValue) + 6, 48)
+        let maxAnswerHeight = max(40, min(420, availableFrame.height - orbSize - titleHeight - questionHeight - 72))
+        let answerHeight: CGFloat = answerScroll.isHidden ? 0 : min(max(documentHeight, 40), maxAnswerHeight)
+        answerScroll.hasVerticalScroller = documentHeight > answerHeight
         let gap: CGFloat = titleHeight > 0 && answerHeight > 0 ? 8 : 0
         let hasText = questionHeight + answerHeight + titleHeight > 0
         let textBottom = orbSize
         let height = hasText ? textBottom + questionHeight + answerHeight + titleHeight + gap + 24 : textBottom
         // AppKit 改高度默认移动底边；显式保持原点，避免每个输入事件把球体挪走。
-        let origin = frame.origin
+        let origin = NSPoint(x: frame.midX - width / 2, y: frame.minY)
         setContentSize(NSSize(width: width, height: height))
         setFrameOrigin(origin)
         orbView.frame = NSRect(x: (width - orbSize) / 2, y: 0, width: orbSize, height: orbSize)
         connectionNotice.frame = NSRect(x: horizontalInset, y: 0, width: textWidth, height: 20)
         statusLine.frame = NSRect(x: horizontalInset, y: height - 12 - titleHeight, width: textWidth, height: titleHeight)
         answerScroll.frame = NSRect(x: horizontalInset, y: textBottom + 12, width: textWidth, height: answerHeight)
-        answer.setFrameSize(NSSize(width: textWidth, height: max(documentHeight, answerHeight)))
-        answer.textContainer?.containerSize = NSSize(width: textWidth, height: .greatestFiniteMagnitude)
+        let answerWidth = answerScroll.contentSize.width
+        answer.setFrameSize(NSSize(width: answerWidth, height: max(documentHeight, answerHeight)))
+        answer.textContainer?.containerSize = NSSize(width: answerWidth, height: .greatestFiniteMagnitude)
+        if let layout = answer.layoutManager, let textContainer = answer.textContainer {
+            layout.ensureLayout(for: textContainer)
+            let laidOutHeight = ceil(layout.usedRect(for: textContainer).maxY) + answer.textContainerInset.height * 2
+            answer.setFrameSize(NSSize(width: answerWidth, height: max(laidOutHeight, answerHeight)))
+        }
         answer.alignment = documentHeight < 50 ? .center : .left
         bubble.frame = NSRect(x: horizontalInset, y: textBottom + 12 + answerHeight + gap, width: textWidth, height: questionHeight)
+        desktopInput.frame = bubble.frame
+        subtitleScroll.frame = bubble.frame
+        desktopSubtitle.setFrameSize(NSSize(width: textWidth, height: max(68, desktopSubtitle.frame.height)))
+        desktopSubtitle.textContainer?.containerSize = NSSize(width: textWidth, height: .greatestFiniteMagnitude)
+        if !subtitleScroll.isHidden {
+            desktopSubtitle.layoutManager?.ensureLayout(for: desktopSubtitle.textContainer!)
+            desktopSubtitle.scrollRangeToVisible(NSRange(location: desktopSubtitle.string.utf16.count, length: 0))
+        }
         transcriptSurface.isHidden = !hasText
         // 单行回执背景随文字收紧；长结果仍沿用有界滚动区域。
         let titleOnly = questionHeight == 0 && answerHeight == 0 && titleHeight > 0
@@ -275,6 +399,7 @@ final class SpriteFeedbackPanel: NSPanel {
     @objc private func appActivated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         guard app.bundleIdentifier != Bundle.main.bundleIdentifier && app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+        onDesktopInterrupted?()
         hiddenByApplication = true
         orderOutAndKeepIntent()
     }
@@ -329,7 +454,7 @@ final class SpriteFeedbackPanel: NSPanel {
         setFrame(clamped(rect), display: false)
     }
 
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { desktopMode }
     override var canBecomeMain: Bool { false }
 }
 

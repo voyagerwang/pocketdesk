@@ -20,6 +20,8 @@ final class PhoneFilePicker: NSObject {
         let bar = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
+        appMenu.addItem(HeadsetController.shared.settingsItem())
+        appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "退出 PocketDesk", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = appMenu; bar.addItem(appItem)
         let fileItem = NSMenuItem(title: "文件", action: nil, keyEquivalent: "")

@@ -10,6 +10,8 @@ import Foundation
 /// main.swift 只调 `SpriteDesk.install(webRoot:)` 一行。重复调用无害。
 enum SpriteDesk {
     private static var installed = false
+    private static let headsetControls = HeadsetController.shared
+    private static var desktopInput: SpriteDesktopInput?
     private static var retainedPanel: SpriteFeedbackPanel?
     private static var retainedFeedback: SpriteFeedback?
     private static let lock = NSLock()
@@ -32,5 +34,7 @@ enum SpriteDesk {
         retainedFeedback = feedback
         feedback.panel = panel
         feedback.start()
+        desktopInput = SpriteDesktopInput(panel: panel)
+        headsetControls.start()
     }
 }

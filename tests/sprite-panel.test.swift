@@ -39,8 +39,8 @@ enum LockScreenInput {
         panel.contentView?.layoutSubtreeIfNeeded()
         assert(panel.contentView?.layer?.backgroundColor?.alpha == 0, "容器透明")
         let transcript = panel.contentView!.subviews.compactMap { $0 as? NSTextField }.first { $0.stringValue == "测试问题" }!
-        assert(panel.frame.width == 360 && transcript.frame.height < 30 && transcript.frame.width > 320,
-               "电脑反馈框保持交接基线360宽度且短句单行")
+        assert(panel.frame.width == 600 && transcript.frame.height < 30 && transcript.frame.width > 560,
+               "电脑反馈框加宽且短句单行")
         assert(panel.isVisible && !panel.canBecomeKey && !panel.canBecomeMain)
         if let bitmap = panel.contentView!.bitmapImageRepForCachingDisplay(in: panel.contentView!.bounds) {
             panel.contentView!.cacheDisplay(in: panel.contentView!.bounds, to: bitmap)
@@ -93,6 +93,13 @@ enum LockScreenInput {
         capture("completed")
         let scroll = panel.contentView!.subviews.compactMap { $0 as? NSScrollView }.first!
         assert(scroll.frame.height > 30, "回答区域不能坍缩")
+        assert(scroll.hasVerticalScroller && scroll.autohidesScrollers, "长答案使用自动隐藏滚动条")
+        assert(scroll.documentView!.frame.height > scroll.contentSize.height, "长答案可以滚动")
+        model.answer = "今天（9月29日）有 3 个日程：\n\n- 11:00–12:00 直播早会（9楼会议室2）\n- 14:00–15:00【探月&体验】IM&直播需求节奏对齐（5层休息区）\n- 14:00–16:00【用户端】每周二需求预审\n\n后两个时间有重叠，注意安排。"
+        panel.apply(model)
+        assert(!scroll.hasVerticalScroller, "截图中的短日程完整展开，无滚动条")
+        assert(scroll.documentView!.frame.height <= scroll.contentSize.height + 1, "短答案无隐藏正文")
+        capture("short-calendar")
         let other = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier != nil && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }!
         panel.perform(NSSelectorFromString("appActivated:"), with: Notification(name: NSWorkspace.didActivateApplicationNotification, userInfo: [NSWorkspace.applicationUserInfoKey: other]) as NSNotification)
         assert(!panel.isVisible, "切应用后隐藏")

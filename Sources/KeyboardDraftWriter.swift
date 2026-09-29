@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 InputFocus 的真实焦点、DraftSnapshot、AppKit AX；按键和文本事件由 InputExecutor 注入。
- * [OUTPUT]: 提供 KeyboardDraftWriter；追加实时输入、选区修订及不含正文的失败诊断；Electron 整页 AX 文本在非编辑区漂移时，以本次插入片段+光标的局部证据认账。
+ * [OUTPUT]: 提供 KeyboardDraftWriter；追加实时输入、选区修订及不含正文的失败诊断；同一整框被电脑改动后，核验文末光标并将手机新增尾文接上；Electron 整页 AX 文本在非编辑区漂移时，以本次插入片段+光标的局部证据认账。
  * [POS]: Sources 的通用编辑器兼容通道；可读 AX 时校验原文和选区，未知编辑器沿用绑定和有序键流，不伪造读回。
  * [PROTOCOL]: update 的删除路径三级降级且全部读回门控：AX 选区仍是首选（连败退避制——失败不再一票否决永久禁用，连败 3 次才放弃）；键盘路径先试 Cmd+A 单和弦整框全选（仅限“旧文本恰为整个输入框且光标在文末”，读回确认选区后交由注入覆盖，没立住先按 Right 还原光标并读回确认）；都没立住才逐字 Backspace（不依赖选区、每次独立删光标前一字）。空替换只补一次退格删选区，逐字路径已删净不再补刀（旧版多发一次退格把共同前缀多删一字，读回永远对不上目标而冻结草稿）。落键读回与 confirmedText 均以“电脑实际内容 == 手机目标”为权威成功判据；选区“立住”后读回仍对不上即视为 AX 读数说谎，AX 与 Cmd+A 本会话一并停用。clearAll 以“读回为空”为唯一成功判据：AX 设全选读回确认后一次退格，选区假成功或“落了却删不净”时改发真实键盘 Cmd+A + 退格并按结果核验（实测 ZCode），证明不了就如实失败；变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -13,9 +13,9 @@ final class KeyboardDraftWriter {
     private let readSnapshot: (() -> DraftSnapshot?)?
     private let selectRange: ((CFRange) -> Bool)?
     private var expected: DraftSnapshot?
-    private let prefix: String
-    private let suffix: String
-    private let start: Int
+    private var prefix: String
+    private var suffix: String
+    private var start: Int
     private let initialSelection: Int
     private var first = true
     private var uncertainWrite = false
@@ -24,6 +24,7 @@ final class KeyboardDraftWriter {
     private var axFailStreak = 0
     private var chordFailStreak = 0
     private(set) var diagnostic = ""
+    private(set) var resolvedText: String?
 
     convenience init(pid: pid_t, valid: @escaping () -> Bool,
          key: @escaping (CGKeyCode, CGEventFlags) -> Bool, insert: @escaping (String) -> Bool) {
@@ -49,8 +50,24 @@ final class KeyboardDraftWriter {
     }
 
     func update(from old: String, to new: String) -> Bool {
+        resolvedText = nil
         diagnostic = "写入前：输入绑定或控制租约失效"
-        guard valid(), matchesExpected() else { return false }
+        guard valid() else { return false }
+        if !matchesExpected() {
+            // Only a full-field phone append can be rebased without deleting desktop edits.
+            guard !uncertainWrite, !first, start == 0, prefix.isEmpty, suffix.isEmpty,
+                  let expected, expected.text == old, expected == .end(of: old),
+                  new.hasPrefix(old), new != old, let actual = readSnapshot?(),
+                  actual.text != old, moveToEnd(of: actual) else { return false }
+            let appended = String(new.dropFirst(old.count))
+            start = 0
+            self.expected = .end(of: actual.text)
+            first = true
+            let merged = actual.text + appended
+            guard update(from: actual.text, to: merged) else { return false }
+            resolvedText = merged
+            return true
+        }
         if old == new { return true }
         let before = Array(old), after = Array(new)
         var common = 0
@@ -154,6 +171,20 @@ final class KeyboardDraftWriter {
         uncertainWrite = false
         diagnostic = ""
         return true
+    }
+
+    private func moveToEnd(of snapshot: DraftSnapshot) -> Bool {
+        let end = DraftSnapshot.end(of: snapshot.text)
+        if snapshot == end { return true }
+        let range = CFRange(location: end.location, length: 0)
+        if selectRange?(range) == true, waitForSelection(range) { return true }
+        guard valid(), key(124, .maskCommand) else { return false }
+        for _ in 0..<8 {
+            guard valid() else { return false }
+            if readSnapshot?() == end { return true }
+            usleep(10_000)
+        }
+        return false
     }
 
     /// 键盘兜底里的「Cmd+A 整框全选」：唯一与词序/换行无关的单和弦精确选区，一次性的选区

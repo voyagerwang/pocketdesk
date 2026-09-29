@@ -1,6 +1,6 @@
 """
 [INPUT]: 依赖 Playwright、Pillow 与本地 Web 文件，以模拟 HTTP/WS 隔离真实桌面。
-[OUTPUT]: 切换取消排队快照不冻结同步、Android 长按输入框保持原生焦点且不靠额外粘贴按钮、回车提交清空、历史存储异常不阻断收尾、旧 IME 迟到事件隔离、启动时已有正文同步、暂停后删空保持 ID、电脑原文不反填、已有草稿聚焦/全屏带入全文同步、候选完成失焦保留、点击/滚动合一与放大精确落点、触控板激活隔离与右缘防抖、锁屏/断屏恢复与重认证序号、原生输入法入口与自绘键盘移除、快捷切屏画面匹配、滚动入口、小屏布局、始终可见输入栏、模拟键盘视口偏移/缩小与首页隔离、首页/全屏 IME 重建、失焦探针取消与首页/全屏失败保留与原 ID 重试、全屏操作回归断言与 /tmp 下的浏览器截图。
+[OUTPUT]: 切换取消排队快照不冻结同步、Android 长按输入框保持原生焦点且不靠额外粘贴按钮、回车提交清空、历史存储异常不阻断收尾、旧 IME 迟到事件隔离、启动时已有正文同步、电脑改稿合并回执回填首页与全屏输入、暂停后删空保持 ID、电脑原文不反填、已有草稿聚焦/全屏带入全文同步、候选完成失焦保留、点击/滚动合一与放大精确落点、触控板激活隔离与右缘防抖、锁屏/断屏恢复与重认证序号、原生输入法入口与自绘键盘移除、快捷切屏画面匹配、滚动入口、小屏布局、始终可见输入栏、模拟键盘视口偏移/缩小与首页隔离、首页/全屏 IME 重建、失焦探针取消与首页/全屏失败保留与原 ID 重试、全屏操作回归断言与 /tmp 下的浏览器截图。
 [POS]: tests 的浏览器集成验证；手机软键盘和实际捕获性能仍需真机验证。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -32,7 +32,7 @@ with sync_playwright() as p:
     # 明确使用 Android UA，才能真正覆盖下方 Gboard 专属的编辑会话自愈路径。
     page = browser.new_page(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True, device_scale_factor=2, user_agent='Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36')
     errors, writes, key_writes = [], [], []
-    flags = {"frame_failed": False, "locked": False, "fail_submit": False, "fail_live": False, "mode": "selection"}
+    flags = {"frame_failed": False, "locked": False, "fail_submit": False, "fail_live": False, "mode": "selection", "merged_text": None}
     page.on('pageerror', lambda e: errors.append(str(e)))
     page.add_init_script('window.testJpeg = ' + json.dumps(base64.b64encode(jpeg).decode()) + ';')
     page.add_init_script("document.addEventListener('DOMContentLoaded', () => { document.querySelector('#text').value = '启动时已有手机正文'; })")
@@ -96,6 +96,9 @@ with sync_playwright() as p:
                 submitted = r.request.post_data_json.get('submit', False)
                 data = {'outcome': 'sent' if submitted or flags['mode'] == 'selection' else ('buffered' if flags['mode'] == 'deferred' else 'delivered'),
                         'detail': 'test write complete', 'mode': flags['mode'], 'committed': submitted}
+                if not submitted and flags['merged_text'] is not None:
+                    data['text'] = flags['merged_text']
+                    flags['merged_text'] = None
             r.fulfill(json=data); return
         file = ROOT / 'Web' / (path.lstrip('/') or 'index.html')
         r.fulfill(body=file.read_bytes(), content_type=mimetypes.guess_type(file)[0] or 'text/plain')
@@ -150,6 +153,15 @@ with sync_playwright() as p:
     page.locator('#text').fill('已有正文后续输入')
     page.wait_for_timeout(220)
     assert writes[-1]['text'] == '已有正文后续输入' and writes[-1]['draftId'] == existing_id
+    page.locator('#send').click()
+    page.wait_for_function('textEl.value === "" && !submittingDraft')
+    flags['merged_text'] = '电脑改过的正文续'
+    page.locator('#text').fill('手机原稿续')
+    page.wait_for_function('textEl.value === "电脑改过的正文续"')
+    assert page.locator('#kb-proxy').input_value() == '电脑改过的正文续'
+    page.locator('#text').fill('电脑改过的正文续写')
+    page.wait_for_timeout(220)
+    assert writes[-1]['text'] == '电脑改过的正文续写'
     page.locator('#send').click()
     page.wait_for_function('textEl.value === "" && !submittingDraft')
     # 首页整段清空后必须替换元素，保留焦点及事件绑定；覆盖无 compositionend 的键盘手势。

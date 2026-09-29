@@ -32,8 +32,14 @@ copy_tree() {
   cp -R "$src" "$dst"
 }
 copy_tree "$ROOT_DIR/Web" "$BUILD_APP/Contents/Resources/Web"
+mkdir -p "$BUILD_APP/Contents/Helpers"
+xcrun clang -fobjc-arc -Wall -Wextra -framework Foundation -framework IOKit "$ROOT_DIR/Helpers/HeadsetOptionMapping/main.m" -o "$BUILD_APP/Contents/Helpers/HeadsetOptionMapping"
+"$BUILD_APP/Contents/Helpers/HeadsetOptionMapping" --self-test
+codesign --force --sign - --identifier dev.voicedeck.headset-option-mapping "$BUILD_APP/Contents/Helpers/HeadsetOptionMapping"
 codesign --force --sign - --requirements '=designated => identifier "dev.voicedeck.app"' "$BUILD_APP"
 
+# Stop launchd ownership before replacing the bundle to prevent respawn during installation.
+launchctl bootout "gui/$(id -u)/dev.voicedeck.app" 2>/dev/null || true
 # 退出旧实例（进程名是 VoiceDeck，与 app 名不同）
 if pgrep -x VoiceDeck >/dev/null 2>&1; then
   echo "Quitting running VoiceDeck…"
@@ -52,5 +58,6 @@ copy_tree "$BUILD_APP" "$INSTALL_APP"
 if [ -e "$INSTALL_DIR/Voice Deck.app" ]; then mv "$INSTALL_DIR/Voice Deck.app" "$HOME/.Trash/Voice Deck-$(date +%s).app" 2>/dev/null || true; fi
 if [ -e "$INSTALL_DIR/Pocket Deck.app" ]; then mv "$INSTALL_DIR/Pocket Deck.app" "$HOME/.Trash/Pocket Deck-$(date +%s).app" 2>/dev/null || true; fi
 
-open "$INSTALL_APP"
+python3 "$ROOT_DIR/scripts/install-headset-services.py"
+# launchd starts the app; do not race it with a second LaunchServices launch.
 echo "Installed and started: $INSTALL_APP"

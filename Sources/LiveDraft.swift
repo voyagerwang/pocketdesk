@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Foundation；DraftEditor 提供绑定编辑器的焦点、文本及 UTF-16 选区读写；targetFrontmost 提供目标应用是否仍在前台。
  * [OUTPUT]: 提供 LiveDraft 单轮草稿状态机与 DraftSnapshot；失败停手并给出可证明的状态（interrupted/recoverable/needs-user-focus/committed），
- *           只读 probe() 就地核验原绑定后允许续接，绝不整段重放；提交后封闭。
+ *           手机仅追加且仍绑定同一输入框时保留电脑改稿并接上新增尾文；只读 probe() 就地核验原绑定后允许续接，绝不整段重放；提交后封闭。
  * [POS]: Sources 输入的文本事务边界；AXDraftEditor/KeyboardDraftWriter 实现写入，InputExecutor 串行调用并负责最终提交动作。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -69,6 +69,7 @@ final class LiveDraft {
     private(set) var committed = false
     private(set) var state: DraftState = .active
     private(set) var text = ""
+    private var mobileText = ""
     /// 停止时的人话说明（不含用户正文），供边界层原样转述给用户。
     private(set) var lastMessage = ""
 
@@ -81,7 +82,7 @@ final class LiveDraft {
         // 能力探测之后再读一次，只有空白且光标在起点的框可以被本轮接管。
         if let resumedText {
             self.editor = nil; mode = selectionWriter == nil ? .deferred : .selection
-            text = resumedText; attempted = resumedText
+            text = resumedText; mobileText = resumedText; attempted = resumedText
         } else if let editor, editor.isFocused(), editor.read() == .end(of: "") {
             self.editor = editor; mode = .replace
         } else { self.editor = nil; mode = selectionWriter == nil ? .deferred : .selection }
@@ -93,24 +94,43 @@ final class LiveDraft {
         attempted = value
         // 应用切回后的续发以 resumedText 建立已输入基线。正文没有变化时不再调用
         // selectionWriter 核对旧控件，也不产生任何键盘事件，只继续附件与提交。
-        if value == text { return }
+        if value == mobileText { return }
         guard let editor else {
-            if let selectionWriter, !selectionWriter(text, value) {
+            let next: String
+            if text != mobileText, value.hasPrefix(mobileText) {
+                next = text + String(value.dropFirst(mobileText.count))
+            } else { next = value }
+            if let selectionWriter, !selectionWriter(text, next) {
                 throw stop("输入位置或替换结果无法确认，已停止同步；请核对电脑内容。", .interrupted, resumable: true)
             }
-            text = value; return
+            text = next; mobileText = value; return
         }
-        guard editor.isFocused(), editor.read() == expected else {
+        guard editor.isFocused(), let actual = editor.read() else {
             throw stopPaused("电脑输入位置或内容已变化，已暂停同步并保留手机草稿。")
         }
-        guard value != expected.text else { text = value; return }
+        let next: String
+        if actual != expected {
+            guard expected == .end(of: text), value.hasPrefix(mobileText), actual.text != text else {
+                throw stopPaused("电脑输入位置或内容已变化，已暂停同步并保留手机草稿。")
+            }
+            next = actual.text + String(value.dropFirst(mobileText.count))
+        } else if text != mobileText, value.hasPrefix(mobileText) {
+            next = text + String(value.dropFirst(mobileText.count))
+        } else { next = value }
+        guard next != expected.text else { text = next; mobileText = value; return }
         writeUncertain = true
-        guard editor.replace(value), editor.isFocused(), editor.read() == .end(of: value) else {
+        guard editor.replace(next), editor.isFocused(), editor.read() == .end(of: next) else {
             throw stop("未能确认文本替换结果，已停止同步；请检查电脑内容，避免重复输入。", .interrupted, resumable: true)
         }
-        expected = .end(of: value)
+        expected = .end(of: next)
         writeUncertain = false
-        text = value
+        text = next
+        mobileText = value
+    }
+
+    func acceptResolvedText(_ resolved: String, mobileText: String) {
+        text = resolved
+        self.mobileText = mobileText
     }
 
     /// 显式清空（手机点「清空会话」= 两边一起清）。
@@ -130,6 +150,7 @@ final class LiveDraft {
             throw stop("没能确认电脑输入框已清空；手机草稿已保留，电脑内容未被改动。", .interrupted, resumable: true)
         }
         text = ""
+        mobileText = ""
         writeUncertain = false
         // 清空落地即重新证明了"这个输入位置可写"：解除冻结，后续输入接着同一轮继续。
         stopped = false
@@ -175,10 +196,12 @@ final class LiveDraft {
         var next = classify()
         if next == .recoverable {
             if let editor {
-                if let actual = editor.read() { expected = actual; text = actual.text; writeUncertain = false }
+                if let actual = editor.read() { expected = actual; text = actual.text; mobileText = actual.text; writeUncertain = false }
                 else { next = .needsUserFocus }
             } else if mode == .selection {
-                if let reconcileSelection, let confirmed = reconcileSelection(text, attempted) { text = confirmed }
+                if let reconcileSelection, let confirmed = reconcileSelection(text, attempted) {
+                    text = confirmed; mobileText = confirmed
+                }
                 else { next = .needsUserFocus }
             }
             // mode == .deferred：从未向电脑写过草稿，无需核对即可续接。
@@ -206,13 +229,13 @@ final class LiveDraft {
                   (!writeUncertain && actual == expected) || actual == .end(of: attempted) else {
                 throw failure("电脑内容与本轮草稿不一致，请点一下电脑输入框后重试；手机文字已保留。")
             }
-            expected = actual; text = actual.text
+            expected = actual; text = actual.text; mobileText = actual.text
             writeUncertain = false
         } else if mode == .selection {
             guard let confirmed = reconcileSelection?(text, attempted) else {
                 throw failure("还不能核对原输入框，请点一下电脑输入框后重试；手机文字已保留，未重复输入。")
             }
-            text = confirmed
+            text = confirmed; mobileText = confirmed
         } else {
             // 暂存后的最终粘贴可能已执行，不能从 stopped 状态重复提交。
             throw failure("上次提交结果未确认，请核对电脑内容；手机文字已保留。")

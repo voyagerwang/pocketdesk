@@ -36,7 +36,12 @@ copy_tree() {
 copy_tree "$ROOT_DIR/Web" "$BUILD_APP/Contents/Resources/Web"
 # 固定 designated requirement，避免每次本地重编译都因 CDHash 改变而丢失辅助功能授权。
 # 这是本机开发签名策略；正式分发时应替换为 Apple Developer ID 签名。
+mkdir -p "$BUILD_APP/Contents/Helpers"
+xcrun clang -fobjc-arc -Wall -Wextra -framework Foundation -framework IOKit "$ROOT_DIR/Helpers/HeadsetOptionMapping/main.m" -o "$BUILD_APP/Contents/Helpers/HeadsetOptionMapping"
+"$BUILD_APP/Contents/Helpers/HeadsetOptionMapping" --self-test
+codesign --force --sign - --identifier dev.voicedeck.headset-option-mapping "$BUILD_APP/Contents/Helpers/HeadsetOptionMapping"
 codesign --force --sign - --requirements '=designated => identifier "dev.voicedeck.app"' "$BUILD_APP"
+launchctl bootout "gui/$(id -u)/dev.voicedeck.app" 2>/dev/null || true
 rm -rf "$INSTALL_APP"
 copy_tree "$BUILD_APP" "$INSTALL_APP"
 # 清理历史更名遗留的安装目录（Voice Deck / Pocket Deck）。
@@ -51,5 +56,6 @@ if pgrep -x VoiceDeck >/dev/null 2>&1; then
   # 等端口释放：退得不够干净时新进程会绑不上 46387，白装一次。
   sleep 1.5
 fi
-open "$INSTALL_APP"
+python3 "$ROOT_DIR/scripts/install-headset-services.py"
+# launchd starts the app; do not race it with a second LaunchServices launch.
 echo "Installed and started: $INSTALL_APP"

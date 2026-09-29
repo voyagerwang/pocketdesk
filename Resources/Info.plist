@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- [INPUT]: 由 install-app.sh 复制进 App bundle。 [OUTPUT]: 声明 PocketDesk 的独立应用身份与访达自动化用途（读取访达多选发送文件）。 [POS]: Resources 的 macOS bundle 元数据。 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md -->
+<!-- [INPUT]: 由 install-app.sh 复制进 App bundle。 [OUTPUT]: 声明 PocketDesk 的独立应用身份与访达与 Chrome 自动化用途（发送所选文件、清理重复标签页）。 [POS]: Resources 的 macOS bundle 元数据。 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -14,7 +14,7 @@
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <!-- ScreenCaptureKit 的 TCC 强制要求：缺失本键时 CGRequestScreenCaptureAccess() 会直接终止进程，而不是弹窗。 -->
   <key>NSScreenCaptureUsageDescription</key><string>PocketDesk 需要屏幕录制权限，用于在手机端查看这台 Mac 的画面。</string>
-  <!-- 文件发送读取访达多选：发送给手机前需用户在系统设置允许 PocketDesk 自动化访问访达。 -->
-  <key>NSAppleEventsUsageDescription</key><string>PocketDesk 需要访问访达，读取你选中的文件以便发送到你的手机。</string>
+  <!-- 文件发送和标签页清理分别需要访达、Google Chrome 的自动化授权。 -->
+  <key>NSAppleEventsUsageDescription</key><string>PocketDesk 需要按你的指令读取访达所选文件，或读取并关闭 Google Chrome 中的重复标签页。</string>
 </dict>
 </plist>

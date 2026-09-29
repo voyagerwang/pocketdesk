@@ -51,7 +51,7 @@ import Foundation
         AgentRunner.openBookmark = savedOpenBookmark
         opened.removeAll()
 
-        func run(_ tool: String, _ arguments: String, allowed: Bool = true, dispatchFailure: Bool = false, dispatchUnconfirmed: Bool = false, expectedMode: AgentConversationMode = .newTask, lockResult: Result<ExecutionFeedback, ShortcutError> = .success(.delivered("电脑已锁屏。")), extraLockCall: Bool = false, desktopResult: Result<ExecutionFeedback, ShortcutError> = .success(.delivered("已操作。")), fallbackOpen: Bool = false) throws -> AgentRunner.Outcome {
+        func run(_ tool: String, _ arguments: String, allowed: Bool = true, dispatchFailure: Bool = false, dispatchUnconfirmed: Bool = false, expectedMode: AgentConversationMode = .newTask, lockResult: Result<ExecutionFeedback, ShortcutError> = .success(.delivered("电脑已锁屏。")), extraLockCall: Bool = false, desktopResult: Result<ExecutionFeedback, ShortcutError> = .success(.delivered("已操作。")), fallbackOpen: Bool = false, fallbackWebsite: Bool = false) throws -> AgentRunner.Outcome {
             var task = try TaskStore.claim(subject: "test", requestId: UUID().uuidString, text: "测试指令", context: nil)
             task.status = .running
             try TaskStore.save(task)
@@ -86,8 +86,8 @@ import Foundation
                     let call: [String: Any] = ["id": "c1", "type": "function", "function": ["name": tool, "arguments": arguments]]
                     let calls = extraLockCall ? [call, call] : [call]
                     done(.success(ModelTurn(toolCalls: calls, rawMessage: ["role": "assistant", "tool_calls": calls])))
-                } else if turns == 2 && fallbackOpen {
-                    let calls: [[String: Any]] = [["id": "c2", "type": "function", "function": ["name": "open_bookmark", "arguments": "{\"id\":\"Default:1390\"}"]]]
+                } else if turns == 2 && (fallbackOpen || fallbackWebsite) {
+                    let calls: [[String: Any]] = [["id": "c2", "type": "function", "function": ["name": fallbackWebsite ? "open_page" : "open_bookmark", "arguments": fallbackWebsite ? "{\"url\":\"https://platform.deepseek.com/\"}" : "{\"id\":\"Default:1390\"}"]]]
                     done(.success(ModelTurn(toolCalls: calls, rawMessage: ["role": "assistant", "tool_calls": calls])))
                 } else {
                     assert(messages.last?["role"] as? String == "tool")
@@ -114,11 +114,33 @@ import Foundation
             return outcome!
         }
         let lockTool = AgentRunner.tools.compactMap { $0["function"] as? [String: Any] }.first { $0["name"] as? String == "lock_computer" }
+        let savedCleanChromeTabs = AgentRunner.cleanChromeTabs
+        var cleanupCalls = 0
+        AgentRunner.cleanChromeTabs = { _, done in cleanupCalls += 1; done(.sent("已关闭 3 个 Chrome 重复标签页。")) }
+        let cleanup = try run("close_duplicate_chrome_tabs", "{}", extraLockCall: true)
+        assert(cleanup.content == "已关闭 3 个 Chrome 重复标签页。" && cleanupCalls == 1, "回执直接收尾，同批调用不重放")
+        _ = try run("close_duplicate_chrome_tabs", "{\"url\":\"https://example.com\"}")
+        _ = try run("close_duplicate_chrome_tabs", "{}", allowed: false)
+        assert(cleanupCalls == 1, "无效参数/租约失效不关闭")
+        AgentRunner.cleanChromeTabs = { _, done in done(.failed("已确认关闭 1 个；清理已停止。")) }
+        let partialCleanup = try run("close_duplicate_chrome_tabs", "{}")
+        assert(partialCleanup.error == "已确认关闭 1 个；清理已停止。" && partialCleanup.content == nil)
+        AgentRunner.cleanChromeTabs = savedCleanChromeTabs
         AgentRunner.resolveApp = { _ in nil }
         AgentRunner.readBookmarks = { [] }
         AgentRunner.openBookmark = { _, done in done("已向 Chrome 提交打开书签请求：API仪表盘") }
         let recoveredOpen = try run("open_target", "{\"app\":\"编程猫 API 的仪表盘\"}", fallbackOpen: true)
         assert(recoveredOpen.content != nil && recoveredOpen.error == nil, "首次查找失败后成功打开书签必须成功")
+        let websiteRecovery = try run("open_target", "{\"app\":\"DeepSeek API平台\"}", fallbackWebsite: true)
+        assert(websiteRecovery.error == nil && opened.contains("https://platform.deepseek.com/"), "无书签后网页打开应清除本地查找失败")
+        let savedSearch = AgentRunner.searchWeb
+        var queries: [String] = []
+        AgentRunner.searchWeb = { query, done in queries.append(query); done("搜索候选：https://example.com") }
+        _ = try run("search_web", "{\"query\":\"未收藏的网站 官网\"}", fallbackWebsite: true)
+        assert(queries == ["未收藏的网站 官网"])
+        _ = try run("search_web", "{\"query\":\"北京天气\"}", allowed: false)
+        assert(queries.count == 1, "无控制权不执行联网搜索")
+        AgentRunner.searchWeb = savedSearch
         let unrecoveredOpen = try run("open_target", "{\"app\":\"不存在\"}")
         assert(unrecoveredOpen.content == nil && unrecoveredOpen.error != nil, "没有成功回执时保留失败")
         let unrelatedFailure = try run("desktop_action", "{\"action\":\"list_windows\"}", desktopResult: .failure(.message("菜单操作失败")), fallbackOpen: true)

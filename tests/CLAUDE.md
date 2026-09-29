@@ -152,3 +152,13 @@ console-actions-browser.py 验证即使存在HTTPS地址，连接区仍只有一
 task-first-browser.py: App0.4首页锁定、未知和解锁状态的入口显隐、无自动授权、顶部应用栏与主题设置入口的320/390回归。
 Android LocalClientTest与WorkspaceExperienceTest补充具体错误保留、真实手势才能直达解锁和主题传递；NativePagesTest确认低频页无底部Tab、返回保留工作台。
 motion-send.test.cjs 与 Android NativeMotionBridgeTest：锁定 HTTP WebView 原生姿态样本进入既有甩送识别/提交门禁，以及 Android 姿态角和屏幕方向映射；合成测试不替代安卓真机方向与手感验收。
+
+chrome-tab-cleanup.test.swift: 窗口/完整 URL/加载边界、活动页保留、控制失效和未知结果停止；真实 Chrome 字典仅编译固定脚本、不执行。agent-runner.test.swift 另验证去重工具参数、租约、同批抑制和原样部分失败回执。隔离测试不替代 Chrome 实际关闭验收。
+
+Chrome 去重延迟回归：模拟 pending → pending → closed，核验多次仍只关闭一次；持续 pending 在 2 秒内失败且不碰下一页；核验后失权保留已确认计数。脚本语法编译仍不是实际 Chrome 关闭验收。
+
+2026-09-28 Chrome 去重实机验收：修复安装后从手机 Web 小精灵入口提交“关闭 Chrome 里重复打开的标签页。”，任务 2F341124-B689-4AED-A68A-9F1247C8D13D 为 succeeded、回执“已关闭 2 个 Chrome 重复标签页。”；Chrome 标签栏同时减少对应两页，页面展开结果一致。验收后返回控制台结束临时页面连接。
+
+workbench-content.test.swift: 临时 TaskStore 与 HTTP 替身验证四类创建、正文/日期映射、按 ID 核验、失去控制权/服务离线无写入、超时/错正文不重放、旧快照/进程重载去重、并发原子占用及 AgentRunner 工具路由。
+
+workbench-lookup.test.swift: GET 替身验证六工具路由、关键词编码、日期/分页/ID/凭证校验、租约/离线/错误回执、查询零创建及 AgentRunner 结果回灌。
