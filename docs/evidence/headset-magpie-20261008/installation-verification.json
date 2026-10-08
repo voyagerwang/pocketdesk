@@ -1,0 +1,20 @@
+{
+  "installed": "/Users/cm/Applications/PocketDesk.app",
+  "rollback": "/Users/cm/.codex/worktrees/headset-magpie/pocketdesk/build/headset-magpie-20261008/rollback/PocketDesk.app",
+  "health": "HTTP 200",
+  "launchAgent": "running",
+  "taskCount": 93,
+  "taskSnapshotPreserved": true,
+  "headsetConfigurationsPreserved": true,
+  "helperPreserved": true,
+  "signedBinarySHA256": "5e4d94d1bdb0cac2ded3354b96f2cec5b548384eaf52b21f838e175fe00ae73d",
+  "realHeadsetTest": false,
+  "productionUI": "not inspected: Mac locked",
+  "checks": [
+    "full Swift build",
+    "gesture auto/preset state machine",
+    "native ready/recognized/error/dark/settings renders",
+    "save gating and cancellation",
+    "installed helper self-test"
+  ]
+}
