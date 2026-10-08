@@ -1,13 +1,19 @@
 /**
- * [INPUT]: 依赖 ScreenCaptureKit 的显示器枚举与单帧捕获、CoreGraphics 授权、AppKit JPEG 编码。
- * [OUTPUT]: 提供 ScreenCapture 的显示器列表、授权请求与内存 JPEG 单帧（showsCursor 可按请求关闭，供手机叠加箭头时避免双鼠标）；macOS 14 以下明确拒绝实验功能。
- * [POS]: Sources 的画面读取边界；Server 在鉴权后调用，不保存画面，也不启动持续录屏。
+ * [INPUT]: ScreenCaptureKit、现有锁屏事实、ScreenCaptureDiagnostics 与锁屏限定的用户级备用截图。
+ * [OUTPUT]: 提供有界显示器枚举、带代际/来源的 JPEG 单帧、只读诊断；迟到与跨会话结果丢弃。
+ * [POS]: Sources 画面边界；备用截图仅有短期私有文件，用后回收，不宣称已验证锁屏内容。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 import ScreenCaptureKit
 
 final class ScreenCapture {
+    struct Snapshot {
+        let jpeg: Data
+        let captureEpoch: UInt64
+        let captureState: String
+        let backend: String
+    }
     enum Failure: LocalizedError {
         case unavailable, permission, missingDisplay, encoding
         var errorDescription: String? {
@@ -31,12 +37,29 @@ final class ScreenCapture {
 
     func displays() async throws -> [[String: Any]] {
         try checkAccess()
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        return content.displays.sorted { $0.displayID < $1.displayID }.enumerated().map { index, display in
-            // width/height 是显示器的逻辑点分辨率（与 CGEvent 全局坐标同单位），
-            // 前端做"远端拖动"时要把比例差 × 分辨率换算成鼠标位移像素，必须下发。
-            ["id": display.displayID, "name": "显示器 \(index + 1) · \(display.width) × \(display.height)",
-             "width": display.width, "height": display.height]
+        let context = ScreenCaptureDiagnostics.shared.context()
+        if context.state == "locked" {
+            let native = ScreenCaptureFallback.displays()
+            guard !native.isEmpty else { throw Failure.missingDisplay }
+            guard ScreenCaptureDiagnostics.shared.isCurrent(context) else { throw stale() }
+            return native.enumerated().map { index, display in
+                ["id": display.id, "name": "显示器 \(index + 1) · \(display.width) × \(display.height)",
+                    "width": display.width, "height": display.height]
+            }
+        }
+        do {
+            let content = try await ScreenCaptureDeadline.run(seconds: 2.5, key: "sck-enumeration") {
+                try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            }
+            guard ScreenCaptureDiagnostics.shared.isCurrent(context) else { throw stale() }
+            return content.displays.sorted { $0.displayID < $1.displayID }.enumerated().map { index, display in
+                // width/height 与 CGEvent 全局坐标同为逻辑点。
+                ["id": display.displayID, "name": "显示器 \(index + 1) · \(display.width) × \(display.height)",
+                 "width": display.width, "height": display.height]
+            }
+        } catch {
+            ScreenCaptureDiagnostics.shared.event(stage: "display-enumeration", display: 0, backend: "sck", error: error)
+            throw error
         }
     }
 
@@ -44,20 +67,55 @@ final class ScreenCapture {
     /// 画面里烘焙一个鼠标、叠加层再画一个，就会出现两个指针，所以那条路径必须关掉烘焙的。
     /// 默认 true 是给旧客户端兜底——它们没有叠加层，关了就一个鼠标都看不见了。
     func snapshot(displayID: UInt32, showsCursor: Bool = true) async throws -> Data {
+        try await snapshotFrame(displayID: displayID, showsCursor: showsCursor).jpeg
+    }
+
+    func diagnostics() -> [String: Any] { ScreenCaptureDiagnostics.shared.snapshot() }
+
+    func snapshotFrame(displayID: UInt32, showsCursor: Bool = true) async throws -> Snapshot {
         try checkAccess()
+        let context = ScreenCaptureDiagnostics.shared.context()
+        // 锁屏先走不同的用户级入口，避免 SCK 枚举先卡住；失败仍保留原生错误后有界试 SCK。
+        if context.state == "locked" {
+            do {
+                let data = try ScreenCaptureFallback.capture(displayID: displayID, showsCursor: showsCursor, context: context)
+                ScreenCaptureDiagnostics.shared.event(stage: "snapshot", display: displayID, backend: "screencapture", status: "complete")
+                return Snapshot(jpeg: data, captureEpoch: context.epoch, captureState: context.state, backend: "screencapture")
+            } catch {
+                ScreenCaptureDiagnostics.shared.event(stage: "snapshot", display: displayID, backend: "screencapture", error: error)
+                guard ScreenCaptureDiagnostics.shared.isCurrent(context) else { throw error }
+            }
+        }
         if #available(macOS 14.0, *) {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let display = content.displays.first(where: { $0.displayID == displayID }) else { throw Failure.missingDisplay }
-            let filter = SCContentFilter(display: display, excludingWindows: [])
-            let config = SCStreamConfiguration()
-            let scale = min(1.0, 1920.0 / Double(display.width))
-            config.width = max(1, Int(Double(display.width) * scale))
-            config.height = max(1, Int(Double(display.height) * scale))
-            config.showsCursor = showsCursor
-            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            guard let data = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else { throw Failure.encoding }
-            return data
+            do {
+                let data: Data = try await ScreenCaptureDeadline.run(seconds: 2.5, key: "sck-snapshot") {
+                    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                    guard let display = content.displays.first(where: { $0.displayID == displayID }) else { throw Failure.missingDisplay }
+                    let filter = SCContentFilter(display: display, excludingWindows: [])
+                    let config = SCStreamConfiguration()
+                    let scale = min(1.0, 1920.0 / Double(display.width))
+                    config.width = max(1, Int(Double(display.width) * scale))
+                    config.height = max(1, Int(Double(display.height) * scale)); config.showsCursor = showsCursor
+                    let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                    guard !ScreenCapturePixels.isBlack(image) else {
+                        throw NSError(domain: "PocketDesk.ScreenCapture", code: 3,
+                            userInfo: [NSLocalizedDescriptionKey: "系统仅返回黑屏，无法确认锁屏画面。"])
+                    }
+                    guard let data = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else { throw Failure.encoding }
+                    return data
+                }
+                guard ScreenCaptureDiagnostics.shared.isCurrent(context) else { throw stale() }
+                ScreenCaptureDiagnostics.shared.event(stage: "snapshot", display: displayID, backend: "sck", status: "complete")
+                return Snapshot(jpeg: data, captureEpoch: context.epoch, captureState: context.state, backend: "sck")
+            } catch {
+                ScreenCaptureDiagnostics.shared.event(stage: "snapshot", display: displayID, backend: "sck", error: error)
+                throw error
+            }
         }
         throw Failure.unavailable
+    }
+    private func stale() -> NSError {
+        NSError(domain: "PocketDesk.ScreenCapture", code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "电脑会话状态已变化，已丢弃旧画面。"])
     }
 }

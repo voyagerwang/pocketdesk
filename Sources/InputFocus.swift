@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 AppKit Accessibility 与 Util 前台观测。
- * [OUTPUT]: 提供 InputFocus 三态焦点探测、带 PID/聚焦窗口/WebArea 校验的安全鼠标锚点、有界查找、显式聚焦及无正文诊断（字符数量、占位文本相等关系与选区）。
+ * [OUTPUT]: 系统真实键盘焦点优先，PID 不符时回退到指定应用； 提供 InputFocus 三态焦点探测、带 PID/聚焦窗口/WebArea 校验的安全鼠标锚点、有界查找、显式聚焦及无正文诊断（字符数量、占位文本相等关系与选区）。
  * [POS]: Sources 的焦点能力边界；InputExecutor 决定是否允许聚焦，全屏绑定输入只读探测。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md。focusedElement 读不到焦点时对 Electron 应用写 AXManualAccessibility（附 AXEnhancedUserInterface）激活其 AX 树：先 false 再 true 强制状态变化，使清空等可核验路径对 AX 盲的 Electron 应用生效；但**树确认存活过（成功读到过焦点元素）的 pid 不因瞬时读抖动重写激活属性**——重写会强制 Chromium 重建整棵树、作废全部已捕获 AX 引用（实时输入第二字冻结/清空连败的元凶），活树 pid 只做 300ms 有界重试，确需重写时冷却拉长到 10s；撞节流不放弃而是继续等待重读。另提供 focusedApplicationPID（系统级键盘焦点归属，打字落点真值，激活核验与逐键门禁用；窗口 z 序仅供界面展示）。不改变"读不到控件不盲删"的红线
  */
@@ -166,7 +166,9 @@ enum InputFocus {
     }
 
     private static func readFocusedElement(pid: pid_t) -> AXUIElement? {
-        for owner in [AXUIElementCreateApplication(pid), AXUIElementCreateSystemWide()] {
+        // 键盘落点以系统焦点为准；Electron 的应用级焦点可能仍指向包装层或旧控件。
+        // 查询后台应用时，系统焦点的 PID 不匹配会继续回退到该应用自身的焦点。
+        for owner in [AXUIElementCreateSystemWide(), AXUIElementCreateApplication(pid)] {
             var raw: CFTypeRef?
             guard AXUIElementCopyAttributeValue(owner, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
                   let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { continue }
@@ -190,6 +192,50 @@ enum InputFocus {
         var pid: pid_t = 0
         guard AXUIElementGetPid(raw as! AXUIElement, &pid) == .success, pid > 0 else { return nil }
         return pid
+    }
+
+    /// Cold Electron windows may not expose their editor until accessibility is
+    /// enabled. Voice preparation uses the same cache, short messaging timeouts,
+    /// and request guards; it never rebuilds a tree already observed alive.
+    static func prepareVoiceAccessibility(pid: pid_t, authorized: () -> Bool, deadline: TimeInterval) {
+        func allowed() -> Bool {
+            authorized() && ProcessInfo.processInfo.systemUptime < deadline
+        }
+        func observedFocus() -> AXUIElement? {
+            for root in [AXUIElementCreateSystemWide(), AXUIElementCreateApplication(pid)] {
+                guard allowed(), AXUIElementSetMessagingTimeout(root, 0.04) == .success else { return nil }
+                var raw: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(root, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
+                      let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { continue }
+                let element = raw as! AXUIElement
+                var owner: pid_t = 0
+                if AXUIElementGetPid(element, &owner) == .success, owner == pid { return element }
+            }
+            return nil
+        }
+        guard pid > 0, allowed() else { return }
+        if observedFocus() != nil { noteTreeAlive(pid); return }
+        activationLock.lock()
+        let now = ProcessInfo.processInfo.systemUptime
+        guard allowed(), !treeAlivePids.contains(pid),
+              now - (manualAccessibilityAttempts[pid] ?? -.infinity) >= 1 else {
+            activationLock.unlock(); return
+        }
+        let app = AXUIElementCreateApplication(pid)
+        guard AXUIElementSetMessagingTimeout(app, 0.04) == .success else { activationLock.unlock(); return }
+        manualAccessibilityAttempts[pid] = now
+        // Voice only enables a cold tree. It must never leave accessibility
+        // disabled when cancellation interrupts a false/true recovery sequence.
+        for name in ["AXManualAccessibility", "AXEnhancedUserInterface"] {
+            guard allowed() else { activationLock.unlock(); return }
+            AXUIElementSetAttributeValue(app, name as CFString, kCFBooleanTrue)
+        }
+        activationLock.unlock()
+        let waitUntil = min(deadline, ProcessInfo.processInfo.systemUptime + 0.2)
+        while allowed(), ProcessInfo.processInfo.systemUptime < waitUntil {
+            if observedFocus() != nil { noteTreeAlive(pid); return }
+            usleep(10_000)
+        }
     }
 
     private static var manualAccessibilityAttempts: [pid_t: TimeInterval] = [:]

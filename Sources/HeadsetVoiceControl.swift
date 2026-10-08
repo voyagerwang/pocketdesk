@@ -6,27 +6,51 @@ import IOKit.hidsystem
 let HeadsetSupport = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/VoiceDeck/headset")
 let HeadsetMarker: Int64 = 0x48564331
 let HeadsetLogLock = NSLock()
+private let HeadsetLogQueue = DispatchQueue(label: "dev.voicedeck.headset.log", qos: .utility)
 func HeadsetLog(_ message: String) {
-    HeadsetLogLock.lock(); defer { HeadsetLogLock.unlock() }
-    let line = "\(ISO8601DateFormatter().string(from: Date())) \(message)\n"
-    let path = HeadsetSupport.appendingPathComponent("status.log")
-    if !FileManager.default.fileExists(atPath: path.path) { FileManager.default.createFile(atPath: path.path, contents: nil) }
-    if let h = try? FileHandle(forWritingTo: path) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+    let recordedAt = Date()
+    // Logging must not hold up a hardware notification or the Option event.
+    HeadsetLogQueue.async {
+        HeadsetLogLock.lock(); defer { HeadsetLogLock.unlock() }
+        let line = "\(ISO8601DateFormatter().string(from: recordedAt)) \(message)\n"
+        let path = HeadsetSupport.appendingPathComponent("status.log")
+        if !FileManager.default.fileExists(atPath: path.path) { FileManager.default.createFile(atPath: path.path, contents: nil) }
+        if let h = try? FileHandle(forWritingTo: path) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+    }
 }
 func HeadsetAttr(_ element: AXUIElement, _ key: String) -> CFTypeRef? {
     var value: CFTypeRef?
     return AXUIElementCopyAttributeValue(element, key as CFString, &value) == .success ? value : nil
 }
 func HeadsetFocused() -> (pid_t, AXUIElement)? {
-    guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-    let root = AXUIElementCreateApplication(app.processIdentifier)
-    guard let v = HeadsetAttr(root, kAXFocusedUIElementAttribute), CFGetTypeID(v) == AXUIElementGetTypeID() else { return nil }
-    return (app.processIdentifier, unsafeBitCast(v, to: AXUIElement.self))
+    guard let pid = InputFocus.focusedApplicationPID() else { return nil }
+    let root = AXUIElementCreateApplication(pid)
+    let value = HeadsetAttr(root, kAXFocusedUIElementAttribute)
+        ?? HeadsetAttr(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute)
+    guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    let element = unsafeBitCast(value, to: AXUIElement.self)
+    var owner: pid_t = 0
+    guard AXUIElementGetPid(element, &owner) == .success, owner == pid else { return nil }
+    return (pid, element)
+}
+func HeadsetTextRoleAllowed(_ values: [Any]) -> Bool {
+    guard values.count == 2, let role = values[0] as? String,
+          [kAXTextAreaRole, kAXTextFieldRole, kAXComboBoxRole].contains(role) else { return false }
+    // Missing/unsupported subrole keeps the existing ordinary-field behavior.
+    return values[1] as? String != kAXSecureTextFieldSubrole
 }
 func HeadsetTextValue(_ element: AXUIElement) -> String? {
-    guard let role = HeadsetAttr(element, kAXRoleAttribute) as? String,
-          [kAXTextAreaRole, kAXTextFieldRole, kAXComboBoxRole].contains(role),
-          (HeadsetAttr(element, kAXSubroleAttribute) as? String) != kAXSecureTextFieldSubrole else { return nil }
+    var values: CFArray?
+    let result = AXUIElementCopyMultipleAttributeValues(element,
+        [kAXRoleAttribute, kAXSubroleAttribute] as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &values)
+    if result == .notImplemented {
+        guard let role = HeadsetAttr(element, kAXRoleAttribute) as? String,
+              [kAXTextAreaRole, kAXTextFieldRole, kAXComboBoxRole].contains(role),
+              (HeadsetAttr(element, kAXSubroleAttribute) as? String) != kAXSecureTextFieldSubrole else { return nil }
+    } else {
+        guard result == .success, let values = values as? [Any], HeadsetTextRoleAllowed(values) else { return nil }
+    }
+    // Read the value only after confirming this is not a secure field.
     return HeadsetAttr(element, kAXValueAttribute) as? String
 }
 
@@ -42,6 +66,10 @@ final class HeadsetVoiceSession {
     var panelGoneAt: Date?
     var immediate = false
     var manualSend = false
+    var fromClickControl = false
+    var awaitingClickEnd = false
+    var optionPostedAt: Double?
+    var firstTextObserved = false
     init(pid: pid_t, element: AXUIElement, text: String) {
         self.pid = pid; self.element = element; original = text; latest = text
     }
@@ -60,6 +88,10 @@ final class HeadsetController: NSObject, NSMenuDelegate {
     var hidReady = false
     var lastPanelVisible = false
     var cycleDraft: HeadsetVoiceSession?
+    var voicePointer: PointerExecutor?
+    private var voicePreparation: HeadsetVoiceFocusRequest?
+    private var voicePreparationCompletion: ((Bool) -> Void)?
+    var preparingClickVoice: Bool { voicePreparation != nil }
     let defaults = UserDefaults(suiteName: "dev.voicedeck.headset")!
     var autoSend: Bool { defaults.object(forKey: "autoSend") as? Bool ?? true }
     var delay: Double { let n = defaults.double(forKey: "delay"); return n >= 0.5 ? n : 2 }
@@ -74,7 +106,7 @@ final class HeadsetController: NSObject, NSMenuDelegate {
             defaults.set(true, forKey: "migrated")
         }
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in self?.tick() }
-        HeadsetLog("PocketDesk headset started; native Option mapping is never modified; autoSend=\(autoSend) delay=\(delay)")
+        HeadsetLog("PocketDesk headset started; native Option mapping is never modified; autoSend=\(autoSend) delay=\(delay) maxRecording=\(Int(HeadsetVoiceTiming.maxRecordingSeconds)) sendSessionTimeout=\(Int(HeadsetVoiceTiming.maxSendSessionSeconds))")
         headset.onFirstPress = { [weak self] in self?.firstNativePress() }
         headset.onDoubleRelease = { [weak self] in self?.doubleClick() }
         headset.onReady = { [weak self] ready in
@@ -94,32 +126,16 @@ final class HeadsetController: NSObject, NSMenuDelegate {
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        let configure = NSMenuItem(title: "配置新耳机…", action: #selector(HeadsetPairing.show), keyEquivalent: "")
-        configure.target = HeadsetPairing.shared; menu.addItem(configure)
-        for profile in HeadsetProfiles.shared.all {
-            menu.addItem(NSMenuItem(title: "已配置：\(profile.name) · \(profile.supportsHold ? "支持长按" : "基础按键")", action: nil, keyEquivalent: ""))
+        let settings = NSMenuItem(title: "耳机设置…", action: #selector(HeadsetSettings.show), keyEquivalent: "")
+        settings.target = HeadsetSettings.shared; menu.addItem(settings)
+        if let device = HeadsetAudio.current(), HeadsetClickPreferences.shared.preference(for: device.uid)?.enabled == true {
+            menu.addItem(NSMenuItem(title: HeadsetClickControl.shared.statusText, action: nil, keyEquivalent: ""))
         }
         menu.addItem(.separator())
-        let label = NSMenuItem(title: "耳机语音 · \(statusText)", action: nil, keyEquivalent: "")
-        label.isEnabled = false; menu.addItem(label)
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "单击：左 Option；双击：Enter", action: nil, keyEquivalent: ""))
-        let auto = NSMenuItem(title: "语音结束后自动发送", action: #selector(toggleAuto), keyEquivalent: "")
-        auto.target = self; auto.state = autoSend ? .on : .off; menu.addItem(auto)
-        let times = NSMenuItem(title: "自动发送等待：\(Int(delay)) 秒", action: nil, keyEquivalent: "")
-        let sub = NSMenu()
-        for n in [1,2,3,5,10] {
-            let item = NSMenuItem(title: "\(n) 秒", action: #selector(setDelay(_:)), keyEquivalent: "")
-            item.target = self; item.tag = n; item.state = Int(delay) == n ? .on : .off; sub.addItem(item)
-        }
-        times.submenu = sub; menu.addItem(times)
-        let cancel = NSMenuItem(title: "取消本次待发送（也可按 Esc）", action: #selector(cancelAction), keyEquivalent: "")
+        let cancel = NSMenuItem(title: "取消本次语音", action: #selector(cancelAction), keyEquivalent: "")
         cancel.target = self; menu.addItem(cancel)
-        menu.addItem(NSMenuItem.separator())
-        let setup = NSMenuItem(title: "权限与使用说明…", action: #selector(showSetup), keyEquivalent: "")
-        setup.target = self; menu.addItem(setup)
-        
     }
+
     func setStatus(_ value: String) {
         guard value != statusText else { return }
         statusText = value
@@ -127,12 +143,12 @@ final class HeadsetController: NSObject, NSMenuDelegate {
     }
     @objc func toggleAuto() { defaults.set(!autoSend, forKey: "autoSend"); cancelSession("auto setting changed") }
     @objc func setDelay(_ sender: NSMenuItem) { defaults.set(sender.tag, forKey: "delay"); cancelSession("delay changed") }
-    @objc func cancelAction() { cancelSession("user cancelled") }
+    @objc func cancelAction() { cancelSession("user cancelled"); HeadsetClickControl.shared.cancelCurrent(); HeadsetMappingRuntime.shared.cancel() }
     @objc func quitApp() { NSApplication.shared.terminate(nil) }
     @objc func showSetup() {
         let alert = NSAlert()
         alert.messageText = "PocketDesk · 耳机语音"
-        alert.informativeText = "单击耳机中键保留系统原生左 Option。快速轻点两次：在当前文字输入框按 Enter。\n\n自动发送默认等待 2 秒：仅在耳机开启语音后、豆包浮窗出现并关闭、原输入框文字已改变且稳定时触发。继续编辑、点击鼠标、切换窗口或按 Esc 会取消。界面无法识别时不会自动发送。\n\n请在系统设置 → 隐私与安全性 → 辅助功能中启用 PocketDesk。单击始终使用原来的系统映射。双击需要辅助功能和输入监控权限，以确认信号来自耳机。"
+        alert.informativeText = "在系统设置 → 隐私与安全性中为 PocketDesk 开启辅助功能和输入监控。\n\n有线耳机沿用原有按键配置。启用单击控制的耳机通过音量增减切换语音：音量加用于普通输入，音量减用于小精灵。\n\n设置按设备保存；关闭设置窗口、Esc 取消本次语音均不会关闭功能。其他程序改变音量仍可能被误识别。"
         alert.addButton(withTitle: "打开辅助功能设置")
         alert.addButton(withTitle: "稍后")
         NSApp.activate(ignoringOtherApps: true)
@@ -178,7 +194,7 @@ final class HeadsetController: NSObject, NSMenuDelegate {
         }
         if event.getIntegerValueField(.eventSourceUserData) == HeadsetMarker { return Unmanaged.passUnretained(event) }
         let key = event.getIntegerValueField(.keyboardEventKeycode)
-        if session != nil {
+        if session != nil || voicePreparation != nil {
             let pid = event.getIntegerValueField(.eventSourceUnixProcessID)
             if type == .leftMouseDown || type == .rightMouseDown ||
                (type == .keyDown && (key == 53 || key == 36 || pid <= 0)) ||
@@ -204,7 +220,10 @@ final class HeadsetController: NSObject, NSMenuDelegate {
         return pid == s.pid && CFEqual(element,s.element)
     }
     func firstNativePress() {
-        guard !LockScreenInput.locked, !HeadsetPairing.shared.isActive else { cancelSession("locked"); return }
+        // Native Option has already passed through the system mapping. Never
+        // move its receiver after recording has started.
+        if voicePreparation != nil { cancelSession("native input during voice preparation") }
+        guard !LockScreenInput.locked, !HeadsetPairing.shared.isActive, !HeadsetMappingRuntime.shared.learning else { cancelSession("locked or learning"); return }
         cycleDraft = nil
         if let (pid,element) = HeadsetFocused(), let text = HeadsetTextValue(element) {
             cycleDraft = HeadsetVoiceSession(pid:pid,element:element,text:text)
@@ -212,8 +231,64 @@ final class HeadsetController: NSObject, NSMenuDelegate {
         }
         setStatus(session == nil ? "单击原样通过；此输入框无法自动发送" : "等待豆包语音完成")
     }
+    func prepareClickVoice(completion: @escaping (Bool) -> Void) {
+        cancelSession("new click voice preparation")
+        cycleDraft = nil
+        guard !LockScreenInput.locked, AXIsProcessTrusted(), !HeadsetPairing.shared.isActive,
+              !HeadsetMappingRuntime.shared.learning,
+              let pid = InputFocus.focusedApplicationPID(), pid != getpid() else {
+            setStatus("请先切到要输入的应用，再唤醒语音"); completion(false); return
+        }
+        let request = HeadsetVoiceFocusRequest(pid: pid)
+        voicePreparation = request
+        voicePreparationCompletion = completion
+        let beganAt = ProcessInfo.processInfo.systemUptime
+        setStatus("正在定位当前输入框…")
+        HeadsetVoiceFocus.prepare(request: request, pointer: voicePointer) { [weak self] result in
+            guard let self, self.voicePreparation === request else { return }
+            self.voicePreparation = nil
+            self.voicePreparationCompletion = nil
+            switch result {
+            case .success(let prepared):
+                guard request.active, !LockScreenInput.locked, AXIsProcessTrusted(), !HeadsetPairing.shared.isActive,
+                      !HeadsetMappingRuntime.shared.learning,
+                      InputFocus.focusedApplicationPID() == prepared.pid,
+                      let focused = InputFocus.focusedElement(pid: prepared.pid), CFEqual(focused, prepared.element),
+                      HeadsetTextValue(focused) == prepared.original else {
+                    request.cancel(); self.setStatus("输入位置已变化，请重新唤醒语音"); completion(false); return
+                }
+                let session = HeadsetVoiceSession(pid: prepared.pid, element: prepared.element, text: prepared.original)
+                session.fromClickControl = true; session.awaitingClickEnd = true
+                self.session = session
+                HeadsetLog(String(format: "click startup: input focus prepared %.0f ms; pid=%d", (ProcessInfo.processInfo.systemUptime - beganAt) * 1000, prepared.pid))
+                completion(true)
+            case .failure(let error):
+                self.setStatus(error.message)
+                HeadsetLog("click startup: input focus unavailable; no voice shortcut sent")
+                completion(false)
+            }
+        }
+    }
+    func clickVoiceOptionPosted(at time: Double) {
+        guard let session, session.fromClickControl else { return }
+        session.optionPostedAt = time
+    }
+    var clickVoiceText: String? {
+        guard let session, session.fromClickControl, session.awaitingClickEnd else { return nil }
+        return session.latest
+    }
+    func endClickVoice() {
+        guard let session, session.fromClickControl else { return }
+        session.awaitingClickEnd = false
+        session.stableSince = Date()
+        session.panelGoneAt = nil
+        HeadsetLog("click voice ended; awaiting transcription and send delay")
+    }
+    func cancelClickVoice() {
+        if voicePreparation != nil || session?.fromClickControl == true { cancelSession("click voice cancelled") }
+    }
     func doubleClick() {
-        guard !LockScreenInput.locked, !HeadsetPairing.shared.isActive else { cancelSession("locked"); return }
+        guard !LockScreenInput.locked, !HeadsetPairing.shared.isActive, !HeadsetMappingRuntime.shared.learning else { cancelSession("locked or learning"); return }
         guard Date().timeIntervalSince(lastSent) > 1.5 else { HeadsetLog("duplicate send suppressed"); return }
         HeadsetLog("double click received directly from headset")
         guard let (pid,element) = HeadsetFocused(), let text = HeadsetTextValue(element) else {
@@ -227,11 +302,17 @@ final class HeadsetController: NSObject, NSMenuDelegate {
         setStatus(pending.sawPanel ? "双击：等待转写结束后发送" : "双击：准备发送")
     }
     func cancelSession(_ reason: String) {
-        if session != nil { HeadsetLog("cancelled: \(reason)") }
+        if session != nil || voicePreparation != nil { HeadsetLog("cancelled: \(reason)") }
+        voicePreparation?.cancel(); voicePreparation = nil
+        let pendingCompletion = voicePreparationCompletion
+        voicePreparationCompletion = nil
         session = nil; setStatus(active ? "就绪" : "等待辅助功能权限")
+        // Notify the owner after clearing the request. Its generation guard
+        // rejects an obsolete callback without cancelling a newer recording.
+        pendingCompletion?(false)
     }
     func tick() {
-        guard !LockScreenInput.locked, !HeadsetPairing.shared.isActive else { cancelSession("locked"); return }
+        guard !LockScreenInput.locked, !HeadsetPairing.shared.isActive, !HeadsetMappingRuntime.shared.learning else { cancelSession("locked or learning"); return }
         guard AXIsProcessTrusted() else { session = nil; setStatus("等待辅助功能权限；单击仍可用"); return }
         if tap == nil { installTap() }
         guard active else { return }
@@ -239,25 +320,39 @@ final class HeadsetController: NSObject, NSMenuDelegate {
             if IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted { headset.start() }
             else { setStatus("等待输入监控权限；单击仍可用"); return }
         }
-        lastPanelVisible = panelVisible()
         guard let s = session else { return }
-        if Date().timeIntervalSince(s.started) > 180 { cancelSession("session timeout"); return }
+        if Date().timeIntervalSince(s.started) > HeadsetVoiceTiming.maxSendSessionSeconds {
+            cancelSession("session timeout after \(Int(HeadsetVoiceTiming.maxSendSessionSeconds)) seconds"); return
+        }
         guard sameTarget(s) else { cancelSession("focus changed"); return }
+        lastPanelVisible = panelVisible()
         let visible = lastPanelVisible
-        if visible { s.sawPanel = true; s.panelGoneAt = nil }
+        if visible {
+            if !s.sawPanel, let postedAt = s.optionPostedAt {
+                HeadsetLog(String(format: "click startup: dictation visible %.0f ms after Option; route=input", (ProcessInfo.processInfo.systemUptime - postedAt) * 1000))
+            }
+            s.sawPanel = true; s.panelGoneAt = nil
+        }
         else if (s.sawPanel || s.manualSend) && s.panelGoneAt == nil { s.panelGoneAt = Date(); HeadsetLog("voice panel closed") }
         guard let value = HeadsetTextValue(s.element) else { cancelSession("text unreadable"); return }
-        if value != s.latest { s.latest = value; s.stableSince = Date(); HeadsetLog("target text changed") }
+        if value != s.latest {
+            s.latest = value; s.stableSince = Date(); HeadsetLog("target text changed")
+            if !s.firstTextObserved, let postedAt = s.optionPostedAt, value != s.original,
+               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                s.firstTextObserved = true
+                HeadsetLog(String(format: "click startup: first text observed %.0f ms after Option; route=input", (ProcessInfo.processInfo.systemUptime - postedAt) * 1000))
+            }
+        }
         guard autoSend || s.immediate else { return }
         let wait = s.immediate ? 0.4 : delay
         let stableFor = Date().timeIntervalSince(s.stableSince)
         let closedFor = s.panelGoneAt.map { Date().timeIntervalSince($0) } ?? -1
         let changed = s.manualSend || value != s.original
         let ready = HeadsetSendGate.ready(sameFocus:true,panelObserved:s.sawPanel || s.manualSend,panelVisible:visible,
-            textChanged:changed,nonempty:!value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,
+            textChanged:changed,nonempty:!value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty, recordingEnded:!s.awaitingClickEnd,
             stableFor:stableFor,closedFor:closedFor,delay:wait)
         if !ready {
-            if (s.sawPanel || s.manualSend) && !visible && changed { setStatus("\(String(format:"%.1f",max(0,wait-min(stableFor,closedFor)))) 秒后发送 · Esc 取消") }
+            if !s.awaitingClickEnd && (s.sawPanel || s.manualSend) && !visible && changed { setStatus("\(String(format:"%.1f",max(0,wait-min(stableFor,closedFor)))) 秒后发送 · Esc 取消") }
             return
         }
         guard sameTarget(s), HeadsetTextValue(s.element) == value else { cancelSession("target changed before send"); return }

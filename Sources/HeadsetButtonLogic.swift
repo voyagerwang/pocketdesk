@@ -1,5 +1,11 @@
 import Foundation
 
+enum HeadsetVoiceTiming {
+    static let maxRecordingSeconds: TimeInterval = 10 * 60
+    // Keep the send session alive while final text arrives and the send delay runs.
+    static let maxSendSessionSeconds: TimeInterval = maxRecordingSeconds + 30
+}
+
 struct HeadsetButtonEdge {
     let time: UInt64
     let down: Bool
@@ -27,8 +33,8 @@ struct HeadsetButtonClassifier {
 }
 struct HeadsetSendGate {
     static func ready(sameFocus: Bool, panelObserved: Bool, panelVisible: Bool, textChanged: Bool,
-                      nonempty: Bool, stableFor: Double, closedFor: Double, delay: Double) -> Bool {
-        sameFocus && panelObserved && !panelVisible && textChanged && nonempty && stableFor >= delay && closedFor >= delay
+                      nonempty: Bool, recordingEnded: Bool = true, stableFor: Double, closedFor: Double, delay: Double) -> Bool {
+        recordingEnded && sameFocus && panelObserved && !panelVisible && textChanged && nonempty && stableFor >= delay && closedFor >= delay
     }
 }
 

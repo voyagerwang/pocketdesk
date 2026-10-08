@@ -46,7 +46,7 @@ final class HeadsetLongPress {
             let vendor = (IOHIDDeviceGetProperty(d, kIOHIDVendorIDKey as CFString) as? NSNumber)?.intValue ?? 0
             let product = (IOHIDDeviceGetProperty(d, kIOHIDProductIDKey as CFString) as? NSNumber)?.intValue ?? 0
             guard let profile = HeadsetProfiles.shared.profile(vendor: vendor, product: product) else { return }
-            guard profile.supportsHold else { return }
+            guard profile.supportsHold, !HeadsetRuleStore.shared.controlsHID(vendor: vendor, product: product, usage: 0xEA, serial: IOHIDDeviceGetProperty(d, kIOHIDSerialNumberKey as CFString) as? String) else { return }
             owner.pulseMode = profile.usesPulsedHold
             owner.receive(down: IOHIDValueGetIntegerValue(value) != 0)
         }, Unmanaged.passUnretained(self).toOpaque())
@@ -72,7 +72,7 @@ final class HeadsetLongPress {
     }
     private func removeLease() { try? FileManager.default.removeItem(at: lease) }
     private func maintain() {
-        guard AXIsProcessTrusted(), !LockScreenInput.locked, !HeadsetPairing.shared.isActive else { cancel(); removeLease(); return }
+        guard AXIsProcessTrusted(), !LockScreenInput.locked, !HeadsetPairing.shared.isActive, !HeadsetMappingRuntime.shared.learning else { cancel(); removeLease(); return }
         if tap == nil {
             let mask = (CGEventMask(1) << CGEventType.keyDown.rawValue) | (CGEventMask(1) << CGEventType.keyUp.rawValue)
             tap = CGEvent.tapCreate(tap: .cghidEventTap, place: .headInsertEventTap, options: .defaultTap,
@@ -117,7 +117,7 @@ final class HeadsetLongPress {
         NSLog("PocketDesk minus short press: volume down once")
     }
     private func receive(down: Bool) {
-        guard !LockScreenInput.locked, !HeadsetPairing.shared.isActive else { cancel(); return }
+        guard !LockScreenInput.locked, !HeadsetPairing.shared.isActive, !HeadsetMappingRuntime.shared.learning else { cancel(); return }
         if down {
             pendingRelease?.cancel(); pendingRelease = nil
             guard hold.press() else { return }

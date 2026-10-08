@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 SpriteFileDropView、PhoneFileStore 的批量拖入发送，以及 AppKit、SpriteOrbView 的原版动态组件与 SpriteFeedback.ViewModel；监听前台、锁屏和减少动态设置。
- * [OUTPUT]: 600pt 宽松回执、短答案完整展开、长答案按屏幕限高并自动隐藏原生浮动滚动条；单行回执背景随文字收紧；非激活透明精灵面板、原版表情、
- *           文件拖入发送反馈与拖拽期间短暂显现；空闲无提示文字、无收起按钮；切走隐藏、重选开心唤醒。
+ * [OUTPUT]: 600pt 宽松回执、短答案完整展开、长答案按屏幕限高并自动隐藏原生浮动滚动条；单行回执背景随文字收紧；被动展示透明精灵面板、原版表情、
+ *           文件拖入发送反馈与拖拽期间短暂显现；空闲无提示文字、无收起按钮；切走隐藏、重选开心唤醒；明确语音唤醒才激活输入，字幕与提交共用当前 field editor，语音相同状态提示不重复布局。
  * [POS]: 桌面展示层；球体单独在 WebKit 内矢量绘制，正文由原生字体按屏幕比例绘制，不随球体缩放或旋转。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -34,7 +34,18 @@ final class SpriteFeedbackPanel: NSPanel {
     private let desktopSubtitle = NSTextView()
     private let subtitleScroll = NSScrollView()
     private var subtitleText = ""
-    var onDesktopInterrupted: (() -> Void)?
+    var onDesktopInterrupted: ((String) -> Void)?
+    var desktopText: String {
+        (desktopInput.currentEditor() as? NSTextView)?.string ?? desktopInput.stringValue
+    }
+    var desktopHasMarkedText: Bool {
+        (desktopInput.currentEditor() as? NSTextView)?.hasMarkedText() == true
+    }
+    var desktopInputReady: Bool {
+        guard desktopMode, !desktopInput.isHidden, isVisible, isKeyWindow, NSApp.isActive,
+              let editor = desktopInput.currentEditor() else { return false }
+        return firstResponder === editor
+    }
     private let bubble = NSTextField(labelWithString: "")
     private let answer = NSTextView()
     private let answerScroll = NSScrollView()
@@ -58,8 +69,10 @@ final class SpriteFeedbackPanel: NSPanel {
 
     init(webRoot: URL) {
         orbView = SpriteOrbView(webRoot: webRoot)
+        // Passive feedback is enforced by canBecomeKey/canBecomeMain and
+        // orderFrontRegardless. Capture needs normal app/IME activation.
         super.init(contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.orbSize),
-                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+                   styleMask: [.borderless], backing: .buffered, defer: false)
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
@@ -138,6 +151,7 @@ final class SpriteFeedbackPanel: NSPanel {
         subtitleScroll.isHidden = true
         desktopInput.placeholderString = ""
         desktopInput.setAccessibilityLabel("语音转写")
+        desktopInput.setAccessibilityIdentifier("pocketdesk.sprite.transcript")
         desktopInput.isHidden = true
         for view in [transcriptSurface, bubble, answerScroll, orbView, statusLine, connectionNotice, desktopInput, subtitleScroll] { container.addSubview(view) }
     }
@@ -145,8 +159,8 @@ final class SpriteFeedbackPanel: NSPanel {
     func apply(_ model: SpriteFeedback.ViewModel) {
         if desktopMode {
             if model.presentationRevision == presentationRevision { return }
-            onDesktopInterrupted?()
-            desktopMode = false; desktopInput.isHidden = true; subtitleScroll.isHidden = true
+            onDesktopInterrupted?("phone presentation changed")
+            endDesktopCapture()
         }
         if model.presentationRevision != presentationRevision {
             presentationRevision = model.presentationRevision
@@ -176,7 +190,10 @@ final class SpriteFeedbackPanel: NSPanel {
         desktopMode = true; hiddenByApplication = false
         desktopInput.stringValue = ""; desktopInput.isHidden = false
         bubble.isHidden = true; answerScroll.isHidden = true; connectionNotice.isHidden = true
-        statusLine.stringValue = "正在听 · 松开执行"; statusLine.isHidden = false
+        statusLine.stringValue = "正在启动语音…"; statusLine.isHidden = false
+        subtitleText = ""; desktopSubtitle.string = "说出你想做的事…"
+        desktopSubtitle.textColor = .secondaryLabelColor
+        subtitleScroll.isHidden = false
         layoutContent(); centerAndShow()
         NSApp.activate(ignoringOtherApps: true)
         makeKeyAndOrderFront(nil)
@@ -188,17 +205,13 @@ final class SpriteFeedbackPanel: NSPanel {
             editor.selectedTextAttributes = [.foregroundColor: NSColor.clear, .backgroundColor: NSColor.clear]
             editor.markedTextAttributes = [.foregroundColor: NSColor.clear, .backgroundColor: NSColor.clear]
         }
-        subtitleText = ""; desktopSubtitle.string = "说出你想做的事…"
-        desktopSubtitle.textColor = .secondaryLabelColor
-        subtitleScroll.isHidden = false
-        layoutContent()
         orbView.update(visible: true, revision: presentationRevision + 1, emotion: "02", reduced: reduceMotion, taskId: "")
         return true
     }
     /// Render the IME's current composition as subtitles; the focused receiver remains unchanged.
     func updateDesktopSubtitle() {
         guard desktopMode, !desktopInput.isHidden else { return }
-        let text = (desktopInput.currentEditor() as? NSTextView)?.string ?? desktopInput.stringValue
+        let text = desktopText
         guard text != subtitleText else { return }
         subtitleText = text
         desktopSubtitle.string = text.isEmpty ? "说出你想做的事…" : text
@@ -207,15 +220,20 @@ final class SpriteFeedbackPanel: NSPanel {
     }
     func desktopStatus(_ status: String, result: String? = nil) {
         guard desktopMode else { return }
+        if result == nil, statusLine.stringValue == status, !statusLine.isHidden { return }
         statusLine.stringValue = status; statusLine.isHidden = false
         if let result {
             desktopInput.isHidden = true
             subtitleScroll.isHidden = true
+            makeFirstResponder(nil)
+            resignKey()
             answer.string = result; answerScroll.isHidden = result.isEmpty
         }
         layoutContent()
     }
     func endDesktopCapture() {
+        makeFirstResponder(nil)
+        resignKey()
         desktopMode = false; desktopInput.isHidden = true; subtitleScroll.isHidden = true
     }
 
@@ -399,7 +417,7 @@ final class SpriteFeedbackPanel: NSPanel {
     @objc private func appActivated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         guard app.bundleIdentifier != Bundle.main.bundleIdentifier && app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
-        onDesktopInterrupted?()
+        onDesktopInterrupted?("application activated: " + (app.bundleIdentifier ?? "unknown"))
         hiddenByApplication = true
         orderOutAndKeepIntent()
     }
@@ -454,7 +472,7 @@ final class SpriteFeedbackPanel: NSPanel {
         setFrame(clamped(rect), display: false)
     }
 
-    override var canBecomeKey: Bool { desktopMode }
+    override var canBecomeKey: Bool { desktopMode && !desktopInput.isHidden }
     override var canBecomeMain: Bool { false }
 }
 

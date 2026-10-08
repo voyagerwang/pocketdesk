@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation；不依赖 AX、Network 或任何运行时——本文件只描述任务事实的形状。
- * [OUTPUT]: 工作台创建持久回执与结构化 AppDispatchReceipt 与提交未核实终态 submitted；可选派单接续目标、飞书个人/群候选及通用操作去重/确认记录； 任务保存控制会话用于执行租约核验；对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
+ * [OUTPUT]: 补充票据、派单轮次及明确未提交回执；工作台创建持久回执与结构化 AppDispatchReceipt，提交未核实终态 submitted、投递前界面失败终态 failed；可选派单接续目标、飞书个人/群候选及通用操作去重/确认记录； 任务保存控制会话用于执行租约核验；对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
  *           AgentTask、TaskEvent，以及 AgentTask 与字典互转的 json/alternative 方法。
  * [POS]: Sources 的 Agent 领域模型层；HTTP 层只做字典与它的互转，任务语义不散落到路由里。
  *        与系统注入解耦：本文件可单独编译，供 tests 直接引用。
@@ -67,6 +67,7 @@ struct TaskMessage: Codable, Equatable {
     var at: Double
     /// tool 消息的工具名；user/assistant 为 nil。
     var toolName: String?
+    var dispatchAttempt: Int?
 
     init(id: String = UUID().uuidString, role: Role, text: String, at: Double = Date().timeIntervalSince1970, toolName: String? = nil) {
         self.id = id
@@ -181,6 +182,8 @@ struct AppDispatchReceipt: Codable, Equatable {
     var detail: String
     var targetName: String? = nil
     var executionVisible: Bool = false
+    /// nil 是旧回执/未知；只有明确 false 才允许在用户补充后重新派单。
+    var submissionAttempted: Bool? = nil
 
     var summary: String {
         switch state {
@@ -194,7 +197,8 @@ struct AppDispatchReceipt: Codable, Equatable {
         case .confirmed: return .succeeded
         case .unconfirmed: return .submitted
         case .failed: return .failed
-        case .needsInput: return .needsInput
+        // 撰写框/页面未就绪时没有可续接的模型问题，派单尝试已封闭。
+        case .needsInput: return .failed
         }
     }
 }
@@ -244,6 +248,9 @@ struct AgentTask: Codable, Equatable {
     var handoffTargetName: String?
     var handoffRequested: Bool?
     var appDispatchReceipt: AppDispatchReceipt?
+    var inputRequestTexts: [String: String]?
+    var safeDispatchRetryAttempt: Int?
+    var pendingInputRelation: Bool?
 
     init(schemaVersion: Int = AgentTask.currentSchemaVersion,
          id: String = UUID().uuidString,
@@ -316,6 +323,11 @@ struct AgentTask: Codable, Equatable {
         if let delivery = feishuDelivery, delivery.messageId != nil { dict["deliveryRecipient"] = delivery.recipient }
         if let result { dict["result"] = result }
         if let error { dict["error"] = error }
+        if status == .failed || status == .needsInput || status == .submitted {
+            dict["continuationHint"] = status == .submitted
+                ? "原任务已保留，可补充或核对结果；不会自动重复发送。"
+                : "原任务已保留，可以直接补充，或说“新任务”另做一件事。"
+        }
         if let softDeadline { dict["softDeadline"] = softDeadline }
         if let hardDeadline { dict["hardDeadline"] = hardDeadline }
         dict["messages"] = messages.map { message -> [String: Any] in

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Network WebSocket、Auth 与 ScreenStream 的独立 JPEG 帧。
- * [OUTPUT]: 提供鉴权画面服务；共享同屏同画质捕获器，每客户端仅一帧在途，呈现 ACK 后发送最新帧。
+ * [OUTPUT]: 提供鉴权画面服务、结构化捕获状态/错误与帧会话代际；每客户端仅一帧在途，呈现 ACK 后发送最新帧。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的画面传输边界；大包不经过控制连接，超时关闭而不堆积 TCP 旧画面。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -88,26 +88,54 @@ final class FrameServer: @unchecked Sendable {
                 for client in self.clients.values where client.key == key { client.pending = frame; self.drain(client) }
             }
         }
-        stream.onFailure = { [weak self, weak stream] _ in
+        stream.onStatus = { [weak self, weak stream] event in
             guard let self else { return }
             self.queue.async {
                 guard let stream, self.streams[key] === stream else { return }
-                for client in Array(self.clients.values) where client.key == key { self.drop(client.id) }
+                for client in Array(self.clients.values) where client.key == key {
+                    client.pending = nil
+                    if event["invalidate"] as? Bool == true { client.inFlight = nil }
+                    self.captureEvent(event, type: event["domain"] == nil ? "capture-status" : "capture-error", client: client)
+                }
+            }
+        }
+        stream.onFailure = { [weak self, weak stream] event in
+            guard let self else { return }
+            self.queue.async {
+                guard let stream, self.streams[key] === stream else { return }
+                for client in Array(self.clients.values) where client.key == key {
+                    client.pending = nil; self.captureEvent(event, type: "capture-error", client: client, close: true)
+                }
             }
         }
         Task {
             do { try await stream.start(displayID: display, width: width) }
-            catch { self.queue.async { guard self.streams[key] === stream else { return }; for client in Array(self.clients.values) where client.key == key { self.drop(client.id) } } }
+            catch { self.queue.async {
+                guard self.streams[key] === stream else { return }
+                let event = ScreenCaptureDiagnostics.shared.event(stage: "stream-start", display: display, backend: "sck", error: error, terminal: true)
+                for client in Array(self.clients.values) where client.key == key { self.captureEvent(event, type: "capture-error", client: client, close: true) }
+            } }
         }
+    }
+    private func captureEvent(_ event: [String: Any], type: String, client: Client, close: Bool = false) {
+        var body = event; body["t"] = type; body["epoch"] = client.id.uuidString
+        guard let bytes = try? JSONSerialization.data(withJSONObject: body) else { if close { drop(client.id) }; return }
+        let context = NWConnection.ContentContext(identifier: "capture-state", metadata: [NWProtocolWebSocket.Metadata(opcode: .text)])
+        client.connection.send(content: bytes, contentContext: context, isComplete: true, completion: .contentProcessed { [weak self] error in
+            if close || error != nil { self?.queue.async { self?.drop(client.id) } }
+        })
     }
     private func drain(_ c: Client) {
         guard c.inFlight == nil, let frame = c.pending else { return }
         c.pending = nil
+        guard ScreenCaptureDiagnostics.shared.isCurrent(ScreenCaptureContext(epoch: frame.captureEpoch, state: frame.captureState)) else { return }
         let age = max(0, CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())) - frame.captured)
         guard age < 1.5 else { return }
         sequence &+= 1; c.inFlight = sequence; c.deadline = ProcessInfo.processInfo.systemUptime + 2
         let header: [String: Any] = ["frameId": sequence, "epoch": c.id.uuidString, "display": c.display,
-            "width": frame.width, "height": frame.height, "cursorIncluded": false, "ageMs": age * 1000]
+            "width": frame.width, "height": frame.height, "cursorIncluded": false, "ageMs": age * 1000,
+            "captureEpoch": frame.captureEpoch, "captureState": frame.captureState,
+            "captureGeneration": frame.captureGeneration, "backend": frame.backend, "contentVerified": false]
         guard let json = try? JSONSerialization.data(withJSONObject: header) else { return }
         var length = UInt32(json.count).bigEndian
         var packet = Data(bytes: &length, count: 4); packet.append(json); packet.append(frame.jpeg)

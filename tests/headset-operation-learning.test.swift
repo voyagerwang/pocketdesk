@@ -1,0 +1,39 @@
+import Foundation
+@main struct LearningTests {
+    static func main() {
+        let button = HeadsetSignal(kind: .hid, device: "1:2:test", name: "test", vendor: 1, product: 2, usage: 0xCD)
+        var machine = HeadsetOperationLearning()
+        assert(machine.edge(button, down: true, now: 0) == [.pressed])
+        assert(machine.edge(button, down: false, now: 0.1).isEmpty)
+        assert(machine.tick(now: 0.49) == [.recognized(.init(signal: button, gesture: .click))])
+        machine = HeadsetOperationLearning()
+        _ = machine.edge(button, down: true, now: 1); _ = machine.edge(button, down: false, now: 1.1)
+        _ = machine.edge(button, down: true, now: 1.2)
+        assert(machine.edge(button, down: false, now: 1.3) == [.recognized(.init(signal: button, gesture: .doubleClick))])
+        assert(machine.tick(now: 2).isEmpty)
+        machine = HeadsetOperationLearning()
+        _ = machine.edge(button, down: true, now: 3)
+        assert(machine.tick(now: 3.71) == [.holding])
+        assert(machine.edge(button, down: false, now: 4) == [.recognized(.init(signal: button, gesture: .hold))])
+        machine = HeadsetOperationLearning(expected: .doubleClick)
+        _ = machine.edge(button, down: true, now: 5); _ = machine.edge(button, down: false, now: 5.1)
+        assert(machine.tick(now: 5.5) == [.mismatch(.click)])
+        _ = machine.edge(button, down: true, now: 6); _ = machine.edge(button, down: false, now: 6.1)
+        _ = machine.edge(button, down: true, now: 6.2)
+        assert(machine.edge(button, down: false, now: 6.3) == [.recognized(.init(signal: button, gesture: .doubleClick))])
+        var other = button; other.usage = 0xE9
+        machine = HeadsetOperationLearning()
+        _ = machine.edge(button, down: true, now: 7); _ = machine.edge(button, down: false, now: 7.05)
+        _ = machine.edge(other, down: true, now: 7.15); _ = machine.edge(other, down: false, now: 7.2)
+        assert(machine.tick(now: 7.6).filter { if case .recognized = $0 { return true }; return false }.count == 2)
+        let volume = HeadsetSignal(kind: .volume, device: "audio", name: "audio", usage: 1, step: 0.0625)
+        assert(!HeadsetOperationLearning.supports(.hold, device: volume))
+        assert(!HeadsetOperationLearning.supports(.doubleClick, device: volume))
+        assert(machine.volume(volume) == .recognized(.init(signal: volume, gesture: .click)))
+        var invalid = volume; invalid.step = nil; assert(machine.volume(invalid) == nil)
+        var pulse = button; pulse.vendor = 31; pulse.product = 2849
+        assert(!HeadsetOperationLearning.supports(.doubleClick, device: pulse))
+        machine = HeadsetOperationLearning(); assert(machine.tick(now: 50).isEmpty)
+        print("PASS auto click/double/hold recognition, preset mismatch/retry, button isolation, reset and signal capability limits; no physical input")
+    }
+}
