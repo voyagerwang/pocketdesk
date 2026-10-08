@@ -184,8 +184,12 @@ final class HeadsetMappingRuntime: NSObject {
         HeadsetMappingActions.shared.begin(rule); return true
     }
     func cancel() { machines = [:]; signals = [:]; boundRules = [:]; pulses = [:]; pulseSignals = [:]; HeadsetMappingActions.shared.cancel() }
+    static func healthIsFresh(timestamp: Double, now: Double) -> Bool {
+        let age = now - timestamp
+        return age.isFinite && age >= 0 && age < 3
+    }
     private func ready(_ signal: HeadsetSignal) -> Bool {
-        guard let data = try? Data(contentsOf: health), let value = try? JSONSerialization.jsonObject(with: data) as? [String:Any], let time = value["time"] as? Double, Date().timeIntervalSince1970 - time < 3,
+        guard let data = try? Data(contentsOf: health), let value = try? JSONSerialization.jsonObject(with: data) as? [String:Any], let time = value["time"] as? Double, Self.healthIsFresh(timestamp: time, now: Date().timeIntervalSince1970),
               let sources = value["sources"] as? [String] else { report("等待耳机原生映射就绪…"); return false }
         return sources.contains(signal.identity)
     }
