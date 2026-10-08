@@ -181,3 +181,5 @@ WorkbenchLookup.swift: 六个只读工具查询个人工作台的日程、随手
 2026-09-29 查询修复：首版查询漏了个人工作台待办。WorkbenchLookup 现在包含 `search_workbench_tasks` / `read_workbench_task`，服务端按 `planned_date` 或 `due_at` 返回未删除待办；用户说“明天有哪些待办”必须使用该工具，不能用日程或随手记替代。
 
 耳机录制与现代设置（2026-10-08）：HeadsetOperationLearning 以独立信号状态机识别单击/双击/长按，自动与预设共用，长按待松开才确认；不同按键不混合双击。HeadsetMappingRuntime 的检测只反馈一次已识别操作，音量变化只确认增减，不推断左右耳/双击/长按。HeadsetMappingWindow 用 SwiftUI 卡片式录制弹窗，识别后才出现动作，旧规则直接编辑，不重复录制；保存失败保留草稿，关闭/切预设停止检测与试用。HeadsetSettings 为同风格设置，按设备展示操作与范围，普通选择自动保存；等待秒数捕获编辑设备，避免切设备误写。HeadsetUI 为本机 Magpie 观察后的自适应灰白/深色卡片、分段选择及控件样式。原快捷键执行和规则 JSON 协议沿用。
+
+耳机菜单入口精简（2026-10-08）：应用菜单与 Dock 共用 settingsItem，直接显示“耳机设置…”并打开同一个设置窗口；不再有“耳机语音”子菜单和常驻“取消本次语音”。取消录音/等待发送、释放按键及 Esc 保护继续沿用，功能不因关闭设置窗口而关闭。

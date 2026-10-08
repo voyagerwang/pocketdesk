@@ -75,7 +75,7 @@ final class HeadsetVoiceSession {
     }
 }
 
-final class HeadsetController: NSObject, NSMenuDelegate {
+final class HeadsetController: NSObject {
     static let shared = HeadsetController()
     var tap: CFMachPort?
     var source: CFRunLoopSource?
@@ -117,23 +117,9 @@ final class HeadsetController: NSObject, NSMenuDelegate {
     }
     func applicationWillTerminate(_ notification: Notification) { HeadsetLog("v2 quit; native Option mapping unchanged") }
     func settingsItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "耳机语音", action: nil, keyEquivalent: "")
-        let menu = NSMenu(title: "耳机语音")
-        menu.delegate = self
-        menuNeedsUpdate(menu)
-        item.submenu = menu
+        let item = NSMenuItem(title: "耳机设置…", action: #selector(HeadsetSettings.show), keyEquivalent: "")
+        item.target = HeadsetSettings.shared
         return item
-    }
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        let settings = NSMenuItem(title: "耳机设置…", action: #selector(HeadsetSettings.show), keyEquivalent: "")
-        settings.target = HeadsetSettings.shared; menu.addItem(settings)
-        if let device = HeadsetAudio.current(), HeadsetClickPreferences.shared.preference(for: device.uid)?.enabled == true {
-            menu.addItem(NSMenuItem(title: HeadsetClickControl.shared.statusText, action: nil, keyEquivalent: ""))
-        }
-        menu.addItem(.separator())
-        let cancel = NSMenuItem(title: "取消本次语音", action: #selector(cancelAction), keyEquivalent: "")
-        cancel.target = self; menu.addItem(cancel)
     }
 
     func setStatus(_ value: String) {
@@ -143,11 +129,10 @@ final class HeadsetController: NSObject, NSMenuDelegate {
     }
     @objc func toggleAuto() { defaults.set(!autoSend, forKey: "autoSend"); cancelSession("auto setting changed") }
     @objc func setDelay(_ sender: NSMenuItem) { defaults.set(sender.tag, forKey: "delay"); cancelSession("delay changed") }
-    @objc func cancelAction() { cancelSession("user cancelled"); HeadsetClickControl.shared.cancelCurrent(); HeadsetMappingRuntime.shared.cancel() }
     @objc func quitApp() { NSApplication.shared.terminate(nil) }
     @objc func showSetup() {
         let alert = NSAlert()
-        alert.messageText = "PocketDesk · 耳机语音"
+        alert.messageText = "PocketDesk · 耳机权限"
         alert.informativeText = "在系统设置 → 隐私与安全性中为 PocketDesk 开启辅助功能和输入监控。\n\n有线耳机沿用原有按键配置。启用单击控制的耳机通过音量增减切换语音：音量加用于普通输入，音量减用于小精灵。\n\n设置按设备保存；关闭设置窗口、Esc 取消本次语音均不会关闭功能。其他程序改变音量仍可能被误识别。"
         alert.addButton(withTitle: "打开辅助功能设置")
         alert.addButton(withTitle: "稍后")
