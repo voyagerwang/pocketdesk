@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 FileManager/JSONEncoder/FileHandle，消费 AgentModels 的任务与事件类型。
- * [OUTPUT]: 对外提供任务与事件的唯一权威存储：整体快照 tasks.json（原子写）、append-only 事件日志
+ * [OUTPUT]: 补充票据查账及派单轮次门禁；对外提供任务与事件的唯一权威存储：整体快照 tasks.json（原子写）、append-only 事件日志
  *           events.jsonl、requestId 去重表 dedupe.json；以及幂等接受 claim 与工作台创建/派单/桌面动作副作用前的原子占用。
  * [POS]: Sources 的 Agent 持久化层；HTTP 层与 TaskService 都通过它读写，不允许两边各自声明权威。
  *        首版用文件化方案而非 SQLite：本项目由 install-app.sh 直接 swiftc 裸编、未链接 -lsqlite3，
@@ -62,9 +62,10 @@ enum TaskStore {
     /// 按去重键找原任务——提交超时的回包丢了时靠它找回，不生成新 ID 盲重发。
     static func task(subject: String, requestId: String) -> AgentTask? {
         lock.lock(); defer { lock.unlock() }
-        guard let entry = dedupeLocked()[key(subject: subject, requestId: requestId)],
-              let taskId = entry["taskId"] as? String else { return nil }
-        return loadLocked().first { $0.id == taskId }
+        if let entry = dedupeLocked()[key(subject: subject, requestId: requestId)], let taskId = entry["taskId"] as? String {
+            return loadLocked().first { $0.id == taskId }
+        }
+        return loadLocked().first { $0.subject == subject && $0.inputRequestTexts?[requestId] != nil }
     }
 
     /// 持久接受一个新任务。同键同内容返回原任务（幂等），同键不同内容报冲突。
@@ -105,6 +106,9 @@ enum TaskStore {
         if let existing = tasks[index].workbenchOperations {
             updated.workbenchOperations = (updated.workbenchOperations ?? [:]).merging(existing) { _, persisted in persisted }
         }
+        if let existing = tasks[index].inputRequestTexts {
+            updated.inputRequestTexts = (updated.inputRequestTexts ?? [:]).merging(existing) { _, persisted in persisted }
+        }
         tasks[index] = updated
         try persistLocked(tasks: tasks, dedupe: dedupeLocked())
     }
@@ -114,10 +118,22 @@ enum TaskStore {
         lock.lock(); defer { lock.unlock() }
         var tasks = loadLocked()
         guard let index = tasks.firstIndex(where: { $0.id == id }), tasks[index].status == .running,
-              !tasks[index].messages.contains(where: { $0.toolName == "dispatch_to_app" }) else { return false }
-        tasks[index].messages.append(TaskMessage(role: .tool, text: label, toolName: "dispatch_to_app"))
+              !hasBlockedAppDispatch(tasks[index]) else { return false }
+        var evidence = TaskMessage(role: .tool, text: label, toolName: "dispatch_to_app")
+        evidence.dispatchAttempt = tasks[index].attempt
+        tasks[index].messages.append(evidence)
         try persistLocked(tasks: tasks, dedupe: dedupeLocked())
         return true
+    }
+
+    static func hasBlockedAppDispatch(_ task: AgentTask) -> Bool {
+        task.messages.contains { message in
+            guard message.toolName == "dispatch_to_app" else { return false }
+            if task.safeDispatchRetryAttempt == task.attempt {
+                return message.dispatchAttempt == nil || message.dispatchAttempt == task.attempt
+            }
+            return true
+        }
     }
 
     /// 同一任务的同一桌面动作只占用一次，避免重复关闭下一扇窗口或再次删掉新输入。

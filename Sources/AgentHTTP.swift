@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 JSONSerialization/JSONEncoder，消费 ModelConfigStore 与 ModelClient。
- * [OUTPUT]: 展示上报核验控制租约并绑定连接身份；建任务时传递控制会话以便执行核验；对外提供 AgentHTTP.handle——承接 /api/v1 下「本机管理类」端点：模型服务配置的读写与连通性实测。
+ * [OUTPUT]: 异步语义接续提交与补充票据；展示上报核验控制租约并绑定连接身份；建任务时传递控制会话以便执行核验；对外提供 AgentHTTP.handle——承接 /api/v1 下「本机管理类」端点：模型服务配置的读写与连通性实测。
  * [POS]: Sources 的 Agent 路由层；Server 只做一行委托，避免它继续膨胀越过 800 行红线。
  *        这些端点**只允许回环访问**（本机控制台），与手机侧的任务接口（M1 的 /api/v1/tasks/…）分开：
  *        任务接口面向配对手机、必须带 Bearer；本文件的管理端点面向本机浏览器，靠回环判定。
@@ -252,7 +252,7 @@ enum AgentHTTP {
         }
     }
 
-    private static func submit(json: [String: Any], respond: (Int, [String: Any]) -> Void) {
+    private static func submit(json: [String: Any], respond: @escaping (Int, [String: Any]) -> Void) {
         guard let requestId = json["requestId"] as? String, !requestId.isEmpty else {
             respond(400, ["error": "缺少 requestId：提交超时后要靠它找回原任务。"])
             return
@@ -261,12 +261,13 @@ enum AgentHTTP {
             respond(400, ["error": "缺少正文。"])
             return
         }
-        do {
-            let task = try TaskService.submit(subject: subject, requestId: requestId, text: text,
-                                              context: pageBinding(from: json["context"]), controlSession: json["controlSession"] as? String)
-            respond(200, ["task": task.json()])
-        } catch {
-            respond(statusFor(error), ["error": error.localizedDescription])
+        TaskService.send(subject: subject, requestId: requestId, text: text,
+                         context: pageBinding(from: json["context"]), controlSession: json["controlSession"] as? String,
+                         previousTaskId: json["previousTaskId"] as? String) { result in
+            switch result {
+            case .success(let task): respond(200, ["task": task.json()])
+            case .failure(let error): respond(statusFor(error), ["error": error.localizedDescription])
+            }
         }
     }
 
@@ -284,7 +285,8 @@ enum AgentHTTP {
             switch name {
             case "supplement":
                 let updated = try TaskService.supplement(taskId: taskId, text: json["text"] as? String ?? "",
-                                                         expectedRevision: json["expectedRevision"] as? Int)
+                                                         expectedRevision: json["expectedRevision"] as? Int,
+                                                         requestId: json["requestId"] as? String, controlSession: json["controlSession"] as? String)
                 respond(200, ["task": updated.json()])
             case "cancel":
                 let updated = try TaskService.abandon(taskId: taskId)
@@ -418,7 +420,7 @@ enum AgentHTTP {
         if error is TaskStoreError { return 409 }
         if let service = error as? TaskServiceError {
             switch service {
-            case .busy, .supplementLimitReached, .revisionMismatch: return 409
+            case .supplementLimitReached, .revisionMismatch: return 409
             default: return 400
             }
         }

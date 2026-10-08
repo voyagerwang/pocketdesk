@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 CoreGraphics 的 CGEvent/CGDisplay 系列 API；消费 WSServer 转发的手势 JSON。
- * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、有效屏区域钳制、相对移动携带真实增量 delta、pointer 绝对拖动与 move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置、目标窗口定位（移动到窗口可见区；手动选中且 AX 能检出主输入框时顺带单击聚焦，按代际与用户活动门禁）、拒绝执行时经 onError 上报）。
+ * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、有效屏区域钳制、相对移动携带真实增量 delta、pointer 绝对拖动与 move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置、目标窗口定位（移动到窗口可见区；手动选中且 AX 能检出主输入框时顺带单击聚焦，按代际与用户活动门禁）、语音聚焦点击的队列内授权复核与事件标记、拒绝执行时经 onError 上报）。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的指针执行层；仅被 WSServer 消费，与 InputExecutor（键盘）平行为一对执行兄弟。
  *          维护的是**命令期望值**，与 CursorMonitor 的**观测值**严格分离，两者互不写入。
@@ -20,6 +20,12 @@ import Foundation
 // {"t":"zoom","delta":..} 捏合缩放，经 Cmd+滚轮 合成（Chrome/Safari 页面缩放）
 final class PointerExecutor {
     private let queue = DispatchQueue(label: "dev.voicedeck.pointer")
+    private let postEvent: (CGEvent) -> Void
+    private let clickEnvironment: () -> Bool
+    init(postEvent: @escaping (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) },
+         clickEnvironment: @escaping () -> Bool = { LockScreenInput.state == "unlocked" }) {
+        self.postEvent = postEvent; self.clickEnvironment = clickEnvironment
+    }
     /// 命令期望值：上一条移动/点击指令执行后，我们认为光标应该在的位置。
     /// 注意它不是系统真值——真值由 CursorMonitor 独立观测，两者不互相写入。
     private var expected: CGPoint?
@@ -86,14 +92,24 @@ final class PointerExecutor {
     /// （Electron/WebKit/自定义 NSTextView 的输入框在 mousedown 阶段抢焦点，零间隔会被 up 中断，
     /// 表现为"指针动了但框没聚焦"——与 `tap` 分支保持同一时序）。与其它指针命令同队列、同门禁执行。
     func click(at point: CGPoint, completion: ((Bool) -> Void)? = nil) {
+        click(at: point, authorized: { true }, marker: 0, completion: completion)
+    }
+
+    /// Voice focus binds a queued click to the original application and request.
+    /// Its marker prevents our own focus click from cancelling voice preparation.
+    func click(at point: CGPoint, authorized: @escaping () -> Bool, marker: Int64,
+               completion: ((Bool) -> Void)? = nil) {
         queue.async {
-            guard LockScreenInput.state == "unlocked", !self.dragging else { completion?(false); return }
+            guard self.clickEnvironment(), !self.dragging, authorized() else { completion?(false); return }
             let target = self.clamped(point)
+            guard authorized() else { completion?(false); return }
             self.expected = target
-            self.post(.mouseMoved, at: target)
-            self.post(.leftMouseDown, at: target, clickState: 1)
+            self.post(.mouseMoved, at: target, marker: marker)
+            guard self.clickEnvironment(), authorized() else { completion?(false); return }
+            self.post(.leftMouseDown, at: target, clickState: 1, marker: marker)
             usleep(40_000)
-            self.post(.leftMouseUp, at: target, clickState: 1)
+            // A posted down must always be paired with an up, even after cancellation.
+            self.post(.leftMouseUp, at: target, clickState: 1, marker: marker)
             completion?(true)
         }
     }
@@ -151,8 +167,9 @@ final class PointerExecutor {
     }
 
     private func post(_ type: CGEventType, at point: CGPoint, button: CGMouseButton = .left, clickState: Int64 = 1,
-                      delta: CGPoint? = nil) {
+                      delta: CGPoint? = nil, marker: Int64 = 0) {
         let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button)
+        if marker != 0 { event?.setIntegerValueField(.eventSourceUserData, value: marker) }
         // 显式标记 clickState：Electron/Chromium 系应用会丢弃未带按下次数的合成点击（表现为点不动、无法聚焦）。
         event?.setIntegerValueField(.mouseEventClickState, value: clickState)
         // 相对移动要带增量：真实鼠标事件都有 dx/dy，"光标隐藏直到鼠标移动"等系统状态只认增量，
@@ -161,7 +178,7 @@ final class PointerExecutor {
             event?.setDoubleValueField(.mouseEventDeltaX, value: delta.x)
             event?.setDoubleValueField(.mouseEventDeltaY, value: delta.y)
         }
-        event?.post(tap: .cghidEventTap)
+        if let event { postEvent(event) }
     }
 
     func handle(_ text: String) {

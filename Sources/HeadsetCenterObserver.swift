@@ -24,7 +24,8 @@ final class HeadsetCenterObserver {
                 let device = IOHIDElementGetDevice(element)
                 let vendor = (IOHIDDeviceGetProperty(device, kIOHIDVendorIDKey as CFString) as? NSNumber)?.intValue ?? 0
                 let product = (IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? NSNumber)?.intValue ?? 0
-                guard HeadsetProfiles.shared.profile(vendor: vendor, product: product) != nil else { return }
+            guard HeadsetProfiles.shared.profile(vendor: vendor, product: product) != nil,
+                  !HeadsetRuleStore.shared.controlsHID(vendor: vendor, product: product, usage: 0xCD, serial: IOHIDDeviceGetProperty(device, kIOHIDSerialNumberKey as CFString) as? String) else { return }
                 guard IOHIDElementGetUsagePage(element) == 12, IOHIDElementGetUsage(element) == 0xCD else { return }
                 let ticks = IOHIDValueGetTimeStamp(value)
                 let ns = HeadsetNanoseconds(ticks,numer:observer.timebase.numer,denom:observer.timebase.denom)

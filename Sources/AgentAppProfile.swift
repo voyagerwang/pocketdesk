@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 TargetConfig 的应用身份与 Foundation 的包元数据。
- * [OUTPUT]: 提供 AgentConversationMode、AgentAppProfile 与新任务页面证据判断；WorkBuddy 已知占位文本允许 AX 换行/空白差异，非占位草稿仍拒绝。
+ * [OUTPUT]: Cue 身份与原生任务语义；提供项目路径预填与已有任务 ID 的官方 Codex 深链；提供 AgentConversationMode、AgentAppProfile 与新任务页面证据判断；兼容 WorkBuddy 旧版及 5.7.6 空框提示的 AX 空白差异，非占位草稿仍拒绝。
  * [POS]: 派单的纯策略层；应用名称只作别名，真实 bundle ID 决定适配器，界面动作由 AgentTaskComposer 执行。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -12,11 +12,12 @@ enum AgentConversationMode: String {
 }
 
 enum AgentAppProfile: String {
-    case codex, workbuddy, cola, zcode, chatgpt
+    case codex, workbuddy, cola, zcode, chatgpt, cue
 
     static func canonicalName(_ name: String) -> String {
         let compact = name.lowercased().filter { !$0.isWhitespace && $0 != "-" }
-        return compact == "workbody" ? "workbuddy" : compact
+        if compact == "workbody" { return "workbuddy" }
+        return compact == "coe" ? "cue" : compact
     }
 
     static func resolve(_ target: TargetConfig) -> Self? {
@@ -27,6 +28,7 @@ enum AgentAppProfile: String {
         case "ai.colaos.desktop": return .cola
         case "dev.zcode.app": return .zcode
         case "com.openai.chat": return .chatgpt
+        case "ai.manus.agents": return .cue
         case nil: return Self(rawValue: canonicalName(target.name))
         default: return nil
         }
@@ -36,6 +38,7 @@ enum AgentAppProfile: String {
         switch self {
         case .workbuddy, .zcode: return ["新建任务", "New task"]
         case .cola: return ["新建会话", "New session"]
+        case .cue: return ["Create group chat"]
         case .codex, .chatgpt: return ["新建任务", "新聊天", "New chat", "New task", "New thread"]
         }
     }
@@ -51,9 +54,16 @@ enum AgentAppProfile: String {
         guard let value else { return false }
         let content = Self.clean(value)
         if content.isEmpty { return true }
+        // Cue 1.0.8 的空白 contenteditable 将完整占位文字暴露为 AXValue。
+        if self == .cue { return content == "Message Cue" }
         if self == .workbuddy {
-            return content.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-                == "今天帮你做些什么？ @ 引用对话文件，/ 调用技能与指令"
+            // 5.7.6 的 contenteditable 仍将提示文字暴露为 AXValue，且 ?/@、/ 后
+            // 的空白与旧版不同。只允许两种已核验的完整提示，不用包含匹配吞掉草稿。
+            let knownHints = [
+                "今天帮你做些什么？@引用对话文件，/调用技能与指令",
+                "今天帮你做些什么？@添加上下文，/调用技能与指令",
+            ]
+            return knownHints.contains(content.filter { !$0.isWhitespace })
         }
         return false
     }
@@ -73,13 +83,24 @@ enum AgentAppProfile: String {
             return labels.contains("有什么可以帮忙的？") || labels.contains("What can I help with?")
         case .codex:
             return false // 官方深链用预填正文精确读回核验，不猜页面标题。
+        case .cue:
+            return false // Cue 必须核验新群聊 URL，旧页面同名标题不足以证明新建。
         }
     }
 
-    static func codexURL(text: String) -> URL? {
+    static func codexURL(text: String, projectPath: String? = nil) -> URL? {
+        if let projectPath, !projectPath.hasPrefix("/") || projectPath.contains("\0") { return nil }
         var url = URLComponents()
         url.scheme = "codex"; url.host = "threads"; url.path = "/new"
         url.queryItems = [URLQueryItem(name: "prompt", value: text)]
+        if let projectPath { url.queryItems?.append(URLQueryItem(name: "path", value: projectPath)) }
+        return url.url
+    }
+
+    static func codexThreadURL(id: String) -> URL? {
+        guard UUID(uuidString: id) != nil else { return nil }
+        var url = URLComponents()
+        url.scheme = "codex"; url.host = "threads"; url.path = "/" + id
         return url.url
     }
 }

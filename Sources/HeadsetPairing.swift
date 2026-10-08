@@ -63,10 +63,16 @@ final class HeadsetPairing: NSObject, NSWindowDelegate {
         }
         devices.sort { $0.name < $1.name }
         for p in devices { picker.addItem(withTitle: "\(p.name)（\(p.vendorID):\(p.productID)）") }
-        action.isEnabled = !devices.isEmpty && result == kIOReturnSuccess
-        info.stringValue = result != kIOReturnSuccess ? "无法监听设备，请检查 PocketDesk 的输入监控权限，然后刷新。" : devices.isEmpty ? "没有检测到可读取按键的设备。请连接耳机后刷新；部分蓝牙或模拟耳机不会向电脑提供独立按键信号。" : "选择耳机后，依次检测中键、加号、减号及长按。列表也可能包含键盘，请确认设备名称。检测时原播放和音量动作可能发生；关闭窗口可取消，不保存配置。"
+        if devices.isEmpty {
+            picker.addItem(withTitle: "未发现可配置的独立按键设备")
+            picker.isEnabled = false
+            action.title = "检测蓝牙触控…"
+        }
+        action.isEnabled = devices.isEmpty || result == kIOReturnSuccess
+        info.stringValue = result != kIOReturnSuccess ? "无法监听设备，请检查 PocketDesk 的输入监控权限，然后刷新。" : devices.isEmpty ? "此列表只显示可读取独立按键的设备，不是蓝牙连接列表。耳机已连接，也可能不出现在这里。\n\n蓝牙触控耳机请点击下方“检测蓝牙触控…”，检查按下和松开是否传到电脑。" : "选择耳机后，依次检测中键、加号、减号及长按。列表也可能包含键盘，请确认设备名称。检测时原播放和音量动作可能发生；关闭窗口可取消，不保存配置。"
     }
     @objc private func advance() {
+        if devices.isEmpty { panel?.close(); HeadsetTouchDiagnostic.shared.show(); return }
         if saved { panel?.close(); return }
         if learning.stage == .complete { save(hold: true); return }
         guard devices.indices.contains(picker.indexOfSelectedItem) else { return }

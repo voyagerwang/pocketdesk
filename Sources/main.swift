@@ -130,6 +130,7 @@ _ = Auth.token
 let pointerExecutor = PointerExecutor()
 // 应用选择后的鼠标就位由 Server 编排，但注入必须走 PointerExecutor（与其它指针命令同一条队列）。
 server.pointerExecutor = pointerExecutor
+HeadsetController.shared.voicePointer = pointerExecutor
 let cursorMonitor = CursorMonitor()
 let wsPort: UInt16 = selectedPort < 65534 ? selectedPort + 1 : 46388
 let wsServer = WSServer(port: wsPort, pointer: pointerExecutor, cursor: cursorMonitor)
@@ -147,6 +148,9 @@ let unlockCoordinator = UnlockCoordinator(credentials: unlockCredentials, config
 unlockCoordinator.onUnlocked = { Util.wakeDisplay() }
 unlockCoordinator.onBeforeInput = { Util.wakeDisplay() }
 let nativeUnlock = UnlockNativeHTTP(coordinator: unlockCoordinator)
+let manualUnlock = ManualUnlockHTTP()
+manualUnlock.onBeforeInput = { Util.wakeDisplay() }
+server.manualUnlock = manualUnlock
 server.nativeUnlock = nativeUnlock
 UnlockPanelController.shared.bind(coordinator: unlockCoordinator, credentials: unlockCredentials, native: nativeUnlock)
 server.consoleActions = ConsoleActions(coordinator: unlockCoordinator, native: nativeUnlock, configured: { secureTransport != nil })
