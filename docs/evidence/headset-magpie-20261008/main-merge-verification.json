@@ -1,0 +1,13 @@
+{
+  "sourceHelperRestored": true,
+  "helperSelfTest": "passed",
+  "protocolIdentity": "hid:vendor:product:serial-or-model:page:usage",
+  "futureHealthRejected": true,
+  "gestureAndClockChecks": "passed",
+  "nativeWindowChecks": "passed",
+  "headsetRulesAndDesktopEffects": "not tested with physical devices",
+  "helperSourceSHA256": "3d5d2c7785f80118238048d003890369663bb0ac2504ffd52d967f03e9c9a27f",
+  "freshPackageBuild": "passed with repository sources, helper and Web",
+  "freshPackageSignature": "deep strict passed",
+  "physicalHIDChanges": false
+}

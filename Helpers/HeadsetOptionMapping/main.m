@@ -74,12 +74,67 @@ static NSArray *Profiles(void) {
     }
     return saved;
 }
+// Custom rules override only their own sources under an app-owned short lease.
+// Save previous per-source entries so crash/restart never leaves a swallowed key.
+static NSString *OperationPath(NSString *name) {
+    return [[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/VoiceDeck/headset"] stringByAppendingPathComponent:name];
+}
+static NSArray *OperationSources(void) {
+    NSData *data = [NSData dataWithContentsOfFile:OperationPath(@"operation-lease.json")];
+    id lease = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if (![lease isKindOfClass:NSDictionary.class]) return @[];
+    double age = NSDate.date.timeIntervalSince1970 - [lease[@"time"] doubleValue];
+    int pid = [lease[@"pid"] intValue];
+    if (pid <= 0 || age < 0 || age >= 3 || kill(pid, 0) != 0 || ![lease[@"sources"] isKindOfClass:NSArray.class]) return @[];
+    NSMutableArray *out = [NSMutableArray array];
+    for (id s in lease[@"sources"]) {
+        if (![s isKindOfClass:NSDictionary.class] || ![s[@"kind"] isEqual:@"hid"] || ![s[@"device"] isKindOfClass:NSString.class] ||
+            ![s[@"page"] isKindOfClass:NSNumber.class] || ![s[@"usage"] isKindOfClass:NSNumber.class] || ![s[@"vendor"] isKindOfClass:NSNumber.class] || ![s[@"product"] isKindOfClass:NSNumber.class] ||
+            [s[@"page"] intValue] != 12 || [s[@"usage"] intValue] <= 0 || [s[@"usage"] intValue] > 65535 || [s[@"vendor"] intValue] <= 0 || [s[@"product"] intValue] <= 0) continue;
+        [out addObject:s];
+    }
+    return out;
+}
+static NSArray *RestoreOperations(id current, NSDictionary *owned) {
+    if (![owned isKindOfClass:NSDictionary.class]) return nil;
+    if (current && ![current isKindOfClass:NSArray.class]) return nil;
+    NSMutableArray *out = [NSMutableArray array];
+    for (id entry in current ?: @[]) {
+        if (![entry isKindOfClass:NSDictionary.class]) return nil;
+        NSString *source = [entry[SrcKey] description];
+        id previous = owned[source];
+        if (previous && [entry[DstKey] unsignedLongLongValue] == HoldKey) {
+            if ([previous isKindOfClass:NSDictionary.class]) [out addObject:previous];
+        } else [out addObject:entry];
+    }
+    return out;
+}
+static NSArray *TakeOperations(NSArray *base, NSArray *sources, NSMutableDictionary *owned) {
+    NSMutableArray *out = [base mutableCopy];
+    for (NSDictionary *s in sources) {
+        uint64_t code = ((uint64_t)[s[@"page"] intValue] << 32) | [s[@"usage"] unsignedLongLongValue];
+        NSString *key = [@(code) description];
+        if (owned[key]) continue;
+        id previous = NSNull.null;
+        for (NSDictionary *entry in out) { if ([entry[SrcKey] unsignedLongLongValue] == code) { previous = entry; break; } }
+        owned[key] = previous;
+        NSIndexSet *indexes = [out indexesOfObjectsPassingTest:^BOOL(NSDictionary *entry, NSUInteger i, BOOL *stop) { (void)i; (void)stop; return [entry[SrcKey] unsignedLongLongValue] == code; }];
+        [out removeObjectsAtIndexes:indexes];
+        [out addObject:@{SrcKey:@(code),DstKey:@(HoldKey)}];
+    }
+    return out;
+}
 static NSDictionary *Check(IOHIDEventSystemClientRef client, BOOL force) {
     NSArray *services = CFBridgingRelease(IOHIDEventSystemClientCopyServices(client));
     if (!services) return @{ @"state":@"error", @"reason":@"HID services unavailable" };
     NSUInteger matched = 0, verified = 0, repaired = 0;
     NSArray *profiles = Profiles();
     BOOL leaseActive = HoldLeaseValid();
+    NSArray *operationSources = OperationSources();
+    NSData *backupData = [NSData dataWithContentsOfFile:OperationPath(@"operation-mapping-backup.json")];
+    id backupJSON = backupData ? [NSJSONSerialization JSONObjectWithData:backupData options:NSJSONReadingMutableContainers error:nil] : nil;
+    NSMutableDictionary *backups = [backupJSON isKindOfClass:NSMutableDictionary.class] ? backupJSON : [NSMutableDictionary dictionary];
+    NSMutableArray *operationVerified = [NSMutableArray array];
     NSMutableArray *registryIDs = [NSMutableArray array];
     for (id item in services) {
         IOHIDServiceClientRef service = (__bridge IOHIDServiceClientRef)item;
@@ -88,20 +143,47 @@ static NSDictionary *Check(IOHIDEventSystemClientRef client, BOOL force) {
         for (NSDictionary *p in profiles) {
             if ([Property(service,@"VendorID") isEqual:p[@"vendorID"]] && [Property(service,@"ProductID") isEqual:p[@"productID"]]) { profile = p; break; }
         }
-        if (!profile) continue;
+        NSString *serial = Property(service,@"SerialNumber");
+        NSString *device = [NSString stringWithFormat:@"%@:%@:%@",Property(service,@"VendorID"),Property(service,@"ProductID"),[serial isKindOfClass:NSString.class] ? serial : @"model"];
+        NSArray *custom = [operationSources filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *s, NSDictionary *bindings) { (void)bindings; return [s[@"device"] isEqual:device]; }]];
+        NSString *serviceKey = [(__bridge id)IOHIDServiceClientGetRegistryID(service) description];
+        if (!serviceKey || (!profile && custom.count == 0 && !backups[serviceKey])) continue;
         matched++;
         id registryID = (__bridge id)IOHIDServiceClientGetRegistryID(service);
         if (registryID) [registryIDs addObject:registryID];
         id current = Property(service,MapKey);
-        NSArray *desired = MergeHold(current, leaseActive && [profile[@"supportsHold"] boolValue]);
+        NSArray *restored = RestoreOperations(current, backups[serviceKey] ?: @{});
+        if (!restored) continue; // An invalid property must never become an empty baseline.
+        NSArray *base = profile ? MergeHold(restored, leaseActive && [profile[@"supportsHold"] boolValue]) : restored;
+        if (!base) continue;
+        NSMutableDictionary *owned = [NSMutableDictionary dictionary];
+        NSArray *desired = TakeOperations(base, custom, owned);
+        // Persist recovery before applying the takeover; retain it on a failed write.
+        if (owned.count) backups[serviceKey] = owned;
+        if (custom.count || backups[serviceKey]) {
+            NSData *recovery = [NSJSONSerialization dataWithJSONObject:backups options:0 error:nil];
+            if (!recovery || ![recovery writeToFile:OperationPath(@"operation-mapping-backup.json") atomically:YES]) continue;
+        }
         if (!desired) continue; // Do not overwrite an unknown property format.
         if (force || ![current isEqual:desired]) {
             BOOL set = IOHIDServiceClientSetProperty(service,(__bridge CFStringRef)MapKey,(__bridge CFArrayRef)desired);
             if (!set) continue;
             repaired++;
         }
-        if ([Property(service,MapKey) isEqual:desired]) verified++;
+        if ([Property(service,MapKey) isEqual:desired]) {
+            verified++;
+            if (owned.count == 0) [backups removeObjectForKey:serviceKey];
+            for (NSDictionary *s in custom) [operationVerified addObject:[NSString stringWithFormat:@"hid:%@:12:%@",s[@"device"],s[@"usage"]]];
+        }
     }
+    if (operationSources.count || backupJSON) {
+        NSData *recovery = [NSJSONSerialization dataWithJSONObject:backups options:0 error:nil];
+        [recovery writeToFile:OperationPath(@"operation-mapping-backup.json") atomically:YES];
+    }
+    if (operationSources.count) {
+        NSData *health = [NSJSONSerialization dataWithJSONObject:@{@"time":@(NSDate.date.timeIntervalSince1970),@"sources":operationVerified} options:0 error:nil];
+        [health writeToFile:OperationPath(@"operation-health.json") atomically:YES];
+    } else [NSFileManager.defaultManager removeItemAtPath:OperationPath(@"operation-health.json") error:nil];
     return @{@"state": matched == 0 ? @"waiting_for_headset" : verified == matched ? @"verified" : @"error",
              @"holdLeaseActive":@(leaseActive), @"serviceRegistryIDs":registryIDs, @"matchingServices":@(matched), @"verifiedServices":@(verified), @"writes":@(repaired)};
 }
@@ -131,6 +213,15 @@ static void SelfTest(void) {
     NSDictionary *custom = @{SrcKey:@(VolumeDown),DstKey:@(0x70000003A)};
     Expect([MergeHold(@[correct,custom], YES) isEqual:@[correct,custom]], @"Preserve custom minus mapping");
     Expect([MergeHold(@[correct,@{SrcKey:@(VolumeDown),DstKey:@(LegacyHoldKey)}], YES) isEqual:@[correct,hold]], @"Replace legacy F20 hold without changing Option");
+    NSDictionary *source = @{@"page":@12,@"usage":@0xCD};
+    NSMutableDictionary *owned = [NSMutableDictionary dictionary];
+    NSArray *taken = TakeOperations(@[correct,custom], @[source,source], owned);
+    Expect(owned.count == 1 && [owned[[@(PlayPause) description]] isEqual:correct], @"Duplicate gestures retain the original mapping once");
+    Expect([RestoreOperations(taken, owned) isEqual:@[custom,correct]], @"Custom mapping takeover restores only owned source");
+    NSDictionary *otherTool = @{SrcKey:@(PlayPause),DstKey:@(0x70000003B)};
+    Expect([RestoreOperations(@[otherTool], owned) isEqual:@[otherTool]], @"Another tool's later mapping is not overwritten");
+    Expect(RestoreOperations(@[correct], (id)NSNull.null) == nil, @"Malformed recovery refused");
+    Expect(RestoreOperations((id)NSNull.null, @{}) == nil, @"Malformed native property is not treated as an empty baseline");
     puts("PASS: hold takeover, restore, custom preservation, missing, empty, incorrect, duplicate, unrelated-preservation, idempotence, malformed input");
 }
 int main(void) {

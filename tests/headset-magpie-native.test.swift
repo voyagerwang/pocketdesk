@@ -2,12 +2,19 @@ import AppKit
 import SwiftUI
 
 @main struct HeadsetMagpieNativeTests {
+    static let previewDirectory: URL = {
+        if let path = ProcessInfo.processInfo.environment["PD_HEADSET_PREVIEW_DIR"], !path.isEmpty {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("pocketdesk-headset-previews-\(UUID().uuidString)", isDirectory: true)
+    }()
     static func snapshot(_ window: NSWindow, name: String) {
         guard let view = window.contentView else { fatalError("Missing content") }
         view.layoutSubtreeIfNeeded()
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { fatalError("No render") }
         view.cacheDisplay(in: view.bounds, to: rep)
-        let folder = URL(fileURLWithPath: "/tmp/pocketdesk-magpie-build/previews", isDirectory: true)
+        let folder = previewDirectory
         try! FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try! rep.representation(using: .png, properties: [:])!.write(to: folder.appendingPathComponent(name + ".png"))
         assert(view.bounds.width >= 650 && view.bounds.height >= 500)

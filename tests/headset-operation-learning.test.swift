@@ -1,6 +1,11 @@
 import Foundation
 @main struct LearningTests {
     static func main() {
+        assert(HeadsetMappingRuntime.healthIsFresh(timestamp: 100, now: 100))
+        assert(HeadsetMappingRuntime.healthIsFresh(timestamp: 100, now: 102.99))
+        assert(!HeadsetMappingRuntime.healthIsFresh(timestamp: 100, now: 103))
+        assert(!HeadsetMappingRuntime.healthIsFresh(timestamp: 100, now: 99))
+        assert(!HeadsetMappingRuntime.healthIsFresh(timestamp: .nan, now: 100))
         let button = HeadsetSignal(kind: .hid, device: "1:2:test", name: "test", vendor: 1, product: 2, usage: 0xCD)
         var machine = HeadsetOperationLearning()
         assert(machine.edge(button, down: true, now: 0) == [.pressed])
