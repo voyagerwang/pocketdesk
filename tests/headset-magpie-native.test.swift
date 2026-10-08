@@ -14,6 +14,10 @@ import SwiftUI
     }
     static func main() {
         _ = NSApplication.shared; NSApp.setActivationPolicy(.accessory)
+        let item = HeadsetController.shared.settingsItem()
+        assert(item.title == "耳机设置…" && item.submenu == nil)
+        assert(item.action == #selector(HeadsetSettings.show))
+        assert(item.target === HeadsetSettings.shared)
         NSApp.appearance = NSAppearance(named: .aqua)
         let owner = HeadsetMappingWindow.shared
         owner.show()

@@ -29,3 +29,9 @@
 已更新 `/Users/cm/Applications/PocketDesk.app`。安装前确认无执行中任务、无未提交手机草稿；93条任务快照、耳机规则/按设备设置/旧设备档案均逐字保留。现有页面和 helper 保留，安装版 helper 的自测通过。签名、签名后构建与安装执行文件一致、LaunchAgent运行和HTTP 200已核验，见[交付验证](evidence/headset-magpie-20261008/installation-verification.json)。旧应用保存在独立工作树的 `build/headset-magpie-20261008/rollback/PocketDesk.app`。
 
 当前 Mac 锁定，未实点安装后的窗口；本轮未进行真实耳机按键、语音录音或外部派单。原生渲染和注入事件的状态机检查不替代真机验收。
+
+## 菜单入口精简
+
+应用菜单和 Dock 右键均直接提供“耳机设置…”，点击打开设置窗口，移除“耳机语音”子菜单及其常驻取消项。“取消本次语音”原本用于中止误触或不想提交的语音、取消自动发送与释放模拟按键；常用菜单无需为它占入口，现有 Esc 和内部中断保护保留。
+
+入口精简版已安装：完整构建与原生菜单检查通过，核对标题为“耳机设置…”、无子菜单、动作与接收者直接绑定设置窗口；应用菜单与 Dock 复用同一构造器。安装签名、HTTP 200、93条任务及耳机配置保留已核验，见[入口更新验证](evidence/headset-magpie-20261008/menu-installation-verification.json)。本轮未执行真实语音或键盘发送。
