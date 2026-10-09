@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-09",
+  "sourceConfirmationMilliseconds": 80,
+  "manualExclusionMilliseconds": 800,
+  "keyboardDeviceClassification": "IOHIDDeviceConformsTo keyboard collection before VID/PID filtering",
+  "executionAndLearningShareSourceGuard": true,
+  "notificationTimestampPreserved": true,
+  "syntheticRecognitionAndSourceOrderingTests": "passed",
+  "inertProductionRoutingTests": "passed",
+  "fullAppBuildHelperSelfTestAndSignature": "passed",
+  "localInstallation": "verified",
+  "httpStatus": 200,
+  "taskSnapshotCount": 93,
+  "userTaskAndHeadsetFilesPreserved": true,
+  "installedBinarySha256": "fc6ad1ff46b6788e6741ba99012212cce4c41cc18ffa7e1f56142501cba06262",
+  "physicalKeyboardVolumeTest": "pending user confirmation",
+  "physicalHeadsetTest": false,
+  "syntheticSystemVolumeOrKeyboardEventsSent": false
+}

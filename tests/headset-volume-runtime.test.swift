@@ -26,6 +26,17 @@ import Foundation
         tap(0.2); runtime.tickVolume(now: 0.8)
         assert(performed == ["double"] && fallbacks == 0)
         performed = []
+        tap(0.9)
+        runtime.volumeSourcePending = { true }
+        runtime.tickVolume(now: 1.30)
+        assert(performed.isEmpty)
+        runtime.volumeSourcePending = { false }
+        let deliveredAt = HeadsetVolumeSourceEvent.observationTime(notifiedAt: 1.27, now: 1.31)
+        assert(deliveredAt == 1.27)
+        tap(deliveredAt) // Main processing after the deadline keeps the original event time.
+        runtime.tickVolume(now: 1.4)
+        assert(performed == ["double"] && fallbacks == 0)
+        performed = []
         tap(1); runtime.tickVolume(now: 1.39)
         assert(performed == ["click"] && fallbacks == 0)
 

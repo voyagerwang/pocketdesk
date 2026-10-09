@@ -66,6 +66,10 @@ volume_runtime_binary="$output_dir/headset-volume-runtime-test"
 build_test "$project_root/tests/headset-volume-runtime.test.swift" "$volume_runtime_binary"
 "$volume_runtime_binary"
 
+volume_source_binary="$output_dir/headset-volume-source-test"
+build_test "$project_root/tests/headset-volume-source.test.swift" "$volume_source_binary"
+"$volume_source_binary"
+
 if [[ "$run_native" == true ]]; then
   native_binary="$output_dir/headset-magpie-native-test"
   build_test "$project_root/tests/headset-magpie-native.test.swift" "$native_binary"

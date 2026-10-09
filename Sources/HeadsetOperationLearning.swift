@@ -61,6 +61,10 @@ struct HeadsetOperationLearning {
         tapMachines[signal.identity] = machine
         return updates
     }
+    mutating func cancelVolume() {
+        for id in tapMachines.keys { signals.removeValue(forKey: id) }
+        tapMachines = [:]
+    }
     private func result(_ signal: HeadsetSignal, gesture: HeadsetRule.Gesture) -> Update {
         if let expected, expected != gesture { return .mismatch(gesture) }
         return .recognized(.init(signal: signal, gesture: gesture))
