@@ -60,18 +60,44 @@ final class HeadsetMappingModel: ObservableObject {
     var close: (() -> Void)?
     var focusRecorder: (() -> Void)?
     static func identity(_ signal: HeadsetSignal) -> String { signal.kind.rawValue + ":" + signal.device }
+    static func recordingSource(uid: String, sources: [HeadsetSignal]) -> HeadsetSignal? {
+        guard let source = sources.first(where: { $0.device == uid }) else { return nil }
+        guard source.kind == .volume else { return source }
+        let name = normalizedDeviceName(source.name)
+        guard !name.isEmpty else { return source }
+        let matchingButtons = sources.filter { $0.kind == .hid && normalizedDeviceName($0.name) == name }
+        return matchingButtons.count == 1 ? matchingButtons[0] : source
+    }
+    private static func normalizedDeviceName(_ name: String) -> String {
+        name.precomposedStringWithCanonicalMapping
+            .folding(options: [.caseInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
     var selected: HeadsetSignal? { devices.first { Self.identity($0) == deviceID } }
+    var sourceExplanation: String {
+        if selected?.kind == .volume {
+            return "短时间内两次同方向的音量变化可识别为双击。当前没有松开信号，不能可靠识别长按；其他程序调整音量也可能被识别。"
+        }
+        if selected?.vendor == 31 && selected?.product == 2849 {
+            return "这个设备的减键使用重复信号，减键暂不支持双击；中键和加键可录制双击。"
+        }
+        return "单击后稍等片刻确认；短时间连续操作同一按键两次可识别为双击。"
+    }
     var expected: HeadsetRule.Gesture? { HeadsetRule.Gesture(rawValue: preset) }
     var requiresKey: Bool { [.hotkey, .voice, .spriteVoice].contains(action) }
     var needsVoice: Bool { [.voice, .spriteVoice].contains(action) }
     var canSave: Bool { operation != nil && phase != .listening && !recordingKey && (!requiresKey || keyField.key?.valid == true) && (action != .openApp || appPath != nil) }
-    func load(uid: String?, ruleID: String?) {
-        stop(); operation = nil; editingID = nil; phase = .ready; preset = "auto"; refresh()
+    func load(uid: String?, ruleID: String?, sources: [HeadsetSignal]? = nil, rules: [HeadsetRule]? = nil) {
+        stop(); operation = nil; editingID = nil; phase = .ready; preset = "auto"
+        if let sources {
+            devices = sources
+            if !sources.contains(where: { Self.identity($0) == deviceID }) { deviceID = sources.first.map(Self.identity) ?? "" }
+        } else { refresh() }
         action = .voice; keyLabel = "LeftOption"; keyField.recorded = HeadsetKey.parse("LeftOption")
         keyField.stringValue = keyLabel; appPath = nil; scope = nil; scopeName = "所有应用"; enabled = true
         holdsKey = false; voiceToggle = false; advancedVoice = false; error = false; message = ""
-        if let uid, let d = devices.first(where: { $0.device == uid }) { deviceID = Self.identity(d) }
-        if let id = ruleID, let rule = HeadsetRuleStore.shared.rules.first(where: { $0.id == id }) {
+        if let uid, let d = Self.recordingSource(uid: uid, sources: devices) { deviceID = Self.identity(d) }
+        if let id = ruleID, let rule = (rules ?? HeadsetRuleStore.shared.rules).first(where: { $0.id == id }) {
             if !devices.contains(where: { Self.identity($0) == Self.identity(rule.signal) }) { var offline = rule.signal; offline.name += " · 未连接"; devices.append(offline) }
             deviceID = Self.identity(rule.signal); editingID = id
             operation = .init(signal: rule.signal, gesture: rule.gesture); phase = .editing
@@ -93,6 +119,12 @@ final class HeadsetMappingModel: ObservableObject {
         if !list.contains(where: { Self.identity($0) == deviceID }) { deviceID = list.first.map(Self.identity) ?? "" }
     }
     func changedSource() { stop(); operation = nil; phase = .ready; message = ""; error = false }
+    func edit(_ existing: HeadsetLearnedOperation) {
+        if !devices.contains(where: { Self.identity($0) == Self.identity(existing.signal) }) {
+            var offline = existing.signal; offline.name += " · 未连接"; devices.append(offline)
+        }
+        deviceID = Self.identity(existing.signal); operation = existing; phase = .editing
+    }
     func begin() {
         guard let device = selected else { message = "没有可读取的设备，请连接耳机后刷新。"; error = true; return }
         guard device.kind != .volume || device.device == HeadsetAudio.current()?.uid else { message = "请先把这个耳机设为系统声音输出，再开始录制。"; error = true; return }
@@ -232,10 +264,9 @@ struct HeadsetMappingView: View {
                                     Button("重新录制") { model.changedSource() }.buttonStyle(.borderless)
                                 }
                             }
-                            if model.selected?.kind == .volume { HeadsetMessage(text: "当前仅能读取音量变化，不能区分左右耳、双击或长按。其他程序调整音量也可能被识别。") }
-                            else {
+                            HeadsetMessage(text: model.sourceExplanation)
+                            if model.selected?.kind != .volume {
                                 HeadsetMessage(text: "录制期间不执行自定义功能；耳机原生的媒体或输入法功能仍可能响应。")
-                                if model.selected?.vendor == 31 && model.selected?.product == 2849 { HeadsetMessage(text: "这个设备不能可靠识别双击，可以录制单击或长按。") }
                             }
                         }
                     }
@@ -291,7 +322,7 @@ final class HeadsetMappingWindow: NSObject, NSWindowDelegate {
     @objc func show() { show(deviceUID: nil) }
     func show(deviceUID: String?, ruleID: String? = nil, operation: HeadsetLearnedOperation? = nil) {
         model.load(uid: deviceUID, ruleID: ruleID)
-        if let operation, ruleID == nil { model.operation = operation; model.phase = .editing }
+        if let operation, ruleID == nil { model.edit(operation) }
         if let window { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
         let w = NSWindow(contentRect: .init(x: 0, y: 0, width: 710, height: 700), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window = w; w.title = "PocketDesk · 耳机操作"; w.minSize = .init(width: 650, height: 580); w.isReleasedWhenClosed = false; w.delegate = self

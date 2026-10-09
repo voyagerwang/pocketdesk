@@ -19,8 +19,50 @@ import SwiftUI
         try! rep.representation(using: .png, properties: [:])!.write(to: folder.appendingPathComponent(name + ".png"))
         assert(view.bounds.width >= 650 && view.bounds.height >= 500)
     }
+    static func verifySourceSelectionAndRules() {
+        let volume = HeadsetSignal(kind: .volume, device: "preview-audio", name: "  Earphone   USB  ", usage: 1, step: 0.0625)
+        let button = HeadsetSignal(kind: .hid, device: "1:2:preview", name: "earphone usb", vendor: 1, product: 2, usage: 0)
+        let sources = [volume, button]
+        assert(HeadsetMappingModel.recordingSource(uid: volume.device, sources: sources) == button)
+        assert(HeadsetMappingModel.recordingSource(uid: button.device, sources: sources) == button)
+        var ambiguous = button; ambiguous.device = "1:2:another"
+        assert(HeadsetMappingModel.recordingSource(uid: volume.device, sources: sources + [ambiguous]) == volume)
+        var unrelated = button; unrelated.name = "Another headset"
+        assert(HeadsetMappingModel.recordingSource(uid: volume.device, sources: [volume, unrelated]) == volume)
+        var emptyVolume = volume; emptyVolume.name = " "
+        var emptyButton = button; emptyButton.name = ""
+        assert(HeadsetMappingModel.recordingSource(uid: volume.device, sources: [emptyVolume, emptyButton]) == emptyVolume)
+        assert(HeadsetMappingModel.recordingSource(uid: "missing", sources: sources) == nil)
+
+        let model = HeadsetMappingModel()
+        model.load(uid: volume.device, ruleID: nil, sources: sources, rules: [])
+        assert(model.selected == button && model.operation == nil)
+        let clickRule = HeadsetRule(signal: volume, gesture: .click, action: .spriteWake)
+        let doubleRule = HeadsetRule(signal: volume, gesture: .doubleClick, action: .spriteWake)
+        model.load(uid: volume.device, ruleID: doubleRule.id, sources: sources, rules: [doubleRule])
+        assert(model.selected == volume && model.operation?.signal == volume && model.operation?.gesture == .doubleClick)
+        assert(model.editingID == doubleRule.id && model.phase == .editing)
+        model.load(uid: volume.device, ruleID: nil, sources: sources, rules: [])
+        model.edit(.init(signal: volume, gesture: .click))
+        assert(model.selected == volume && model.operation?.signal == volume && model.phase == .editing)
+
+        let device = HeadsetSettingsDevice(id: volume.device, name: volume.name, kind: .volume, connected: true)
+        let rows = HeadsetSettingsModel.operationRows(rules: [clickRule, doubleRule], device: device, step: volume.step)
+        assert(rows.count == 3)
+        assert(rows.filter { $0.rule?.id == clickRule.id }.count == 1)
+        let doubleRow = rows.first { $0.rule?.id == doubleRule.id }!
+        assert(doubleRow.title == "音量增加 · 双击")
+        assert(device.displayName.contains("音量信号"))
+        assert(HeadsetSettingsDevice(id: button.device, name: button.name, kind: .hid, connected: true).displayName.contains("独立按键"))
+        var disabledDouble = doubleRule; disabledDouble.enabled = false
+        let preferences = HeadsetSettingsModel(); preferences.defaultEnabled = true
+        assert(preferences.functionLabel(.init(id: "disabled-double", signal: volume, gesture: .doubleClick, rule: disabledDouble)) == "保留原有功能")
+        assert(preferences.functionLabel(.init(id: "default-click", signal: volume, gesture: .click, rule: nil)) == "默认：普通语音")
+        model.stop()
+    }
     static func main() {
         _ = NSApplication.shared; NSApp.setActivationPolicy(.accessory)
+        verifySourceSelectionAndRules()
         let item = HeadsetController.shared.settingsItem()
         assert(item.title == "耳机设置…" && item.submenu == nil)
         assert(item.action == #selector(HeadsetSettings.show))
@@ -61,7 +103,7 @@ import SwiftUI
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                             snapshot(HeadsetSettings.shared.window!, name: "settings")
                             HeadsetSettings.shared.window?.close()
-                            print("PASS native ready/recognized/error/dark/settings renders; save gating, preserved draft, close cancellation and edit protection; no config save, recording, key injection or dispatch")
+                            print("PASS native renders, unambiguous source preference, preserved existing source, visible volume double-click rule, save gating, close cancellation and edit protection; no config save, recording, key injection or dispatch")
                             NSApp.stop(nil)
                             NSApp.postEvent(NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0)!, atStart: true)
                         }

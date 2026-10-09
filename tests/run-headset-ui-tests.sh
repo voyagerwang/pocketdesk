@@ -40,16 +40,18 @@ module_cache_dir="$output_dir/module-cache"
 mkdir -p "$module_cache_dir"
 
 app_sources=()
+source_snapshot_dir="$(mktemp -d "$output_dir/sources.XXXXXX")"
+cp "$project_root"/Sources/*.swift "$source_snapshot_dir/"
 for source_file in "$project_root"/Sources/*.swift; do
   if [[ "$source_file" != "$project_root/Sources/main.swift" ]]; then
-    app_sources+=("$source_file")
+    app_sources+=("$source_snapshot_dir/$(basename "$source_file")")
   fi
 done
 framework_options=(-framework AppKit -framework SwiftUI -framework WebKit -framework Network -framework CoreImage -framework Carbon)
 
 build_test() {
   local test_source="$1" test_binary="$2"
-  swiftc -parse-as-library -module-cache-path "$module_cache_dir" \
+  swiftc -parse-as-library -whole-module-optimization -Onone -module-cache-path "$module_cache_dir" \
     "${app_sources[@]}" "$test_source" "${framework_options[@]}" -o "$test_binary" > "$test_binary.compiler.log" 2>&1 || {
       cat "$test_binary.compiler.log" >&2
       return 1
@@ -59,6 +61,10 @@ build_test() {
 recognition_binary="$output_dir/headset-operation-learning-test"
 build_test "$project_root/tests/headset-operation-learning.test.swift" "$recognition_binary"
 "$recognition_binary"
+
+volume_runtime_binary="$output_dir/headset-volume-runtime-test"
+build_test "$project_root/tests/headset-volume-runtime.test.swift" "$volume_runtime_binary"
+"$volume_runtime_binary"
 
 if [[ "$run_native" == true ]]; then
   native_binary="$output_dir/headset-magpie-native-test"

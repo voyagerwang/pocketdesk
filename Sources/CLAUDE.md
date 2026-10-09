@@ -180,8 +180,11 @@ WorkbenchLookup.swift: 六个只读工具查询个人工作台的日程、随手
 
 2026-09-29 查询修复：首版查询漏了个人工作台待办。WorkbenchLookup 现在包含 `search_workbench_tasks` / `read_workbench_task`，服务端按 `planned_date` 或 `due_at` 返回未删除待办；用户说“明天有哪些待办”必须使用该工具，不能用日程或随手记替代。
 
-耳机录制与现代设置（2026-10-08）：HeadsetOperationLearning 以独立信号状态机识别单击/双击/长按，自动与预设共用，长按待松开才确认；不同按键不混合双击。HeadsetMappingRuntime 的检测只反馈一次已识别操作，音量变化只确认增减，不推断左右耳/双击/长按。HeadsetMappingWindow 用 SwiftUI 卡片式录制弹窗，识别后才出现动作，旧规则直接编辑，不重复录制；保存失败保留草稿，关闭/切预设停止检测与试用。HeadsetSettings 为同风格设置，按设备展示操作与范围，普通选择自动保存；等待秒数捕获编辑设备，避免切设备误写。HeadsetUI 为本机 Magpie 观察后的自适应灰白/深色卡片、分段选择及控件样式。原快捷键执行和规则 JSON 协议沿用。
+耳机录制与现代设置（2026-10-08）：HeadsetOperationLearning 以独立信号状态机识别单击/双击/长按，自动与预设共用，长按待松开才确认；不同按键不混合双击。HeadsetMappingRuntime 的检测只反馈一次已识别操作，音量变化可按同设备、同方向的380ms窗口识别单击/双击，不推断左右耳或长按。HeadsetMappingWindow 用 SwiftUI 卡片式录制弹窗，识别后才出现动作，旧规则直接编辑，不重复录制；保存失败保留草稿，关闭/切预设停止检测与试用。HeadsetSettings 为同风格设置，按设备展示操作与范围，普通选择自动保存；等待秒数捕获编辑设备，避免切设备误写。HeadsetUI 为本机 Magpie 观察后的自适应灰白/深色卡片、分段选择及控件样式。原快捷键执行和规则 JSON 协议沿用。
 
 耳机菜单入口精简（2026-10-08）：应用菜单与 Dock 共用 settingsItem，直接显示“耳机设置…”并打开同一个设置窗口；不再有“耳机语音”子菜单和常驻“取消本次语音”。取消录音/等待发送、释放按键及 Esc 保护继续沿用，功能不因关闭设置窗口而关闭。
 
 耳机合并兼容（2026-10-08）：helper 操作租约/健康协议已补齐；HeadsetMappingRuntime.healthIsFresh 同时检查非未来时间与3秒期限。手势及时间边界回归入口为 tests/run-headset-ui-tests.sh，原生预览须 --native。
+
+
+耳机双击回归（2026-10-09）：HeadsetTapGesture 共用于音量学习与实际路由；有双击规则时延迟单击，单击回退保留原生音量/默认语音，恢复回声不算点击。待识别事件绑定输出设备及前台PID，取消/权限/焦点/输出变化清理；默认语音回调带代际与mode保护，spriteEnd优先由默认录音拥有者结束。AB13X双击限制只针对EA减键，不再影响CD/E9；新录制只在唯一精确同名来源间优先HID，已有规则不换来源。设置页不吞volume double规则并自动刷新连接状态。tests/run-headset-ui-tests.sh 使用源码快照并覆盖纯识别、临时规则文件、惰性执行路由与可选原生预览，不执行真实耳机/快捷键/录音。

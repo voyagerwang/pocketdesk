@@ -25,6 +25,26 @@ final class HeadsetMappingRuntime: NSObject {
     private var lastTap: Double?
     private var volumeBaseline: Float?
     private var volumeUID: String?
+    private let learningVolumeObserver = HeadsetVolumeObserver()
+    private var volumeMachines: [String: HeadsetTapGesture] = [:]
+    private var volumeSignals: [String: HeadsetSignal] = [:]
+    private struct VolumeContext {
+        let outputID: UInt32
+        let pid: pid_t?
+        let fallback: () -> Void
+    }
+    private var volumeContexts: [String: VolumeContext] = [:]
+    private let volumeRules: HeadsetRuleStore
+    private let performVolumeRule: (HeadsetRule) -> Void
+    var volumeOutput: () -> HeadsetAudioDevice? = { HeadsetAudio.current() }
+    var volumeFocus: () -> pid_t? = { InputFocus.focusedApplicationPID() }
+    var volumeEnvironmentAllows: () -> Bool = {
+        !LockScreenInput.locked && AXIsProcessTrusted() && !HeadsetPairing.shared.isActive && !HeadsetTouchDiagnostic.shared.isActive
+    }
+    init(volumeRules: HeadsetRuleStore = .shared, performVolumeRule: @escaping (HeadsetRule) -> Void = { HeadsetMappingActions.shared.begin($0) }) {
+        self.volumeRules = volumeRules; self.performVolumeRule = performVolumeRule
+        super.init()
+    }
     var feedback: ((String, HeadsetSignal?) -> Void)?
     var statusChanged: ((String) -> Void)?
     private(set) var status = "就绪"
@@ -94,9 +114,28 @@ final class HeadsetMappingRuntime: NSObject {
         selected = device; wanted = gesture; learner = HeadsetOperationLearning(expected: gesture)
         volumeBaseline = HeadsetAudio.current()?.volume; volumeUID = HeadsetAudio.current()?.uid
         learningUntil = Date().addingTimeInterval(30)
+        if device.kind == .volume, let audio = HeadsetAudio.current(), audio.uid == device.device {
+            learningVolumeObserver.start(device: audio.id) { [weak self] _ in self?.observeLearningVolume() }
+        }
         feedback?(gesture.map { "请操作一次\($0.label)，等待识别结果。" } ?? "请操作耳机，系统会识别收到的信号。", nil)
     }
-    func stopLearning() { learningUntil = nil; downTimes = [:]; selected = nil; lastTap = nil; pulses = [:]; pulseSignals = [:]; learner = HeadsetOperationLearning() }
+    func stopLearning() {
+        learningVolumeObserver.stop()
+        learningUntil = nil; downTimes = [:]; selected = nil; lastTap = nil; pulses = [:]; pulseSignals = [:]; learner = HeadsetOperationLearning()
+    }
+    private func observeLearningVolume() {
+        guard learning, selected?.kind == .volume, let audio = HeadsetAudio.current(), let volume = audio.volume else { return }
+        guard audio.uid == selected?.device, audio.uid == volumeUID else { stopLearning(); feedback?("声音输出已改变，请重新检测。", nil); return }
+        let old = volumeBaseline
+        volumeBaseline = volume
+        guard let old else { return }
+        let delta = volume - old
+        guard abs(delta) >= 0.015 && abs(delta) <= 0.2 else { return }
+        let signal = HeadsetSignal(kind: .volume, device: audio.uid, name: audio.name, usage: delta > 0 ? 1 : -1, step: abs(delta))
+        let updates = learner.volume(signal, now: ProcessInfo.processInfo.systemUptime)
+        if updates.isEmpty { feedback?("收到一次\(signal.label)，等待确认单击或双击…", nil) }
+        for update in updates { guard learning else { break }; learningFeedback(update) }
+    }
     private func learningFeedback(_ update: HeadsetOperationLearning.Update) {
         switch update {
         case .pressed: feedback?("已收到按下，等待松开…", nil)
@@ -108,7 +147,7 @@ final class HeadsetMappingRuntime: NSObject {
         }
     }
     private func receive(_ signal: HeadsetSignal, down: Bool) {
-        if signal.vendor == 31 && signal.product == 2849 && signal.usage == 0xEA {
+        if signal.usesPulsedHold {
             pulseSignals[signal.identity] = signal
             var pulse = pulses[signal.identity] ?? HeadsetPulse()
             let edges = pulse.edge(down:down,now:ProcessInfo.processInfo.systemUptime)
@@ -121,6 +160,10 @@ final class HeadsetMappingRuntime: NSObject {
         let now = ProcessInfo.processInfo.systemUptime
         if learning {
             guard signal.device == selected?.device, selected?.kind == .hid else { return }
+            if let wanted, !HeadsetOperationLearning.supports(wanted, device: signal) {
+                feedback?("这个减音量键的连续点击与长按重复信号会混在一起，暂不录制它的双击。可改用中键或加键。", nil)
+                return
+            }
             let updates = learner.edge(signal, down: down, now: now)
             if !down && updates.isEmpty { feedback?("已收到松开，正在识别单击或双击…", nil) }
             for update in updates {
@@ -172,18 +215,56 @@ final class HeadsetMappingRuntime: NSObject {
         }
     }
     func volumeStep(uid: String) -> Float? { HeadsetRuleStore.shared.rules.first { $0.enabled && $0.signal.kind == .volume && $0.signal.device == uid }?.signal.step }
+    func volumeDoubleClickEnabled(uid: String) -> Bool {
+        volumeRules.rules.contains { $0.enabled && $0.signal.kind == .volume && $0.signal.device == uid && $0.gesture == .doubleClick && ($0.scope == nil || $0.scope == frontBundle) }
+    }
     func hasVolumeRule(_ current: HeadsetAudioDevice, side: HeadsetClickGate.Side, step: Float) -> Bool {
         let signal = HeadsetSignal(kind: .volume, device: current.uid, name: current.name, usage: side == .right ? 1 : -1, step: step)
-        guard HeadsetRuleStore.shared.controls(signal) else { return false }
-        return HeadsetRuleStore.shared.matching(signal, gesture: .click, app: frontBundle) != nil
+        return volumeRules.matching(signal, gesture: .click, app: frontBundle) != nil || volumeRules.matching(signal, gesture: .doubleClick, app: frontBundle) != nil
     }
-    func handleVolume(_ current: HeadsetAudioDevice, side: HeadsetClickGate.Side, step: Float) -> Bool {
+    func handleVolume(_ current: HeadsetAudioDevice, side: HeadsetClickGate.Side, step: Float, now: Double = ProcessInfo.processInfo.systemUptime, fallback: @escaping () -> Void = {}) -> Bool {
         let signal = HeadsetSignal(kind: .volume, device: current.uid, name: current.name, usage: side == .right ? 1 : -1, step: step)
-        guard HeadsetRuleStore.shared.controls(signal) else { return false }
-        guard let rule = HeadsetRuleStore.shared.matching(signal, gesture: .click, app: frontBundle) else { return false }
-        HeadsetMappingActions.shared.begin(rule); return true
+        guard hasVolumeRule(current, side: side, step: step) else { return false }
+        guard !learning, volumeEnvironmentAllows(), let output = volumeOutput(), output.uid == current.uid, output.id == current.id, output.volume != nil else { cancelVolumeGestures(); return true }
+        let pid = volumeFocus()
+        if let previous = volumeContexts[signal.identity], previous.pid != pid || previous.outputID != current.id {
+            volumeMachines.removeValue(forKey: signal.identity)
+        }
+        var machine = volumeMachines[signal.identity] ?? HeadsetTapGesture()
+        let previousContext = volumeContexts[signal.identity]
+        let doubleEnabled = volumeRules.matching(signal, gesture: .doubleClick, app: frontBundle) != nil
+        let context = VolumeContext(outputID: current.id, pid: pid, fallback: fallback)
+        volumeContexts[signal.identity] = context; volumeSignals[signal.identity] = signal
+        let events = machine.tap(now: now, doubleEnabled: doubleEnabled)
+        volumeMachines[signal.identity] = machine
+        if !machine.hasPending { removeVolumeGesture(signal.identity) }
+        for event in events {
+            dispatchVolume(event, signal: signal, fallback: event == .click ? previousContext?.fallback ?? context.fallback : context.fallback)
+        }
+        return true
     }
-    func cancel() { machines = [:]; signals = [:]; boundRules = [:]; pulses = [:]; pulseSignals = [:]; HeadsetMappingActions.shared.cancel() }
+    private func dispatchVolume(_ event: HeadsetGesture.Event, signal: HeadsetSignal, fallback: () -> Void) {
+        let gesture: HeadsetRule.Gesture = event == .doubleClick ? .doubleClick : .click
+        if let rule = volumeRules.matching(signal, gesture: gesture, app: frontBundle) { performVolumeRule(rule) }
+        else if event == .click { fallback() }
+    }
+    private func removeVolumeGesture(_ identity: String) {
+        volumeMachines.removeValue(forKey: identity); volumeSignals.removeValue(forKey: identity); volumeContexts.removeValue(forKey: identity)
+    }
+    func tickVolume(now: Double) {
+        guard !volumeMachines.isEmpty else { return }
+        guard !learning, volumeEnvironmentAllows(), let output = volumeOutput(), output.volume != nil else { cancelVolumeGestures(); return }
+        for id in Array(volumeMachines.keys) {
+            guard let context = volumeContexts[id], let signal = volumeSignals[id], var machine = volumeMachines[id] else { continue }
+            guard output.uid == signal.device, output.id == context.outputID, volumeFocus() == context.pid else { removeVolumeGesture(id); continue }
+            let events = machine.tick(now: now)
+            volumeMachines[id] = machine
+            if !machine.hasPending { removeVolumeGesture(id) }
+            for event in events { dispatchVolume(event, signal: signal, fallback: context.fallback) }
+        }
+    }
+    func cancelVolumeGestures() { volumeMachines = [:]; volumeSignals = [:]; volumeContexts = [:] }
+    func cancel() { machines = [:]; signals = [:]; boundRules = [:]; pulses = [:]; pulseSignals = [:]; cancelVolumeGestures(); HeadsetMappingActions.shared.cancel() }
     static func healthIsFresh(timestamp: Double, now: Double) -> Bool {
         let age = now - timestamp
         return age.isFinite && age >= 0 && age < 3
@@ -216,17 +297,11 @@ final class HeadsetMappingRuntime: NSObject {
         }
         if let until = learningUntil {
             if Date() > until { stopLearning(); feedback?("检测超时，未保存。请检查设备与输入监控权限。", nil) }
-            else if selected?.kind == .volume, let audio = HeadsetAudio.current(), let v = audio.volume {
-                guard audio.uid == selected?.device, audio.uid == volumeUID else { stopLearning(); feedback?("声音输出已改变，请重新检测。", nil); return }
-                if let old = volumeBaseline { let delta = v - old; if abs(delta) >= 0.015 && abs(delta) <= 0.2 {
-                    let signal = HeadsetSignal(kind: .volume, device: audio.uid, name: audio.name, usage: delta > 0 ? 1 : -1, step: abs(delta))
-                    if let update = learner.volume(signal) { learningFeedback(update) }
-                } }
-                volumeBaseline = v
-            }
+            else { observeLearningVolume() }
             if learning { for update in learner.tick(now: ProcessInfo.processInfo.systemUptime) { guard learning else { break }; learningFeedback(update) } }
             return
         }
+        tickVolume(now: ProcessInfo.processInfo.systemUptime)
         for (id, var machine) in machines {
             guard let signal = signals[id] else { continue }
             let options = optionsFor(signal)

@@ -13,6 +13,7 @@ struct HeadsetSignal: Codable, Equatable, Hashable {
     var usage: Int
     var step: Float? = nil
     var identity: String { "\(kind.rawValue):\(device):\(page):\(usage)" }
+    var usesPulsedHold: Bool { kind == .hid && vendor == 31 && product == 2849 && usage == 0xEA }
     var valid: Bool {
         guard !device.isEmpty, !name.isEmpty else { return false }
         if kind == .hid { return vendor > 0 && vendor <= 65535 && product > 0 && product <= 65535 && page == 12 && usage > 0 && usage <= 65535 }
@@ -60,8 +61,7 @@ struct HeadsetRule: Codable, Equatable {
     var holdsKey: Bool = false
     var voiceToggle: Bool = false
     var valid: Bool {
-        guard !id.isEmpty, signal.valid, signal.kind != .volume || gesture == .click else { return false }
-        if signal.kind == .hid, signal.vendor == 31, signal.product == 2849, gesture == .doubleClick { return false }
+        guard !id.isEmpty, signal.valid, HeadsetOperationLearning.supports(gesture, device: signal) else { return false }
         guard scope == nil || scope?.isEmpty == false else { return false }
         if [.hotkey,.spriteVoice,.voice].contains(action), key?.valid != true { return false }
         if action == .openApp, appPath.map({ $0.hasPrefix("/") && $0.hasSuffix(".app") }) != true { return false }

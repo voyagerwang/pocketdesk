@@ -2,6 +2,7 @@
 import Foundation
 
 struct HeadsetGesture {
+    static let doubleInterval = 0.38
     enum Event: Equatable { case click, doubleClick, holdBegin, holdEnd }
     private var downAt: Double?
     private var releasedAt: Double?
@@ -11,7 +12,7 @@ struct HeadsetGesture {
         var result = tick(now: now, doubleEnabled: doubleEnabled, holdEnabled: holdEnabled)
         if down {
             guard downAt == nil else { return result }
-            second = releasedAt.map { now - $0 <= 0.38 } ?? false
+            second = releasedAt.map { now - $0 <= Self.doubleInterval } ?? false
             if second { releasedAt = nil }
             downAt = now
         } else {
@@ -27,10 +28,35 @@ struct HeadsetGesture {
     }
     mutating func tick(now: Double, doubleEnabled: Bool, holdEnabled: Bool) -> [Event] {
         if let downAt, holdEnabled, !holding, now - downAt >= 0.7 { holding = true; releasedAt = nil; return [.holdBegin] }
-        if let releasedAt, downAt == nil, now - releasedAt > 0.38 { self.releasedAt = nil; return [.click] }
+        if let releasedAt, downAt == nil, now - releasedAt > Self.doubleInterval { self.releasedAt = nil; return [.click] }
         return []
     }
     mutating func cancel() { self = HeadsetGesture() }
+}
+
+/// Volume notifications have discrete steps but no release edge. Only pair two
+/// observed steps; never infer a held key from repeated volume changes.
+struct HeadsetTapGesture {
+    private var pendingAt: Double?
+    var hasPending: Bool { pendingAt != nil }
+    mutating func tap(now: Double, doubleEnabled: Bool) -> [HeadsetGesture.Event] {
+        guard now.isFinite else { return [] }
+        var result = tick(now: now)
+        if !doubleEnabled { result += finishPending(); result.append(.click); return result }
+        if let pendingAt, now >= pendingAt, now - pendingAt <= HeadsetGesture.doubleInterval {
+            self.pendingAt = nil; result.append(.doubleClick)
+        } else { pendingAt = now }
+        return result
+    }
+    mutating func tick(now: Double) -> [HeadsetGesture.Event] {
+        guard let pendingAt, now.isFinite, now - pendingAt > HeadsetGesture.doubleInterval else { return [] }
+        return finishPending()
+    }
+    mutating func finishPending() -> [HeadsetGesture.Event] {
+        guard pendingAt != nil else { return [] }
+        pendingAt = nil; return [.click]
+    }
+    mutating func cancel() { pendingAt = nil }
 }
 
 /// The known AB13X reports a held key as repeated down/up pulses. Collapse only
