@@ -1,0 +1,17 @@
+{
+  "date": "2026-10-09",
+  "gestureWindowMilliseconds": 380,
+  "singleDoubleMutuallyExclusive": true,
+  "syntheticRecognitionTests": "passed",
+  "productionRoutingWithInertCallbacks": "passed",
+  "nativePreviewTests": "passed",
+  "fullAppBuildAndSignature": "passed",
+  "localInstallation": "verified",
+  "installedBinarySha256": "cca0e6af461fa50cd1d1d8f03bf7cc8089f458600d0fd55048e4ba64df104575",
+  "taskSnapshotCount": 93,
+  "taskAndHeadsetConfigPreserved": true,
+  "realHeadsetButtonTest": false,
+  "realVoiceOrSubmitTest": false,
+  "physicalHIDChanges": false,
+  "installedWindowInspection": "computer-use service timed out; native isolated previews passed"
+}

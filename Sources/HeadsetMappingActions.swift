@@ -33,6 +33,7 @@ final class HeadsetMappingActions {
     var spriteBegin: ((HeadsetKey, Bool) -> Bool)?
     var spriteWake: (() -> Bool)?
     var spriteEnd: (() -> Void)?
+    var finishClickSprite: () -> Bool = { HeadsetClickControl.shared.finishSpriteRecordingIfOwned() }
     var spriteCancel: (() -> Void)?
     var spriteBusy: (() -> Bool)?
     var message: ((String) -> Void)?
@@ -57,7 +58,7 @@ final class HeadsetMappingActions {
         guard rule.valid, environmentAllows() else { message?("未执行：请检查权限或解锁电脑"); return }
         if rule.action == .spriteEnd {
             if active?.action == .spriteVoice { finish() }
-            else if active == nil { spriteEnd?() }
+            else if active == nil { if !finishClickSprite() { spriteEnd?() } }
             else { message?("当前为普通语音，请用对应操作结束"); return }
             message?("正在结束语音并等待转写"); return
         }

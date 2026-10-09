@@ -6,13 +6,14 @@ struct HeadsetSettingsDevice: Identifiable, Equatable {
     var name: String
     var kind: HeadsetSignal.Kind
     var connected: Bool
+    var displayName: String { name + (kind == .volume ? " · 音量信号" : " · 独立按键") + (connected ? "" : " · 未连接") }
 }
 struct HeadsetSettingsOperation: Identifiable, Equatable {
     let id: String
     let signal: HeadsetSignal
     let gesture: HeadsetRule.Gesture
     let rule: HeadsetRule?
-    var title: String { signal.kind == .volume ? signal.label : signal.label + " · " + gesture.label }
+    var title: String { signal.kind == .volume && gesture == .click ? signal.label : signal.label + " · " + gesture.label }
 }
 final class HeadsetSettingsModel: ObservableObject {
     @Published var devices: [HeadsetSettingsDevice] = []
@@ -47,19 +48,23 @@ final class HeadsetSettingsModel: ObservableObject {
         if autoSend != HeadsetController.shared.autoSend { autoSend = HeadsetController.shared.autoSend }
         if delay != Int(HeadsetController.shared.delay) { delay = Int(HeadsetController.shared.delay) }
         let rules = HeadsetRuleStore.shared.rules.filter { $0.signal.device == selectedUID }
+        let rows = Self.operationRows(rules: rules, device: selected, step: HeadsetMappingRuntime.shared.volumeStep(uid: selectedUID) ?? p?.step)
+        if rows != operations { operations = rows }
+    }
+    static func operationRows(rules: [HeadsetRule], device: HeadsetSettingsDevice?, step: Float?) -> [HeadsetSettingsOperation] {
         var rows: [HeadsetSettingsOperation] = []
-        if usesVolume, let step = HeadsetMappingRuntime.shared.volumeStep(uid: selectedUID) ?? p?.step, let device = selected {
+        if let device, device.kind == .volume, let step {
             for side in [1, -1] {
-                let signal = HeadsetSignal(kind: .volume, device: selectedUID, name: device.name, usage: side, step: step)
+                let signal = HeadsetSignal(kind: .volume, device: device.id, name: device.name, usage: side, step: step)
                 let rule = rules.first { $0.signal.identity == signal.identity && $0.scope == nil && $0.gesture == .click }
                 rows.append(.init(id: "default:\(side)", signal: signal, gesture: .click, rule: rule))
             }
         }
         for rule in rules where !rows.contains(where: { $0.rule?.id == rule.id }) {
-            if rule.signal.kind == .volume && rule.scope == nil && rows.contains(where: { $0.signal.identity == rule.signal.identity }) { continue }
+            if rule.signal.kind == .volume && rule.scope == nil && rows.contains(where: { $0.signal.identity == rule.signal.identity && $0.gesture == rule.gesture }) { continue }
             rows.append(.init(id: rule.id, signal: rule.signal, gesture: rule.gesture, rule: rule))
         }
-        if rows != operations { operations = rows }
+        return rows
     }
     func selectionChanged() { if pauseEditing { savePause() }; message = ""; error = false; reload() }
     func preference(uid: String? = nil, _ change: (inout HeadsetClickPreference) -> Void) {
@@ -96,7 +101,7 @@ final class HeadsetSettingsModel: ObservableObject {
     }
     func functionLabel(_ row: HeadsetSettingsOperation) -> String {
         if let rule = row.rule, rule.enabled { return rule.action.label + (rule.action == .hotkey ? " · " + (rule.key?.label ?? "") : "") }
-        if row.signal.kind == .volume && row.rule?.scope == nil && defaultEnabled { return row.signal.usage > 0 ? "默认：普通语音" : "默认：小精灵语音" }
+        if row.signal.kind == .volume && row.gesture == .click && row.rule?.scope == nil && defaultEnabled { return row.signal.usage > 0 ? "默认：普通语音" : "默认：小精灵语音" }
         return "保留原有功能"
     }
     func scopeLabel(_ row: HeadsetSettingsOperation) -> String {
@@ -124,7 +129,7 @@ struct HeadsetSettingsView: View {
                                 Text(model.selected?.name ?? "连接你的耳机").font(.system(size: 14, weight: .semibold))
                                 Text(model.selected?.connected == true ? (model.selectedUID == HeadsetAudio.current()?.uid ? "当前声音输出" : "已连接") : "未连接").font(.system(size: 12)).foregroundStyle(.secondary)
                             }; Spacer()
-                            HeadsetChoice(label: "耳机", selection: $model.selectedUID, options: model.devices.map { ($0.id, $0.name + ($0.connected ? "" : " · 未连接")) }).frame(maxWidth: 300)
+                            HeadsetChoice(label: "耳机", selection: $model.selectedUID, options: model.devices.map { ($0.id, $0.displayName) }).frame(maxWidth: 300)
                             Button { model.refresh() } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.plain).help("刷新设备")
                         }
                     }
@@ -198,7 +203,7 @@ final class HeadsetSettings: NSObject, NSWindowDelegate {
         let w = NSWindow(contentRect: .init(x: 0, y: 0, width: 730, height: 760), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window = w; w.title = "PocketDesk · 耳机设置"; w.minSize = .init(width: 660, height: 580); w.isReleasedWhenClosed = false; w.delegate = self
         w.contentView = NSHostingView(rootView: HeadsetSettingsView(model: model))
-        model.timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.model.reload() }; RunLoop.main.add(model.timer!, forMode: .common)
+        model.timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.model.refresh() }; RunLoop.main.add(model.timer!, forMode: .common)
         w.center(); w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     func windowWillClose(_ notification: Notification) { if model.pauseEditing { model.savePause() }; model.timer?.invalidate(); model.timer = nil; window = nil }

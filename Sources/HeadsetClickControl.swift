@@ -82,6 +82,7 @@ final class HeadsetClickControl: NSObject {
         cancelCurrent(); suppressUntil = ProcessInfo.processInfo.systemUptime + 0.8
     }
     @objc func cancelCurrent() {
+        HeadsetMappingRuntime.shared.cancelVolumeGestures()
         voiceGeneration += 1
         HeadsetController.shared.cancelClickVoice()
         _ = option(false)
@@ -94,6 +95,60 @@ final class HeadsetClickControl: NSObject {
         volumeObserver.stop()
         device = nil; gate = nil; calibration = nil; step = nil
     }
+    private func makeGate(volume: Float, step: Float, uid: String) -> HeadsetClickGate {
+        HeadsetClickGate(baseline: volume, step: step, minimumInterval: HeadsetMappingRuntime.shared.volumeDoubleClickEnabled(uid: uid) ? 0 : 0.6)
+    }
+    private func defaultVolumeClick(_ current: HeadsetAudioDevice, side: HeadsetClickGate.Side, preference: HeadsetClickPreference, detectedAt: Double) {
+        guard let output = HeadsetAudio.current(), output.uid == current.uid, output.id == current.id,
+              !LockScreenInput.locked, AXIsProcessTrusted() else { return }
+        if !preference.enabled {
+            // A double-click rule must preserve native volume for an unmatched single click.
+            guard let volume = output.volume, let step else { return }
+            let restored = min(1, max(0, volume + (side == .right ? step : -step)))
+            if HeadsetAudio.setVolume(restored, device: current.id) {
+                gate = makeGate(volume: restored, step: step, uid: current.uid)
+            } else { disconnect(); status("无法恢复原有音量操作，请重新连接耳机") }
+            return
+        }
+        if let mode {
+            if mode != side { cancelCurrent() }
+            else {
+                finishRecording()
+            }
+        } else {
+            guard CGEventSource.flagsState(.combinedSessionState).intersection([.maskAlternate, .maskCommand, .maskControl, .maskShift]).isEmpty else { return }
+            HeadsetController.shared.cancelSession("headset click")
+            if ownsSprite { onSpriteCancel?(); ownsSprite = false }
+            if side == .right {
+                targetPID = InputFocus.focusedApplicationPID()
+                mode = side; began = Date(); finishMode = preference.effectiveFinishMode; pauseHintShown = false
+                textPauseSeconds = preference.effectiveTextPauseSeconds; textPause = nil
+                voiceGeneration += 1
+                let generation = voiceGeneration
+                status("正在定位当前输入框…")
+                HeadsetController.shared.prepareClickVoice { [weak self] ready in
+                    guard let self, self.voiceGeneration == generation, self.mode == .right,
+                          self.device?.uid == current.uid else { return }
+                    guard ready else {
+                        let hint = HeadsetController.shared.statusText
+                        self.cancelCurrent(); self.status(hint); return
+                    }
+                    guard CGEventSource.flagsState(.combinedSessionState).intersection([.maskAlternate, .maskCommand, .maskControl, .maskShift]).isEmpty,
+                          self.option(true) else { self.cancelCurrent(); return }
+                    self.began = Date()
+                    HeadsetController.shared.clickVoiceOptionPosted(at: ProcessInfo.processInfo.systemUptime)
+                    self.textPause = HeadsetTextPause(original: HeadsetController.shared.clickVoiceText ?? "", delay: self.textPauseSeconds)
+                    HeadsetLog(String(format: "click startup: preparation %.0f ms; route=input; focus verified", (ProcessInfo.processInfo.systemUptime - detectedAt) * 1000))
+                }
+            } else {
+                guard onSpriteBegin?() == true else { return }; ownsSprite = true
+                mode = side; began = Date(); finishMode = preference.effectiveFinishMode; pauseHintShown = false
+                textPauseSeconds = preference.effectiveTextPauseSeconds
+                textPause = HeadsetTextPause(original: onSpriteText?() ?? "", delay: textPauseSeconds)
+                HeadsetLog(String(format: "click startup: preparation %.0f ms; route=sprite", (ProcessInfo.processInfo.systemUptime - detectedAt) * 1000))
+            }
+        }
+    }
     private func tick(notifiedAt: TimeInterval? = nil) {
         let tickStartedAt = ProcessInfo.processInfo.systemUptime
         guard !LockScreenInput.locked, AXIsProcessTrusted() else { disconnect(); status("等待解锁或辅助功能权限"); return }
@@ -105,16 +160,17 @@ final class HeadsetClickControl: NSObject {
             disconnect(); status("当前输出未启用单击控制"); return
         }
         guard installTap() else { disconnect(); status("无法监听取消操作，请检查辅助功能权限"); return }
-        if device?.uid != current.uid || device?.id != current.id || step != selectedStep {
+        let interval = HeadsetMappingRuntime.shared.volumeDoubleClickEnabled(uid: current.uid) ? 0.0 : 0.6
+        if device?.uid != current.uid || device?.id != current.id || step != selectedStep || gate != nil && gate?.minimumInterval != interval {
             disconnect(); device = current; step = selectedStep
-            if let step { gate = HeadsetClickGate(baseline: volume, step: step) }
+            if let step { gate = makeGate(volume: volume, step: step, uid: current.uid) }
             else { calibration = HeadsetClickCalibration(volume: volume) }
             HeadsetLog("click control connected: \(current.name); configured=\(step != nil)")
         }
         volumeObserver.start(device: current.id) { [weak self] receivedAt in self?.tick(notifiedAt: receivedAt) }
         let now = ProcessInfo.processInfo.systemUptime
         if now < suppressUntil {
-            if let step { gate = HeadsetClickGate(baseline: volume, step: step) }
+            if let step { gate = makeGate(volume: volume, step: step, uid: current.uid) }
             else { calibration = HeadsetClickCalibration(volume: volume) }
             return
         }
@@ -137,62 +193,30 @@ final class HeadsetClickControl: NSObject {
         guard let step else { return }
         if let gate, !gate.restoring, (gate.baseline < step - 0.008 || gate.baseline > 1 - step + 0.008) {
             // An output at its limit cannot emit a second step; don't begin a recording there.
-            self.gate = HeadsetClickGate(baseline: volume, step: step)
+            self.gate = makeGate(volume: volume, step: step, uid: current.uid)
             status("\(current.name)：请将音量调到 10%～90% 后使用"); return
         }
         let side = gate?.observe(volume, now: now)
         if gate?.failed == true {
-            cancelCurrent(); gate = HeadsetClickGate(baseline: volume, step: step)
+            cancelCurrent(); gate = makeGate(volume: volume, step: step, uid: current.uid)
             status("音量已重新同步，单击控制保持开启"); return
         }
         if let side {
             let detectedAt = ProcessInfo.processInfo.systemUptime
             HeadsetLog(String(format: "click detected: source=%@ queueWait=%.0f ms precheck=%.0f ms", notifiedAt == nil ? "poll" : "audio-notification", notifiedAt.map { max(0, tickStartedAt - $0) * 1000 } ?? 0, (detectedAt - tickStartedAt) * 1000))
             if !preference.enabled && !HeadsetMappingRuntime.shared.hasVolumeRule(current, side: side, step: step) {
-                gate = HeadsetClickGate(baseline: volume, step: step); return
+                gate = makeGate(volume: volume, step: step, uid: current.uid); return
             }
             guard let baseline = gate?.baseline, HeadsetAudio.setVolume(baseline, device: current.id) else {
                 cancelCurrent(); gate = nil; device = nil; status("无法恢复音量，本次语音已取消"); return
             }
-            if HeadsetMappingRuntime.shared.handleVolume(current, side: side, step: step) { return }
-            if let mode {
-                if mode != side { cancelCurrent() }
-                else {
-                    finishRecording()
-                }
-            } else {
-                guard CGEventSource.flagsState(.combinedSessionState).intersection([.maskAlternate, .maskCommand, .maskControl, .maskShift]).isEmpty else { return }
-                HeadsetController.shared.cancelSession("headset click")
-                if ownsSprite { onSpriteCancel?(); ownsSprite = false }
-                if side == .right {
-                    targetPID = InputFocus.focusedApplicationPID()
-                    mode = side; began = Date(); finishMode = preference.effectiveFinishMode; pauseHintShown = false
-                    textPauseSeconds = preference.effectiveTextPauseSeconds; textPause = nil
-                    voiceGeneration += 1
-                    let generation = voiceGeneration
-                    status("正在定位当前输入框…")
-                    HeadsetController.shared.prepareClickVoice { [weak self] ready in
-                        guard let self, self.voiceGeneration == generation, self.mode == .right,
-                              self.device?.uid == current.uid else { return }
-                        guard ready else {
-                            let hint = HeadsetController.shared.statusText
-                            self.cancelCurrent(); self.status(hint); return
-                        }
-                        guard CGEventSource.flagsState(.combinedSessionState).intersection([.maskAlternate, .maskCommand, .maskControl, .maskShift]).isEmpty,
-                              self.option(true) else { self.cancelCurrent(); return }
-                        self.began = Date()
-                        HeadsetController.shared.clickVoiceOptionPosted(at: ProcessInfo.processInfo.systemUptime)
-                        self.textPause = HeadsetTextPause(original: HeadsetController.shared.clickVoiceText ?? "", delay: self.textPauseSeconds)
-                        HeadsetLog(String(format: "click startup: preparation %.0f ms; route=input; focus verified", (ProcessInfo.processInfo.systemUptime - detectedAt) * 1000))
-                    }
-                } else {
-                    guard onSpriteBegin?() == true else { return }; ownsSprite = true
-                    mode = side; began = Date(); finishMode = preference.effectiveFinishMode; pauseHintShown = false
-                    textPauseSeconds = preference.effectiveTextPauseSeconds
-                    textPause = HeadsetTextPause(original: onSpriteText?() ?? "", delay: textPauseSeconds)
-                    HeadsetLog(String(format: "click startup: preparation %.0f ms; route=sprite", (ProcessInfo.processInfo.systemUptime - detectedAt) * 1000))
-                }
-            }
+            let fallbackGeneration = voiceGeneration
+            let fallbackMode = mode
+            if HeadsetMappingRuntime.shared.handleVolume(current, side: side, step: step, fallback: { [weak self] in
+                guard let self, self.voiceGeneration == fallbackGeneration, self.mode == fallbackMode else { return }
+                self.defaultVolumeClick(current, side: side, preference: preference, detectedAt: detectedAt)
+            }) { return }
+            defaultVolumeClick(current, side: side, preference: preference, detectedAt: detectedAt)
         }
         // Handle a deliberate second click before the inactivity timer, so a click
         // at the deadline cannot accidentally begin another recording.
@@ -220,12 +244,17 @@ final class HeadsetClickControl: NSObject {
     }
     private func finishRecording() {
         guard let mode else { return }
+        voiceGeneration += 1
         if mode == .right {
             guard optionDown else { cancelCurrent(); return }
             option(false)
             HeadsetController.shared.endClickVoice()
         } else { onSpriteEnd?() }
         self.mode = nil; began = nil; targetPID = nil; textPause = nil; pauseHintShown = false
+    }
+    @discardableResult func finishSpriteRecordingIfOwned() -> Bool {
+        guard mode == .left, ownsSprite else { return false }
+        finishRecording(); return true
     }
     @discardableResult private func option(_ down: Bool) -> Bool {
         guard down != optionDown else { return true }

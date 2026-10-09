@@ -5,11 +5,14 @@ struct HeadsetClickGate {
     enum Side { case left, right }
     let baseline: Float
     let step: Float
+    let minimumInterval: Double
     private(set) var restoring = false
     private var restoreDeadline = 0.0
     private var eligibleAt = 0.0
     private(set) var failed = false
-    init(baseline: Float, step: Float) { self.baseline = baseline; self.step = step }
+    init(baseline: Float, step: Float, minimumInterval: Double = 0.6) {
+        self.baseline = baseline; self.step = step; self.minimumInterval = minimumInterval
+    }
     mutating func observe(_ volume: Float, now: Double) -> Side? {
         guard !failed, volume.isFinite else { return nil }
         if restoring {
@@ -22,7 +25,7 @@ struct HeadsetClickGate {
         guard abs(delta) >= 0.004 else { return nil }
         // Arbitrary slider jumps are not interpreted as clicks.
         guard abs(abs(delta) - step) < 0.008 else { failed = true; return nil }
-        restoring = true; restoreDeadline = now + 1.5; eligibleAt = now + 0.6
+        restoring = true; restoreDeadline = now + 1.5; eligibleAt = now + minimumInterval
         return delta > 0 ? .right : .left
     }
 }

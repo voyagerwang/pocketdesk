@@ -5,7 +5,7 @@ import Foundation
 struct HeadsetLearnedOperation: Equatable {
     let signal: HeadsetSignal
     let gesture: HeadsetRule.Gesture
-    var title: String { signal.kind == .volume ? signal.label : signal.label + " · " + gesture.label }
+    var title: String { signal.label + " · " + gesture.label }
 }
 
 struct HeadsetOperationLearning {
@@ -17,12 +17,13 @@ struct HeadsetOperationLearning {
     }
     let expected: HeadsetRule.Gesture?
     private var machines: [String: HeadsetGesture] = [:]
+    private var tapMachines: [String: HeadsetTapGesture] = [:]
     private var signals: [String: HeadsetSignal] = [:]
     private var holds: Set<String> = []
     init(expected: HeadsetRule.Gesture? = nil) { self.expected = expected }
     static func supports(_ gesture: HeadsetRule.Gesture, device: HeadsetSignal) -> Bool {
-        if device.kind == .volume { return gesture == .click }
-        return gesture != .doubleClick || device.vendor != 31 || device.product != 2849
+        if device.kind == .volume { return gesture != .hold }
+        return gesture != .doubleClick || !device.usesPulsedHold
     }
     mutating func edge(_ signal: HeadsetSignal, down: Bool, now: Double) -> [Update] {
         guard signal.valid, signal.kind == .hid else { return [] }
@@ -41,11 +42,24 @@ struct HeadsetOperationLearning {
             let events = machine.tick(now: now, doubleEnabled: Self.supports(.doubleClick, device: signal), holdEnabled: true)
             machines[id] = machine; updates += translate(events, signal: signal)
         }
+        for id in tapMachines.keys.sorted() {
+            guard let signal = signals[id], var machine = tapMachines[id] else { continue }
+            let events = machine.tick(now: now)
+            tapMachines[id] = machine; updates += translate(events, signal: signal)
+        }
         return updates
     }
-    func volume(_ signal: HeadsetSignal) -> Update? {
-        guard signal.valid, signal.kind == .volume else { return nil }
-        return result(signal, gesture: .click)
+    mutating func volume(_ signal: HeadsetSignal, now: Double) -> [Update] {
+        guard signal.valid, signal.kind == .volume else { return [] }
+        var machine = tapMachines[signal.identity] ?? HeadsetTapGesture()
+        var updates: [Update] = []
+        if let previous = signals[signal.identity], abs((previous.step ?? 0) - (signal.step ?? 0)) >= 0.008 {
+            updates += translate(machine.finishPending(), signal: previous)
+        }
+        signals[signal.identity] = signal
+        updates += translate(machine.tap(now: now, doubleEnabled: true), signal: signal)
+        tapMachines[signal.identity] = machine
+        return updates
     }
     private func result(_ signal: HeadsetSignal, gesture: HeadsetRule.Gesture) -> Update {
         if let expected, expected != gesture { return .mismatch(gesture) }
