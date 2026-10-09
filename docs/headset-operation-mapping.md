@@ -57,3 +57,14 @@
 
 
 修正版已安装到 `~/Applications/PocketDesk.app`，签名校验、签名后暂存/安装二进制哈希一致、HTTP状态接口200、93条任务及耳机配置逐字保留均通过，见[修正验证](evidence/headset-double-click-20261009/verification.json)。回滚包在工作树 `build/headset-double-click-20261009/rollback/PocketDesk.app`。Computer Use服务在安装后读取窗口时超时，因此安装窗口未完成实点；实体耳机与输入法验证仍未完成。
+
+
+## 键盘音量误触修正（2026-10-09）
+
+用户反馈键盘音量减也唤起小精灵。现有代码将CoreAudio音量变化当作耳机输入，而媒体键排除异步进入主队列，存在先唤起再取消的时序漏洞；音量操作录制也缺少同一层来源过滤。原日志中的audio-notification/poll仅表示观测通道，不能证明按键来自耳机。
+
+修正后，原始HID回调先按键盘Application Collection分类（内置键盘和MX Keys Mini均包含键盘与Consumer集合），在VID/PID过滤前记录来源排除。systemDefined媒体音量键也同步记录排除，自有合成marker、非音量媒体事件、已配对耳机不套用键盘分类。分类能力依据[Apple IOHID设备接口](https://developer.apple.com/documentation/iokit/1588665-iohiddeviceconformsto)。
+
+音量候选在80ms确认窗口后才恢复音量或执行动作，排除前保留键盘的原有音量变化；来源明确为键盘/系统媒体键/鼠标操作时，旧候选与待定单击失效，音量基线同步到实际值。执行与学习共用来源guard；录制时显示忽略来源的提示，不将键盘变化保存为耳机操作。快速第二步可在首步确认期间排队，确认回声不新增一步；待确认的第二击不会让定时器提前派发首击。候选用音频通知的原始单调时间配对，主线程晚处理不缩短380ms双击窗口。
+
+默认回归入口新增headset-volume-source.test.swift，检查键盘先到/音量先到、排除续窗与恢复、旧候选失效、双击保留、仅清音量pending而保留HID、通知与处理时间不同、无效时间和事件分类。生产路由注入惰性回调检查确认期不提前触发单击。全部检查、完整应用构建、helper自检与签名校验通过；修正版已安装，93条任务及现有耳机配置逐字保留，见[来源修正验证](evidence/headset-keyboard-volume-20261009/verification.json)。回滚包在工作树build/headset-keyboard-volume-20261009/rollback/PocketDesk.app。未发送合成系统音量键、未实际录音或派单，真实键盘按键与耳机效果等待用户操作确认。其他程序直接调音量仍不能完全归因，本轮不声称判定所有音量改变来源。

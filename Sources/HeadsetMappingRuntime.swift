@@ -26,6 +26,7 @@ final class HeadsetMappingRuntime: NSObject {
     private var volumeBaseline: Float?
     private var volumeUID: String?
     private let learningVolumeObserver = HeadsetVolumeObserver()
+    private var learningVolumeCandidates: [(signal: HeadsetSignal, ticket: HeadsetVolumeSourceGate.Ticket)] = []
     private var volumeMachines: [String: HeadsetTapGesture] = [:]
     private var volumeSignals: [String: HeadsetSignal] = [:]
     private struct VolumeContext {
@@ -38,6 +39,7 @@ final class HeadsetMappingRuntime: NSObject {
     private let performVolumeRule: (HeadsetRule) -> Void
     var volumeOutput: () -> HeadsetAudioDevice? = { HeadsetAudio.current() }
     var volumeFocus: () -> pid_t? = { InputFocus.focusedApplicationPID() }
+    var volumeSourcePending: () -> Bool = { HeadsetClickControl.shared.hasPendingVolumeSource }
     var volumeEnvironmentAllows: () -> Bool = {
         !LockScreenInput.locked && AXIsProcessTrusted() && !HeadsetPairing.shared.isActive && !HeadsetTouchDiagnostic.shared.isActive
     }
@@ -76,6 +78,12 @@ final class HeadsetMappingRuntime: NSObject {
             let element = IOHIDValueGetElement(value)
             guard IOHIDElementGetUsagePage(element) == 12 else { return }
             let d = IOHIDElementGetDevice(element)
+            let vendor = (IOHIDDeviceGetProperty(d, kIOHIDVendorIDKey as CFString) as? NSNumber)?.intValue ?? 0
+            let product = (IOHIDDeviceGetProperty(d, kIOHIDProductIDKey as CFString) as? NSNumber)?.intValue ?? 0
+            if HeadsetVolumeSourceEvent.isKeyboardVolume(page: Int(IOHIDElementGetUsagePage(element)), usage: Int(IOHIDElementGetUsage(element)), keyboardCollection: IOHIDDeviceConformsTo(d, 1, 6), pairedHeadset: HeadsetProfiles.shared.profile(vendor: vendor, product: product) != nil) {
+                HeadsetVolumeSourceGuard.shared.exclude()
+                HeadsetClickControl.shared.manualVolumeChange(source: "keyboard-HID")
+            }
             guard var signal = owner.describe(d) else { return }
             signal.usage = Int(IOHIDElementGetUsage(element))
             owner.receive(signal, down: IOHIDValueGetIntegerValue(value) != 0)
@@ -115,15 +123,16 @@ final class HeadsetMappingRuntime: NSObject {
         volumeBaseline = HeadsetAudio.current()?.volume; volumeUID = HeadsetAudio.current()?.uid
         learningUntil = Date().addingTimeInterval(30)
         if device.kind == .volume, let audio = HeadsetAudio.current(), audio.uid == device.device {
-            learningVolumeObserver.start(device: audio.id) { [weak self] _ in self?.observeLearningVolume() }
+            learningVolumeObserver.start(device: audio.id) { [weak self] receivedAt in self?.observeLearningVolume(notifiedAt: receivedAt) }
         }
         feedback?(gesture.map { "请操作一次\($0.label)，等待识别结果。" } ?? "请操作耳机，系统会识别收到的信号。", nil)
     }
     func stopLearning() {
         learningVolumeObserver.stop()
+        learningVolumeCandidates = []
         learningUntil = nil; downTimes = [:]; selected = nil; lastTap = nil; pulses = [:]; pulseSignals = [:]; learner = HeadsetOperationLearning()
     }
-    private func observeLearningVolume() {
+    private func observeLearningVolume(notifiedAt: Double? = nil) {
         guard learning, selected?.kind == .volume, let audio = HeadsetAudio.current(), let volume = audio.volume else { return }
         guard audio.uid == selected?.device, audio.uid == volumeUID else { stopLearning(); feedback?("声音输出已改变，请重新检测。", nil); return }
         let old = volumeBaseline
@@ -131,10 +140,31 @@ final class HeadsetMappingRuntime: NSObject {
         guard let old else { return }
         let delta = volume - old
         guard abs(delta) >= 0.015 && abs(delta) <= 0.2 else { return }
+        let observedAt = HeadsetVolumeSourceEvent.observationTime(notifiedAt: notifiedAt, now: ProcessInfo.processInfo.systemUptime)
+        guard let ticket = HeadsetVolumeSourceGuard.shared.ticket(now: observedAt) else { discardLearningVolume(); return }
         let signal = HeadsetSignal(kind: .volume, device: audio.uid, name: audio.name, usage: delta > 0 ? 1 : -1, step: abs(delta))
-        let updates = learner.volume(signal, now: ProcessInfo.processInfo.systemUptime)
-        if updates.isEmpty { feedback?("收到一次\(signal.label)，等待确认单击或双击…", nil) }
-        for update in updates { guard learning else { break }; learningFeedback(update) }
+        learningVolumeCandidates.append((signal, ticket))
+        DispatchQueue.main.asyncAfter(deadline: .now() + HeadsetVolumeSourceGuard.confirmationDelay) { [weak self] in self?.confirmLearningVolume() }
+    }
+    func discardLearningVolume() {
+        learner.cancelVolume(); learningVolumeCandidates = []
+        if learning, selected?.kind == .volume {
+            volumeBaseline = HeadsetAudio.current()?.volume
+            feedback?("已忽略键盘或系统调音量，请操作耳机继续录制。", nil)
+        }
+    }
+    private func confirmLearningVolume() {
+        guard learning, selected?.kind == .volume else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let due = learningVolumeCandidates.filter { now - $0.ticket.observedAt >= HeadsetVolumeSourceGuard.confirmationDelay }
+        learningVolumeCandidates.removeAll { now - $0.ticket.observedAt >= HeadsetVolumeSourceGuard.confirmationDelay }
+        for candidate in due {
+            guard learning, candidate.signal.device == selected?.device, HeadsetAudio.current()?.uid == selected?.device else { break }
+            guard HeadsetVolumeSourceGuard.shared.allows(candidate.ticket, now: now) else { discardLearningVolume(); break }
+            let updates = learner.volume(candidate.signal, now: candidate.ticket.observedAt)
+            if updates.isEmpty { feedback?("收到一次\(candidate.signal.label)，等待确认单击或双击…", nil) }
+            for update in updates { guard learning else { break }; learningFeedback(update) }
+        }
     }
     private func learningFeedback(_ update: HeadsetOperationLearning.Update) {
         switch update {
@@ -253,6 +283,8 @@ final class HeadsetMappingRuntime: NSObject {
     }
     func tickVolume(now: Double) {
         guard !volumeMachines.isEmpty else { return }
+        guard HeadsetVolumeSourceGuard.shared.ticket(now: now) != nil else { cancelVolumeGestures(); return }
+        guard !volumeSourcePending() else { return }
         guard !learning, volumeEnvironmentAllows(), let output = volumeOutput(), output.volume != nil else { cancelVolumeGestures(); return }
         for id in Array(volumeMachines.keys) {
             guard let context = volumeContexts[id], let signal = volumeSignals[id], var machine = volumeMachines[id] else { continue }
@@ -298,7 +330,8 @@ final class HeadsetMappingRuntime: NSObject {
         if let until = learningUntil {
             if Date() > until { stopLearning(); feedback?("检测超时，未保存。请检查设备与输入监控权限。", nil) }
             else { observeLearningVolume() }
-            if learning { for update in learner.tick(now: ProcessInfo.processInfo.systemUptime) { guard learning else { break }; learningFeedback(update) } }
+            confirmLearningVolume()
+            if learning && learningVolumeCandidates.isEmpty { for update in learner.tick(now: ProcessInfo.processInfo.systemUptime) { guard learning else { break }; learningFeedback(update) } }
             return
         }
         tickVolume(now: ProcessInfo.processInfo.systemUptime)
@@ -313,10 +346,15 @@ final class HeadsetMappingRuntime: NSObject {
     private func installCancellation() {
         guard tap == nil, Date() >= retryTapAt, AXIsProcessTrusted() else { return }
         retryTapAt = Date().addingTimeInterval(3)
-        let types: [CGEventType] = [.keyDown,.flagsChanged,.leftMouseDown,.rightMouseDown]
+        let types: [CGEventType] = [.keyDown,.flagsChanged,.leftMouseDown,.rightMouseDown,CGEventType(rawValue: 14)!]
         tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: types.reduce(0) { $0 | (1 << $1.rawValue) }, callback: { _, type, event, ref in
             guard let ref, event.getIntegerValueField(.eventSourceUserData) != HeadsetMarker else { return Unmanaged.passUnretained(event) }
             let owner = Unmanaged<HeadsetMappingRuntime>.fromOpaque(ref).takeUnretainedValue()
+            if type.rawValue == 14, let native = NSEvent(cgEvent: event), HeadsetVolumeSourceEvent.isSystemVolume(type: type.rawValue, subtype: native.subtype.rawValue, data1: native.data1, marker: event.getIntegerValueField(.eventSourceUserData)) {
+                HeadsetVolumeSourceGuard.shared.exclude()
+                HeadsetClickControl.shared.manualVolumeChange(source: "system-media")
+                return Unmanaged.passUnretained(event)
+            }
             if type == .keyDown && event.getIntegerValueField(.keyboardEventKeycode) == 53 { HeadsetMappingWindow.shared.cancelFromEscape() }
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                 owner.interrupted(); if let tap = owner.tap { CGEvent.tapEnable(tap: tap, enable: true) }

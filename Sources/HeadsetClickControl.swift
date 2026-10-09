@@ -31,6 +31,9 @@ final class HeadsetClickControl: NSObject {
     private var eventSource: CFRunLoopSource?
     private var suppressUntil = 0.0
     private var retryTapAt = Date.distantPast
+    private var pendingVolumeTokens: Set<UUID> = []
+    private var pendingVolumeLevel: Float?
+    var hasPendingVolumeSource: Bool { !pendingVolumeTokens.isEmpty }
     private(set) var statusText = "未启用单击控制"
     var recording: Bool { mode != nil }
     var spriteListeningStatus: String? {
@@ -63,13 +66,13 @@ final class HeadsetClickControl: NSObject {
                 DispatchQueue.main.async { owner.disconnect(); owner.removeTap() }
             } else if type == .keyDown && event.getIntegerValueField(.keyboardEventKeycode) == 53 {
                 DispatchQueue.main.async { owner.cancelCurrent() }
-            } else if type.rawValue == 14, let e = NSEvent(cgEvent: event), e.subtype.rawValue == 8,
-                      [0, 1].contains((e.data1 >> 16) & 0xffff) {
-                // Keyboard volume keys are distinguishable from the volume-only headset path.
-                DispatchQueue.main.async { owner.manualVolumeChange() }
+            } else if type.rawValue == 14, let e = NSEvent(cgEvent: event), HeadsetVolumeSourceEvent.isSystemVolume(type: type.rawValue, subtype: e.subtype.rawValue, data1: e.data1, marker: event.getIntegerValueField(.eventSourceUserData)) {
+                HeadsetVolumeSourceGuard.shared.exclude()
+                DispatchQueue.main.async { owner.manualVolumeChange(source: "system-media") }
             } else if type == .leftMouseDown {
                 // A slider interaction must not submit a voice task.
-                DispatchQueue.main.async { owner.manualVolumeChange() }
+                HeadsetVolumeSourceGuard.shared.exclude()
+                DispatchQueue.main.async { owner.manualVolumeChange(source: "mouse") }
             }
             return Unmanaged.passUnretained(event)
         }, userInfo: Unmanaged.passUnretained(self).toOpaque())
@@ -78,10 +81,14 @@ final class HeadsetClickControl: NSObject {
         CFRunLoopAddSource(CFRunLoopGetMain(), eventSource, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true); return true
     }
-    private func manualVolumeChange() {
+    func manualVolumeChange(source: String) {
+        HeadsetVolumeSourceGuard.shared.exclude()
+        HeadsetMappingRuntime.shared.discardLearningVolume()
+        HeadsetLog("volume source excluded: \(source)")
         cancelCurrent(); suppressUntil = ProcessInfo.processInfo.systemUptime + 0.8
     }
     @objc func cancelCurrent() {
+        pendingVolumeTokens = []; pendingVolumeLevel = nil
         HeadsetMappingRuntime.shared.cancelVolumeGestures()
         voiceGeneration += 1
         HeadsetController.shared.cancelClickVoice()
@@ -149,6 +156,36 @@ final class HeadsetClickControl: NSObject {
             }
         }
     }
+    private func queueVolumeClick(_ current: HeadsetAudioDevice, side: HeadsetClickGate.Side, step: Float, baseline: Float, preference: HeadsetClickPreference, detectedAt: Double) {
+        guard let ticket = HeadsetVolumeSourceGuard.shared.ticket(now: detectedAt) else { return }
+        let token = UUID(); pendingVolumeTokens.insert(token)
+        let generation = voiceGeneration, recordedMode = mode
+        let pid = InputFocus.focusedApplicationPID()
+        DispatchQueue.main.asyncAfter(deadline: .now() + HeadsetVolumeSourceGuard.confirmationDelay) { [weak self] in
+            guard let self, self.pendingVolumeTokens.remove(token) != nil else { return }
+            if self.pendingVolumeTokens.isEmpty { self.pendingVolumeLevel = nil }
+            guard let output = HeadsetAudio.current(), output.uid == current.uid, output.id == current.id,
+                  self.voiceGeneration == generation, self.mode == recordedMode,
+                  InputFocus.focusedApplicationPID() == pid, !LockScreenInput.locked, AXIsProcessTrusted(),
+                  !HeadsetMappingRuntime.shared.learning else { return }
+            guard HeadsetVolumeSourceGuard.shared.allows(ticket) else {
+                self.pendingVolumeTokens = []; self.pendingVolumeLevel = nil
+                HeadsetMappingRuntime.shared.cancelVolumeGestures()
+                if let volume = output.volume { self.gate = self.makeGate(volume: volume, step: step, uid: output.uid) }
+                return
+            }
+            guard HeadsetAudio.setVolume(baseline, device: current.id) else {
+                self.cancelCurrent(); self.gate = nil; self.device = nil; self.status("无法恢复音量，本次语音已取消"); return
+            }
+            // Queued steps are already captured; the restoration echo is not another tap.
+            if !self.pendingVolumeTokens.isEmpty { self.pendingVolumeLevel = baseline }
+            if HeadsetMappingRuntime.shared.handleVolume(current, side: side, step: step, now: ticket.observedAt, fallback: { [weak self] in
+                guard let self, self.voiceGeneration == generation, self.mode == recordedMode else { return }
+                self.defaultVolumeClick(current, side: side, preference: preference, detectedAt: detectedAt)
+            }) { return }
+            self.defaultVolumeClick(current, side: side, preference: preference, detectedAt: detectedAt)
+        }
+    }
     private func tick(notifiedAt: TimeInterval? = nil) {
         let tickStartedAt = ProcessInfo.processInfo.systemUptime
         guard !LockScreenInput.locked, AXIsProcessTrusted() else { disconnect(); status("等待解锁或辅助功能权限"); return }
@@ -169,7 +206,8 @@ final class HeadsetClickControl: NSObject {
         }
         volumeObserver.start(device: current.id) { [weak self] receivedAt in self?.tick(notifiedAt: receivedAt) }
         let now = ProcessInfo.processInfo.systemUptime
-        if now < suppressUntil {
+        let observedAt = HeadsetVolumeSourceEvent.observationTime(notifiedAt: notifiedAt, now: now)
+        if now < suppressUntil || HeadsetVolumeSourceGuard.shared.ticket(now: now) == nil {
             if let step { gate = makeGate(volume: volume, step: step, uid: current.uid) }
             else { calibration = HeadsetClickCalibration(volume: volume) }
             return
@@ -196,7 +234,25 @@ final class HeadsetClickControl: NSObject {
             self.gate = makeGate(volume: volume, step: step, uid: current.uid)
             status("\(current.name)：请将音量调到 10%～90% 后使用"); return
         }
-        let side = gate?.observe(volume, now: now)
+        if hasPendingVolumeSource {
+            // Capture a rapid second step before the first step's source check completes.
+            if gate?.minimumInterval == 0, let previous = pendingVolumeLevel, let baseline = gate?.baseline {
+                let delta = volume - previous
+                if abs(delta) >= 0.004 {
+                    guard abs(abs(delta) - step) < 0.008 else {
+                        cancelCurrent(); gate = makeGate(volume: volume, step: step, uid: current.uid); return
+                    }
+                    let side: HeadsetClickGate.Side = delta > 0 ? .right : .left
+                    guard preference.enabled || HeadsetMappingRuntime.shared.hasVolumeRule(current, side: side, step: step) else {
+                        cancelCurrent(); gate = makeGate(volume: volume, step: step, uid: current.uid); return
+                    }
+                    pendingVolumeLevel = volume
+                    queueVolumeClick(current, side: side, step: step, baseline: baseline, preference: preference, detectedAt: observedAt)
+                }
+            }
+            return
+        }
+        let side = gate?.observe(volume, now: observedAt)
         if gate?.failed == true {
             cancelCurrent(); gate = makeGate(volume: volume, step: step, uid: current.uid)
             status("音量已重新同步，单击控制保持开启"); return
@@ -207,16 +263,10 @@ final class HeadsetClickControl: NSObject {
             if !preference.enabled && !HeadsetMappingRuntime.shared.hasVolumeRule(current, side: side, step: step) {
                 gate = makeGate(volume: volume, step: step, uid: current.uid); return
             }
-            guard let baseline = gate?.baseline, HeadsetAudio.setVolume(baseline, device: current.id) else {
-                cancelCurrent(); gate = nil; device = nil; status("无法恢复音量，本次语音已取消"); return
-            }
-            let fallbackGeneration = voiceGeneration
-            let fallbackMode = mode
-            if HeadsetMappingRuntime.shared.handleVolume(current, side: side, step: step, fallback: { [weak self] in
-                guard let self, self.voiceGeneration == fallbackGeneration, self.mode == fallbackMode else { return }
-                self.defaultVolumeClick(current, side: side, preference: preference, detectedAt: detectedAt)
-            }) { return }
-            defaultVolumeClick(current, side: side, preference: preference, detectedAt: detectedAt)
+            guard let baseline = gate?.baseline else { return }
+            pendingVolumeLevel = volume
+            queueVolumeClick(current, side: side, step: step, baseline: baseline, preference: preference, detectedAt: observedAt)
+            return
         }
         // Handle a deliberate second click before the inactivity timer, so a click
         // at the deadline cannot accidentally begin another recording.

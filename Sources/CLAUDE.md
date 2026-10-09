@@ -188,3 +188,6 @@ WorkbenchLookup.swift: 六个只读工具查询个人工作台的日程、随手
 
 
 耳机双击回归（2026-10-09）：HeadsetTapGesture 共用于音量学习与实际路由；有双击规则时延迟单击，单击回退保留原生音量/默认语音，恢复回声不算点击。待识别事件绑定输出设备及前台PID，取消/权限/焦点/输出变化清理；默认语音回调带代际与mode保护，spriteEnd优先由默认录音拥有者结束。AB13X双击限制只针对EA减键，不再影响CD/E9；新录制只在唯一精确同名来源间优先HID，已有规则不换来源。设置页不吞volume double规则并自动刷新连接状态。tests/run-headset-ui-tests.sh 使用源码快照并覆盖纯识别、临时规则文件、惰性执行路由与可选原生预览，不执行真实耳机/快捷键/录音。
+
+
+键盘音量来源修正（2026-10-09）：HeadsetVolumeSourceGuard以线程安全的版本票据排除明确手动来源，确认窗口80ms、排除窗800ms。Runtime原始HID回调在describe的VID/PID过滤前识别键盘Collection；CG媒体键同步记录排除，自有marker/非音量事件不误伤。ClickControl执行和Runtime音量学习均先确认来源，确认前不恢复音量，键盘仅改系统音量；排除清候选/volume pending并同步基线。确认期间可排队rapid secondstep，sourcePending阻止提前首击；原始notification时间用于380ms配对，不用延迟后的main处理时间。headset-volume-source.test.swift覆盖两种通知顺序与来源分类，volume-runtime回归覆盖确认等待期及迟到通知，无真实输入副作用。
