@@ -21,7 +21,7 @@ image-paste-policy.test.swift: 隔离验证 UU 文字把 1.2s 远端同步等待
 
 multi_image_browser.py: 覆盖 Canvas 不可用时长图 JPEG 预览/上传原字节保留和透明 PNG 转 JPEG 白底；Playwright 模拟接口验证多选删除保序、上传失败保留重试、正文/纯图等待压缩、损坏图片不吞旧选择、满额删除追加及横向布局；覆盖健康状态重复点击当前目标不换草稿，失败后重选当前目标或切换目标才更换草稿/队列，同时保留正文、附件批次并隔离旧目标；截图写入 /tmp，不连接真实桌面服务。
 
-model-config.test.swift: 隔离验证 `ModelConfigStore` 的纯函数——端点归一化（补尾缀、不重复拼接）与协议白名单（file/ftp/无 scheme 必须拒绝），以及脱敏视图：keyHint 只给首尾、`hasKey` 为真时视图里任何字段都不得出现 Key 主体、短 Key 只回「已保存」；另锁 `isConfigured` 要求三项齐全。不联网、不读写真实配置。
+model-config.test.swift: 隔离验证端点/协议/凭证同源、多服务商递归脱敏、旧单条稳定 legacy-api 迁移与精确品牌命名、新格式无重复凭证往返、当前 API 兼容字段投影和显式选择；删除/失效/空活动 ID 不选列表首项，Codex 与 API 列表独立，不联网或读写生产配置。
 
 m0-model-probe.cjs: M0 运行时验证探针（方案 §12 M0-A）。
 task-store.test.swift: 任务存储的幂等与冲突（同 requestId 同内容回到同一任务、不同内容报 conflict）、事件 seq 单调与 after 增量补取、清理不删活动任务，以及接收者顺序的迁移语义（小精灵只插一次、不被重新置顶、未知引用清理）。经 `TaskStore.resetCache(directory:)` 指向临时目录，不碰用户真实数据。
@@ -162,3 +162,7 @@ Chrome 去重延迟回归：模拟 pending → pending → closed，核验多次
 workbench-content.test.swift: 临时 TaskStore 与 HTTP 替身验证四类创建、正文/日期映射、按 ID 核验、失去控制权/服务离线无写入、超时/错正文不重放、旧快照/进程重载去重、并发原子占用及 AgentRunner 工具路由。
 
 workbench-lookup.test.swift: GET 替身验证六工具路由、关键词编码、日期/分页/ID/凭证校验、租约/离线/错误回执、查询零创建及 AgentRunner 结果回灌。
+console-agent-model.test.cjs: Node VM 与动态 DOM/多记录 HTTP 替身验证服务商列表和脱敏 Key、A→B→A 按 ID 切换、添加仅保存及编辑非活动记录不切换、界面重读保留记录与来源；每条 Key 独立，同记录同源才能空 Key 沿用，新增/跨源空 Key 测试与两种保存零请求，摘要测试不混用草稿；编辑冻结、重复打开保护、纯文本名称、取消清草稿回焦点、旧结果撤下、移除两次确认及失败不变更列表/来源。28 项隔离回归，不联网或读生产配置；持久化磁盘往返由 Swift 存储测试验证。
+console-model-browser.py: 完整控制台与两家独立服务商的隔离 Playwright 回归；验证 A→B→A 不串字段、列表刷新持久、新增/非活动编辑仅保存不切与保存启用、摘要测试按服务身份、同源新增和跨源编辑空 Key 零请求、取消/重复打开/二次移除保护、Codex 独立切换及经典蓝/米白模型区窄屏无溢出；全部请求截留，截图写入 /tmp/pocketdesk-provider-switch，不调用真实模型或改动设备配置。
+codex-model.test.swift: 假 CLI 进程与纯协议验证 ChatGPT 登录前置、结构化规划/原参数校验、协议完成与退出码一致、原生工具拒绝、超时终止和来源计量；真实模型探针仅在显式 --live 下运行且不执行桌面操作。
+model-routing.test.swift: 临时配置与模型探针替身验证旧单条只读迁移、服务商保存/显式启用/移除、同ID同源密钥隔离、首次/非活动仅保存、全列表脱敏、严格启用布尔与旧清空兼容；同时覆盖独立Codex来源、回环边界、文本与模拟工具闭环，不读生产配置或请求真实模型。
