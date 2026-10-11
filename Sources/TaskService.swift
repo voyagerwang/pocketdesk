@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation，消费 TaskStore、AgentRunner、ModelConfigStore、PageReader。
- * [OUTPUT]: 失败输入按语义同任务/新任务/澄清接续并保留历史；支持独立任务并发，逐任务防重入；保存结构化派单回执，未核实提交以 submitted 结束而非要求补充；提交幂等查账并保存执行控制会话；对外提供任务生命周期：submit/supplement/abandon/snapshot、当前网页绑定查询、执行器能力报告。
+ * [OUTPUT]: 失败输入按语义同任务/新任务/澄清接续并保留历史；支持独立任务并发，逐任务防重入；保存结构化派单回执，未核实提交以 submitted 结束而非要求补充；提交幂等查账并保存执行控制会话；对外提供任务生命周期：submit/supplement/abandon/snapshot、当前网页绑定查询、执行器能力报告（模型来源按已保存的活动后端与服务商投影）。
  * [POS]: Sources 的 Agent 服务层：唯一决定任务状态如何流转的地方，HTTP 层不做状态判断。
  *        独立任务不互相阻塞；飞书候选选择通过 needsInput 续接，状态里没有「已停止」这种会骗人的说法。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -223,8 +223,9 @@ enum TaskService {
                         "capabilities": ["read_page", "open_page", "open_app", "dispatch_to_app", "feishu_message", "feishu_help", "feishu_execute"],
                         "writes": true],
             "model": ["configured": modelConfigured,
-                      "model": config.model,
-                      "host": ModelConfigStore.endpoint(for: config.baseURL)?.host ?? ""],
+                      "backend": config.backend.rawValue,
+                      "model": config.activeModel,
+                      "host": config.activeHost],
             "limits": ["maxInputBytes": maxInputBytes,
                        "supplementLimit": supplementLimit,
                        "softTimeoutSeconds": softTimeoutSeconds,

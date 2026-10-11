@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 Foundation 的 JSONSerialization/JSONEncoder，消费 ModelConfigStore 与 ModelClient。
- * [OUTPUT]: 异步语义接续提交与补充票据；展示上报核验控制租约并绑定连接身份；建任务时传递控制会话以便执行核验；对外提供 AgentHTTP.handle——承接 /api/v1 下「本机管理类」端点：模型服务配置的读写与连通性实测。
+ * [INPUT]: 依赖 Foundation 的 JSONSerialization/JSONEncoder 与 CoreFoundation 的严格 JSON 布尔识别，消费 ModelConfigStore 的后端、多 API 服务商与凭证同源边界，以及统一 ModelClient。
+ * [OUTPUT]: 异步语义接续提交与补充票据；展示上报核验控制租约并绑定连接身份；建任务时传递控制会话以便执行核验；对外提供 AgentHTTP.handle——本机模型配置支持逐条保存、显式启用与移除；测试草稿按指定 ID 隔离凭证，新条目不借旧 Key，旧单条 POST 仍兼容。
  * [POS]: Sources 的 Agent 路由层；Server 只做一行委托，避免它继续膨胀越过 800 行红线。
  *        这些端点**只允许回环访问**（本机控制台），与手机侧的任务接口（M1 的 /api/v1/tasks/…）分开：
  *        任务接口面向配对手机、必须带 Bearer；本文件的管理端点面向本机浏览器，靠回环判定。
@@ -8,9 +8,11 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import Foundation
+import CoreFoundation
 
 enum AgentHTTP {
     static let managedPaths: Set<String> = ["/api/v1/model-config", "/api/v1/model-test"]
+    static var probeModel = ModelClient.send
     /// 桌面反馈面板的展示会话；由 main.swift 装配注入。HTTP 层只转写协议，不做展示决策。
     static var spriteSession: SpriteSession?
     static var spriteAuthorized: (String) -> Bool = { _ in false }
@@ -64,39 +66,108 @@ enum AgentHTTP {
 
     // MARK: 配置读写
 
+    private static func providerString(_ field: String, in json: [String: Any]) throws -> String? {
+        guard let raw = json[field] else { return nil }
+        guard let value = raw as? String else { throw ModelConfigError.invalidProvider }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 只合并指定条目；现代表单的空 Key 沿用同 ID 同源凭证，旧 top-level 草稿仍以显式空串表示清空。
+    private static func providerDraft(_ json: [String: Any], saved: APIProviderConfig?, id: String,
+                                      keepEmptyKey: Bool, requireName: Bool, validate: Bool = true) throws -> APIProviderConfig {
+        let baseURL = try providerString("baseURL", in: json) ?? saved?.baseURL ?? ""
+        let model = try providerString("model", in: json) ?? saved?.model ?? ""
+        let name = try providerString("name", in: json) ?? saved?.name ?? (requireName ? "" : ModelConfigStore.providerName(for: baseURL))
+        let suppliedKey = try providerString("apiKey", in: json)
+        var key = saved?.apiKey ?? ""
+        if let suppliedKey, !keepEmptyKey || !suppliedKey.isEmpty { key = suppliedKey }
+        let draft = APIProviderConfig(id: id, name: name, baseURL: baseURL, model: model, apiKey: key)
+        if validate && ModelConfigStore.endpoint(for: baseURL) == nil { throw ModelConfigError.badScheme(baseURL) }
+        if let saved, !saved.apiKey.isEmpty, !baseURL.isEmpty, baseURL != saved.baseURL,
+           !ModelConfigStore.credentialOriginMatches(saved.baseURL, baseURL), (suppliedKey ?? "").isEmpty {
+            throw ModelConfigError.newOriginNeedsKey
+        }
+        if validate { try ModelConfigStore.validateProvider(draft) }
+        return draft
+    }
+
+    /// 新操作只改指定条目；仅 activate=true 或 activate-provider 才改变使用来源。
+    private static func providerAction(_ json: [String: Any], saved: ModelConfig) throws -> ModelConfig {
+        var draft = saved
+        switch json["action"] as? String {
+        case "save-provider":
+            guard let values = json["provider"] as? [String: Any] else { throw ModelConfigError.invalidProvider }
+            let suppliedID = try providerString("id", in: values) ?? ""
+            let existing = suppliedID.isEmpty ? nil : saved.provider(id: suppliedID)
+            if !suppliedID.isEmpty && existing == nil { throw ModelConfigError.providerNotFound }
+            let id = suppliedID.isEmpty ? UUID().uuidString.lowercased() : suppliedID
+            let provider = try providerDraft(values, saved: existing, id: id, keepEmptyKey: true, requireName: true)
+            var activate = false
+            if let raw = json["activate"] {
+                guard let value = raw as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { throw ModelConfigError.invalidProvider }
+                activate = value.boolValue
+            }
+            draft.replaceProvider(provider)
+            if activate { draft.activeProviderID = id; draft.backend = .api }
+        case "activate-provider", "remove-provider":
+            guard let id = try providerString("providerId", in: json), let provider = saved.provider(id: id) else {
+                throw ModelConfigError.providerNotFound
+            }
+            if json["action"] as? String == "activate-provider" {
+                try ModelConfigStore.validateProvider(provider)
+                draft.activeProviderID = id
+                draft.backend = .api
+            } else { draft.removeProvider(id: id) }
+        default: throw ModelConfigError.invalidProviderAction
+        }
+        return draft
+    }
+
+    /// 测试按 providerId 合并；显式空 ID 是无凭证新草稿。旧请求仅改当前 API，不触碰其余服务商。
+    private static func modelConfigDraft(_ json: [String: Any], saved: ModelConfig,
+                                         allowClearingBackup: Bool) throws -> ModelConfig {
+        if json["action"] != nil { throw ModelConfigError.invalidProviderAction }
+        var draft = saved
+        if let raw = json["backend"] {
+            guard let value = raw as? String, let backend = ModelBackend(rawValue: value) else { throw ModelConfigError.invalidBackend }
+            draft.backend = backend
+        }
+        if json["providerId"] != nil {
+            guard draft.backend == .api, let id = try providerString("providerId", in: json) else { throw ModelConfigError.invalidProvider }
+            let existing = id.isEmpty ? nil : saved.provider(id: id)
+            if !id.isEmpty && existing == nil { throw ModelConfigError.providerNotFound }
+            let provider = try providerDraft(json, saved: existing, id: id.isEmpty ? UUID().uuidString.lowercased() : id,
+                                             keepEmptyKey: true, requireName: false)
+            draft.replaceProvider(provider)
+            draft.activeProviderID = provider.id
+            return draft
+        }
+        let clearing = try providerString("baseURL", in: json) == ""
+            && providerString("model", in: json) == "" && providerString("apiKey", in: json) == ""
+        if allowClearingBackup && clearing {
+            if let id = draft.activeProviderID { draft.removeProvider(id: id) }
+            return draft
+        }
+        let hasAPIFields = ["baseURL", "model", "apiKey"].contains { json[$0] != nil }
+        if draft.backend == .codex && !hasAPIFields { return draft }
+        let id = saved.activeProvider?.id ?? (saved.provider(id: ModelConfig.legacyProviderID) == nil
+            ? ModelConfig.legacyProviderID : UUID().uuidString.lowercased())
+        let provider = try providerDraft(json, saved: saved.activeProvider, id: id,
+                                         keepEmptyKey: false, requireName: false, validate: draft.backend == .api)
+        draft.replaceProvider(provider)
+        draft.activeProviderID = id
+        return draft
+    }
+
     private static func saveConfig(body: Data, respond: (Int, [String: Any]) -> Void) {
         let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
-        let baseURL = (json["baseURL"] as? String)?.trimmingCharacters(in: .whitespaces)
-        let model = (json["model"] as? String)?.trimmingCharacters(in: .whitespaces)
-        let apiKey = (json["apiKey"] as? String)?.trimmingCharacters(in: .whitespaces)
-
-        var draft = ModelConfigStore.load()
-        if let baseURL { draft.baseURL = baseURL }
-        if let model { draft.model = model }
-        // Key 显式传空串代表清空；不传（nil）才代表沿用旧值。
-        if let apiKey { draft.apiKey = apiKey }
-
-        // 三项全空 = 用户要清空配置。这里不能用 try? 吞掉失败：
-        // 写失败却回「已清空」就是假成功，用户会以为 Key 已经从这台机器上消失了。
-        if draft.baseURL.isEmpty && draft.model.isEmpty && draft.apiKey.isEmpty {
-            do {
-                try ModelConfigStore.save(ModelConfig())
-                respond(200, ["config": ModelConfigStore.view(ModelConfigStore.load())])
-            } catch {
-                respond(500, ["error": "清空失败：\(error.localizedDescription)"])
-            }
-            return
-        }
-        if !draft.baseURL.isEmpty, ModelConfigStore.endpoint(for: draft.baseURL) == nil {
-            respond(400, ["error": ModelConfigError.badScheme(draft.baseURL).localizedDescription ?? "Base URL 不合法。"])
-            return
-        }
-        if draft.model.isEmpty {
-            respond(400, ["error": ModelConfigError.emptyModel.localizedDescription ?? "请填写模型名。"])
-            return
-        }
-        if draft.apiKey.isEmpty {
-            respond(400, ["error": ModelConfigError.emptyKey.localizedDescription ?? "请填写 API Key。"])
+        let draft: ModelConfig
+        do {
+            let saved = ModelConfigStore.load()
+            if json["action"] != nil { draft = try providerAction(json, saved: saved) }
+            else { draft = try modelConfigDraft(json, saved: saved, allowClearingBackup: true) }
+        } catch {
+            respond(400, ["error": error.localizedDescription])
             return
         }
         do {
@@ -114,22 +185,17 @@ enum AgentHTTP {
     /// 结果如实回传：超时/鉴权失败/不支持工具调用都原样报出来，不粉饰成「可用」。
     private static func probe(body: Data, queue: DispatchQueue, respond: @escaping (Int, [String: Any]) -> Void) {
         let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
-        var config = ModelConfigStore.load()
-        if let value = json["baseURL"] as? String, !value.isEmpty { config.baseURL = value.trimmingCharacters(in: .whitespaces) }
-        if let value = json["model"] as? String, !value.isEmpty { config.model = value.trimmingCharacters(in: .whitespaces) }
-        if let value = json["apiKey"] as? String, !value.isEmpty { config.apiKey = value.trimmingCharacters(in: .whitespaces) }
-
-        guard config.isConfigured else {
-            respond(400, ["error": "请先填好 Base URL、模型名与 API Key 再测试。"])
+        let config: ModelConfig
+        do {
+            config = try modelConfigDraft(json, saved: ModelConfigStore.load(), allowClearingBackup: false)
+        } catch {
+            respond(400, ["error": error.localizedDescription])
             return
         }
-        guard let host = ModelConfigStore.endpoint(for: config.baseURL)?.host else {
-            respond(400, ["error": ModelConfigError.badScheme(config.baseURL).localizedDescription ?? "Base URL 不合法。"])
-            return
-        }
+        let host = config.activeHost
 
         let started = Date()
-        ModelClient.send(config: config, messages: [["role": "user", "content": "只回复两个字：可用"]], tools: nil) { first in
+        probeModel(config, [["role": "user", "content": "只回复两个字：可用"]], nil, 60) { first in
             let textMs = Int(Date().timeIntervalSince(started) * 1000)
             switch first {
             case .failure(let failure):
@@ -153,21 +219,22 @@ enum AgentHTTP {
     private static func probeToolCall(config: ModelConfig, host: String, content: String,
                                       usage: [String: Any]?, textMs: Int,
                                       queue: DispatchQueue, respond: @escaping (Int, [String: Any]) -> Void) {
-        var messages: [[String: Any]] = [["role": "user", "content": "用 read_page 读取当前网页，然后用一句话总结。"]]
+        var messages: [[String: Any]] = [["role": "user", "content": "用 read_page 读取 https://example.invalid/pocketdesk-model-probe，然后用一句话总结；这是模拟工具验证，不要打开浏览器。"]]
         let started = Date()
-        ModelClient.send(config: config, messages: messages, tools: probeTools) { first in
+        probeModel(config, messages, probeTools, 60) { first in
             switch first {
             case .failure(let failure):
                 queue.async {
                     respond(200, ["ok": true, "host": host, "content": content, "usage": usage ?? [:],
-                                  "latencyMs": textMs, "model": config.model,
+                                  "latencyMs": textMs, "model": config.activeModel, "backend": config.backend.rawValue,
                                   "tool": ["supported": false, "error": failure.message]])
                 }
             case .success(let turn):
-                guard let call = turn.toolCalls?.first else {
+                guard let calls = turn.toolCalls, calls.count == 1, let call = calls.first,
+                      (call["function"] as? [String: Any])?["name"] as? String == "read_page" else {
                     queue.async {
                         respond(200, ["ok": true, "host": host, "content": content, "usage": usage ?? [:],
-                                      "latencyMs": textMs, "model": config.model,
+                                      "latencyMs": textMs, "model": config.activeModel, "backend": config.backend.rawValue,
                                       "tool": ["supported": false, "note": "模型没有发起工具调用：该模型或服务端可能不支持 function calling。"]])
                     }
                     return
@@ -175,20 +242,27 @@ enum AgentHTTP {
                 if let raw = turn.rawMessage { messages.append(raw) }
                 messages.append(["role": "tool", "tool_call_id": call["id"] as? String ?? "", "content": fakePage])
                 let name = (call["function"] as? [String: Any])?["name"] as? String ?? ""
-                ModelClient.send(config: config, messages: messages, tools: probeTools) { second in
+                probeModel(config, messages, probeTools, 60) { second in
                     let totalMs = textMs + Int(Date().timeIntervalSince(started) * 1000)
                     switch second {
                     case .failure(let failure):
                         queue.async {
                             respond(200, ["ok": true, "host": host, "content": content, "usage": usage ?? [:],
-                                          "latencyMs": totalMs, "model": config.model,
+                                          "latencyMs": totalMs, "model": config.activeModel, "backend": config.backend.rawValue,
                                           "tool": ["supported": true, "name": name, "error": failure.message]])
                         }
                     case .success(let final):
                         queue.async {
+                            guard let answer = final.content, !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                  final.toolCalls?.isEmpty != false else {
+                                respond(200, ["ok": true, "host": host, "content": content, "usage": usage ?? [:],
+                                              "latencyMs": totalMs, "model": config.activeModel, "backend": config.backend.rawValue,
+                                              "tool": ["supported": true, "name": name, "error": "工具结果已回传，但模型没有返回最终文字答复；闭环尚未完成。"]])
+                                return
+                            }
                             respond(200, ["ok": true, "host": host, "content": content, "usage": usage ?? [:],
-                                          "latencyMs": totalMs, "model": config.model, "checkedAt": Date().timeIntervalSince1970,
-                                          "tool": ["supported": true, "name": name, "final": final.content ?? ""]])
+                                          "latencyMs": totalMs, "model": config.activeModel, "backend": config.backend.rawValue, "checkedAt": Date().timeIntervalSince1970,
+                                          "tool": ["supported": true, "name": name, "final": answer]])
                         }
                     }
                 }

@@ -1,7 +1,6 @@
 /**
- * [INPUT]: 依赖 Foundation 的 URLSession/JSONSerialization，消费 ModelConfig 的配置。
- * [OUTPUT]: 对外提供 ModelClient.send——对 OpenAI 兼容 /chat/completions 发一次请求，
- *           解析出 content、tool_calls 与 usage；失败给出 HTTP 状态与服务端原文摘要。
+ * [INPUT]: 依赖 Foundation 的 URLSession/JSONSerialization、ModelConfig 后端选择及 CodexModelClient 的登录额度规划能力。
+ * [OUTPUT]: 对外提供统一 ModelClient.send；Codex 与 API 都返回 content、tool_calls 与带来源的 usage，失败不自动跨后端重试。
  * [POS]: Sources 的模型适配层最薄的一层：只翻译协议，不持有任何工具执行权。
  *        工具由 PocketDesk 本地执行后作为结果回传，模型永远不能直接操作电脑。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -23,12 +22,17 @@ struct ModelFailure: Error {
 
 enum ModelClient {
     /// 单次请求。回调不在主线程；调用方自行切回自己的队列。
-    /// 错误报文只回传服务端响应体摘要，**绝不回显请求体**（里面有 API Key）。
+    /// 错误只回传服务端摘要，不回显用户上下文或含凭据的请求头。
     static func send(config: ModelConfig,
                      messages: [[String: Any]],
                      tools: [[String: Any]]?,
                      timeoutSeconds: Double = 60,
                      completion: @escaping (Result<ModelTurn, ModelFailure>) -> Void) {
+        if config.backend == .codex {
+            CodexModelClient.send(config: config, messages: messages, tools: tools,
+                                  timeoutSeconds: timeoutSeconds, completion: completion)
+            return
+        }
         guard let url = ModelConfigStore.endpoint(for: config.baseURL) else {
             completion(.failure(ModelFailure(httpStatus: nil, message: "Base URL 不合法：必须是 http(s) 且带主机名。")))
             return
@@ -72,6 +76,10 @@ enum ModelClient {
             turn.toolCalls = message?["tool_calls"] as? [[String: Any]]
             turn.rawMessage = message
             turn.usage = json["usage"] as? [String: Any]
+            if turn.usage != nil {
+                turn.usage?["provider"] = url.host ?? "api"
+                turn.usage?["model"] = config.activeModel
+            }
             completion(.success(turn))
         }.resume()
     }
