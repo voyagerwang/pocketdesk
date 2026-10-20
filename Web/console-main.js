@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 console.html 的 DOM 与内联 applyTheme，消费 console-connection.js 的连接渲染入口及状态、设备、接收者、目标应用、快捷键 HTTP 接口。
- * [OUTPUT]: 控制台设备与接收者管理、目标应用和快捷键编辑、最近动作轮询；保留 refresh/post 与页面状态的经典脚本全局契约。
+ * [INPUT]: 依赖 console.html 的 DOM 与内联 applyTheme，消费 console-connection.js 的连接渲染入口及 /api/status（含 voiceInput 四态）、设备、接收者、目标应用、快捷键、/api/voice-input/select 与 /api/open-keyboard-settings HTTP 接口。
+ * [OUTPUT]: 控制台设备与接收者管理、目标应用和快捷键编辑、最近动作轮询，以及语音输入卡片（按 voiceInput 四态给出下载/键盘设置/切换入口）；保留 refresh/post 与页面状态的经典脚本全局契约。
  * [POS]: Web 的电脑控制台主业务入口；主题和连接模块先加载，模型与本机管理事务分别交给后续 console-agent.js、console-actions.js，不包 IIFE 以保持共享作用域。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -96,6 +96,7 @@ async function refresh() {
     authState.textContent = granted ? '已授权' : '未授权';
     authState.className = granted ? 'ok' : 'bad';
     $('openSettings').disabled = granted;
+    renderVoiceInput(status.voiceInput);
     if (status.platform !== 'macOS') { $('authHint').textContent = '在系统设置中允许 VoiceDeck 获得输入控制权限。'; }
     const configFresh = revision === configRevision && !savingTargets && !savingShortcuts;
     if (configFresh) state.targets = status.targets;
@@ -495,6 +496,39 @@ $('iconFile').addEventListener('change', () => {
 });
 
 $('openSettings').onclick = () => post('/api/open-accessibility');
+
+/* ---------- 语音输入：豆包输入法前置引导 ---------- */
+// 四态只对应一个动作，避免「按了没反应」被当成 PocketDesk 的 bug：
+// 没装→去下载，没启用→去键盘设置添加，没选中→一键切过去，就绪→不出按钮。
+const VOICE_INPUT_COPY = {
+  ready: ['已就绪', 'ok', '语音键可以直接唤起豆包输入法。'],
+  missing: ['未安装', 'bad', '先装豆包输入法 macOS 版；装完在「系统设置 → 键盘 → 文本输入 → 输入法」里添加并选中它。没装之前，耳机和小精灵的语音键都不会有反应。'],
+  disabled: ['未启用', 'bad', '豆包输入法已安装，但当前账号没有启用它：打开键盘设置 → 输入法 → 编辑 → 「+」→ 简体中文 → 豆包输入法 → 添加。'],
+  inactive: ['未选中', 'warn', '豆包输入法已启用，但当前输入源不是它：点右边按钮切换，或在菜单栏输入法菜单里选豆包。'],
+};
+function renderVoiceInput(voiceInput) {
+  const stage = (voiceInput && voiceInput.stage) || 'missing';
+  const [label, tone, hint] = VOICE_INPUT_COPY[stage] || VOICE_INPUT_COPY.missing;
+  const pill = $('viState');
+  pill.textContent = label; pill.className = 'pill ' + tone;
+  $('viHint').textContent = hint;
+  // 每种状态只给必要的那一个入口，其他隐藏（下载链接始终可点，供重装/升级）。
+  $('viDownload').hidden = stage !== 'missing';
+  $('viKeyboard').hidden = stage !== 'disabled';
+  $('viSelect').hidden = stage !== 'inactive';
+  $('viSelect').disabled = false;
+}
+$('viKeyboard').onclick = () => post('/api/open-keyboard-settings');
+$('viSelect').onclick = async () => {
+  $('viSelect').disabled = true;
+  try {
+    const result = await post('/api/voice-input/select');
+    renderVoiceInput(result.voiceInput);
+  } catch (error) {
+    $('viHint').textContent = error.message;
+    $('viSelect').disabled = false;
+  }
+};
 
 /* ---------- 快捷键设置：键盘录制语义串（"Cmd+Shift+Z"/"Return"），保存到 /api/shortcuts ---------- */
 
