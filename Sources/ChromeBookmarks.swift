@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 Foundation 的 Chrome 配置文件书签树与 AppKit 的 NSWorkspace。
+ * [OUTPUT]: 提供实时书签读取、归一化名称匹配、候选检索与按配置文件隔离 ID 打开书签。
+ * [POS]: Sources 的本机书签适配层；AgentRunner/AgentQuickOpen 读取真实目标，打开前重新核对 ID，不把系统接收请求说成网页加载完成。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 import AppKit
 import Foundation
 

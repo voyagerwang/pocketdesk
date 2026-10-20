@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖真实音量来源票据、鼠标 Slider 音量语义分类和操作学习状态机；鼠标/时间/媒体键均为内存样本。
+ * [OUTPUT]: 验证普通点击/非音量滑块不取消或冷却、核验超过80ms仍保留票据、音量滑块点击/持续拖动排除，以及迟到命中、键盘来源和耳机双击的边界。
+ * [POS]: tests 的耳机音量来源回归；不读取 AX、改变音量、安装监听、触发录音或写正式配置。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 import Foundation
 
 /// These fixtures exercise source filtering and learning only. They never invoke
@@ -39,8 +45,9 @@ import Foundation
         volumeCancellationPreservesHID()
         invalidTimes()
         nativeEventClassification()
+        mouseClickAttribution()
         wrapperUsesSameGate()
-        print("PASS volume source ordering, confirmation delay, suppression expiry, double-click, pending cancellation and invalid-time guards; simulated recognition only, no physical input or action execution")
+        print("PASS volume source ordering, ordinary/non-volume mouse click without cancellation or cooldown, delayed verification, volume slider drag exclusion, late-pointer isolation, double-click and invalid-time guards; no physical input or action execution")
     }
 
     static func confirmationAndSuppression() {
@@ -194,5 +201,84 @@ import Foundation
         assert(source.ticket(now: 0.809) == nil)
         let next = source.ticket(now: 0.811)!
         assert(source.allows(next, now: 0.811 + delay + 0.0001))
+        let pointer = source.beginPointer(now: 1)!
+        let clicked = source.ticket(now: 1.01)!
+        assert(!source.allows(clicked, now: 1.1))
+        assert(!source.resolvePointer(pointer, slider: false, now: 1.02))
+        source.endPointer(now: 1.03)
+        assert(source.allows(clicked, now: 1.1))
+    }
+
+    static func mouseClickAttribution() {
+        assert(HeadsetVolumeSourceEvent.isVolumeSlider(role: "AXSlider", labels: ["Output Volume"]))
+        assert(HeadsetVolumeSourceEvent.isVolumeSlider(role: "AXSlider", labels: ["输出音量"]))
+        assert(HeadsetVolumeSourceEvent.isVolumeSlider(role: "AXSlider", labels: ["volume-slider"]))
+        assert(!HeadsetVolumeSourceEvent.isVolumeSlider(role: "AXTextArea", labels: ["Volume"]))
+        assert(!HeadsetVolumeSourceEvent.isVolumeSlider(role: "AXSlider", labels: ["Brightness", "显示亮度"]))
+        assert(!HeadsetVolumeSourceEvent.isVolumeSlider(role: "AXSlider", labels: ["Playback position", "播放进度"]))
+        assert(!HeadsetVolumeSourceEvent.isVolumeSlider(role: "AXSlider", labels: ["Volumetric zoom"]))
+        assert(!HeadsetVolumeSourceEvent.isVolumeSlider(role: "AXSlider", labels: []))
+
+        // ---------- 点输入框后马上按耳机，不再被 800ms 全局鼠标冷却吞掉 ----------
+        var source = HeadsetVolumeSourceGate()
+        let click = source.beginPointer(now: 0)!
+        let ear = source.ticket(now: 0.01)!
+        assert(!source.allows(ear, now: 0.09)) // 命中未确认前不执行。
+        assert(source.checkingPointer)
+        assert(!source.resolvePointer(click, slider: false, now: 0.03))
+        source.endPointer(now: 0.04)
+        assert(!source.checkingPointer && !source.pointerVolumeActive(now: 0.09))
+        assert(source.allows(ear, now: 0.091)) // 原票据有效，无额外冷却。
+
+        // AX 慢于原80ms来源确认时，只保留候选；核验完成后同票据执行。
+        source = HeadsetVolumeSourceGate()
+        let slow = source.beginPointer(now: 0)!
+        let retained = source.ticket(now: 0.01)!
+        assert(source.checkingPointer && !source.allows(retained, now: 0.09))
+        assert(source.checkingPointer && !source.allows(retained, now: 0.14))
+        assert(!source.resolvePointer(slow, slider: false, now: 0.16))
+        assert(source.allows(retained, now: 0.17))
+
+        // 非音量滑块不提供取消依据，哪怕其标签或读回稍晚。
+        source = HeadsetVolumeSourceGate()
+        let unrelated = source.beginPointer(now: 0)!
+        let volumeWhileScrubbing = source.ticket(now: 0.01)!
+        let audioSource = HeadsetVolumeSourceEvent.isVolumeSlider(role: "AXSlider", labels: ["Brightness"])
+        assert(!source.resolvePointer(unrelated, slider: audioSource, now: 0.03))
+        assert(!source.pointerVolumeActive(now: 0.09))
+        assert(source.allows(volumeWhileScrubbing, now: 0.091))
+
+        // 普通点击也不能撤销之前已确认的键盘音量排除。
+        source.exclude(now: 0.1)
+        let ordinary = source.beginPointer(now: 0.2)!
+        assert(!source.resolvePointer(ordinary, slider: false, now: 0.21))
+        assert(source.ticket(now: 0.89) == nil)
+        assert(source.ticket(now: 0.901) != nil)
+
+        // ---------- 真正拖动滑块超过冷却期，仍禁止由其音量变化唤醒 ----------
+        source = HeadsetVolumeSourceGate()
+        let slider = source.beginPointer(now: 0)!
+        let outstanding = source.ticket(now: 0.01)!
+        assert(source.resolvePointer(slider, slider: true, now: 0.03))
+        assert(source.pointerVolumeActive(now: 0.03))
+        assert(!source.allows(outstanding, now: 0.9))
+        assert(source.ticket(now: 2) == nil)
+        source.endPointer(now: 2.1)
+        assert(source.ticket(now: 2.89) == nil)
+        assert(source.ticket(now: 2.901) != nil)
+
+        // 快速松开仍等待同一轮命中；迟到旧鼠标结果不能污染新点击。
+        source = HeadsetVolumeSourceGate()
+        let released = source.beginPointer(now: 0)!
+        source.endPointer(now: 0.01)
+        assert(source.resolvePointer(released, slider: true, now: 0.02))
+        assert(source.ticket(now: 0.821) != nil)
+        source = HeadsetVolumeSourceGate()
+        let old = source.beginPointer(now: 0)!
+        let newest = source.beginPointer(now: 0.01)!
+        assert(!source.resolvePointer(old, slider: true, now: 0.02))
+        assert(!source.resolvePointer(newest, slider: false, now: 0.03))
+        let accepted = source.ticket(now: 0.04)!
+        assert(source.allows(accepted, now: 0.121))
     }
 }

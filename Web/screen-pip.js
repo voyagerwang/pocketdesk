@@ -1,12 +1,13 @@
 /**
- * [INPUT]: 消费浮窗、8 个缩放柄与移动结束回调，依赖 Pointer Events/localStorage。
- * [OUTPUT]: 提供 ScreenPip 的位置恢复、拖动缩放、夹取与手势取消。
- * [POS]: Web 的浮窗几何边界；不处理全屏画面手势，拖动尾部不穿透为远端点击。
+ * [INPUT]: 消费浮窗、8 个缩放柄与移动结束回调，依赖多触点 Pointer Events/localStorage。
+ * [OUTPUT]: 提供 ScreenPip 的位置恢复、单指拖动/边缘缩放、双指捏合缩放和平移、夹取与手势取消。
+ * [POS]: Web 的浮窗几何边界；双指以触点中间的画面位置为锚点调整小窗，不发送远端输入；松一指后等待下一轮接触，避免跳为单指拖动。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 class ScreenPip {
   constructor(panel, changed) {
     this.panel = panel; this.changed = changed;
+    this.pointers = new Map();
     try { this.box = JSON.parse(localStorage.getItem('voicedeck.pip')); } catch {}
     if (!this.box || !['x','y','w','h'].every(k => Number.isFinite(this.box[k]))) this.box = { x: 24, y: 90, w: 300, h: 169 };
     panel.addEventListener('pointerdown', e => this.down(e));
@@ -26,11 +27,33 @@ class ScreenPip {
     Object.assign(this.panel.style, { left: `${this.box.x}px`, top: `${this.box.y}px`, width: `${this.box.w}px`, height: `${this.box.h}px`, transform: '' });
   }
   down(e) {
-    if (!this.active() || this.drag || e.button > 0 || e.target.closest('button,select,textarea')) return;
+    if (!this.active() || e.button > 0 || e.target.closest('button,select,textarea') || this.pointers.size >= 2) return;
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.pointers.size === 2) {
+      // 第二指接管前先落定已显示的平移，缩放从眼前的小窗开始。
+      this.commitDrag(); this.paint();
+      const [a, b] = [...this.pointers.values()];
+      this.drag = { kind: 'pinch', box: { ...this.box }, distance: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
+        center: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, moved: false };
+      return;
+    }
     const handle = e.target.closest('.screen-resize');
     this.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, box: { ...this.box }, edge: handle?.dataset.edge || '', moved: false };
   }
   move(e) {
+    const point = this.pointers.get(e.pointerId); if (!point) return;
+    point.x = e.clientX; point.y = e.clientY;
+    if (this.drag?.kind === 'pinch') {
+      const d = this.drag, [a, b] = [...this.pointers.values()];
+      e.preventDefault(); d.moved = true;
+      this.box.w = d.box.w * Math.hypot(b.x - a.x, b.y - a.y) / d.distance;
+      this.clamp();
+      const scale = this.box.w / d.box.w;
+      this.box.x = (a.x + b.x) / 2 - (d.center.x - d.box.x) * scale;
+      this.box.y = (a.y + b.y) / 2 - (d.center.y - d.box.y) * scale;
+      this.paint();
+      return;
+    }
     const d = this.drag; if (!d || d.id !== e.pointerId) return;
     const dx = e.clientX - d.x, dy = e.clientY - d.y;
     if (Math.hypot(dx, dy) <= 8 && !d.moved) return;
@@ -43,11 +66,19 @@ class ScreenPip {
       this.box.y = d.box.y + (d.edge.includes('n') ? d.box.h - this.box.h : 0); this.paint();
     }
   }
+  commitDrag() {
+    const d = this.drag, point = this.pointers.get(d?.id);
+    if (point && d.moved && !d.edge) {
+      this.box.x = d.box.x + point.x - d.x; this.box.y = d.box.y + point.y - d.y;
+    }
+  }
   end(e) {
-    const d = this.drag; if (!d || d.id !== e.pointerId) return;
+    if (!this.pointers.has(e.pointerId)) return;
+    const d = this.drag;
+    this.move(e); this.commitDrag(); this.pointers.delete(e.pointerId);
     this.drag = null;
-    if (d.moved) {
-      if (!d.edge) { this.box.x = d.box.x + e.clientX - d.x; this.box.y = d.box.y + e.clientY - d.y; }
+    if (!d) return;
+    if (d.moved || d.kind === 'pinch') {
       this.suppressClick = true;
       // 本次 pointerup 的兼容 click 同步抵达；下一轮接触不被时间窗吞掉。
       setTimeout(() => { this.suppressClick = false; }, 0);
@@ -55,6 +86,6 @@ class ScreenPip {
     this.paint(); this.changed();
     try { localStorage.setItem('voicedeck.pip', JSON.stringify(this.box)); } catch {}
   }
-  cancel() { this.drag = null; this.suppressClick = true; this.paint(); setTimeout(() => { this.suppressClick = false; }, 0); }
+  cancel() { this.pointers.clear(); this.drag = null; this.suppressClick = true; this.paint(); setTimeout(() => { this.suppressClick = false; }, 0); }
 }
 globalThis.ScreenPip = ScreenPip;

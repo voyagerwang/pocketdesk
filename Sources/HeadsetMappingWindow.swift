@@ -1,4 +1,9 @@
-/** [INPUT]: 检测运行时、规则存储、原生快捷键录制。[OUTPUT]: 检测→反馈→动作→试用→保存的本机窗口。[POS]: 耳机设置下的操作映射。[PROTOCOL]: 同步 Sources/CLAUDE.md。 */
+/**
+ * [INPUT]: 依赖检测运行时、规则存储与原生快捷键录制；复用 HeadsetUI 共享控件。
+ * [OUTPUT]: 对外提供录制、识别反馈、动作编辑、试用与保存的原生操作窗口。
+ * [POS]: Sources 的耳机操作映射编辑器，由耳机设置打开，识别与执行交给各自运行时。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -201,18 +206,23 @@ final class HeadsetMappingModel: ObservableObject {
 }
 
 struct HeadsetShortcutRecorder: NSViewRepresentable {
+    @Environment(\.headsetPalette) private var palette
     @ObservedObject var model: HeadsetMappingModel
     func makeNSView(context: Context) -> HeadsetShortcutField {
         let field = model.keyField
         field.font = .monospacedSystemFont(ofSize: 13, weight: .medium); field.isBezeled = false; field.drawsBackground = false
         field.isEditable = false; field.isSelectable = true
-        field.focusRingType = .none; field.setAccessibilityLabel("录制的快捷键")
+        field.focusRingType = .default; field.setAccessibilityLabel("录制的快捷键")
         return field
     }
-    func updateNSView(_ field: HeadsetShortcutField, context: Context) { if !field.recording { field.stringValue = model.keyLabel } }
+    func updateNSView(_ field: HeadsetShortcutField, context: Context) {
+        field.textColor = NSColor(palette.foreground)
+        if !field.recording { field.stringValue = model.keyLabel }
+    }
 }
 
 struct HeadsetMappingView: View {
+    @Environment(\.headsetPalette) private var palette
     @ObservedObject var model: HeadsetMappingModel
     private let presets: [(String, String)] = [("auto", "直接录制"), ("click", "单击"), ("doubleClick", "双击"), ("hold", "长按")]
     var body: some View {
@@ -220,10 +230,12 @@ struct HeadsetMappingView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(model.editingID == nil ? "添加耳机操作" : "编辑耳机操作").font(.system(size: 22, weight: .semibold))
-                    Text("先操作耳机，识别成功后再选择它要做什么。").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Text("先操作耳机，识别成功后再选择它要做什么。").font(.system(size: 13)).foregroundStyle(palette.muted)
                 }
                 Spacer()
-                Image(systemName: "headphones").font(.system(size: 26)).foregroundStyle(.secondary)
+                Image(systemName: "headphones").font(.system(size: 24)).foregroundStyle(palette.accent)
+                    .frame(width: 48, height: 48).background(palette.accentSoft)
+                    .clipShape(RoundedRectangle(cornerRadius: palette.controlRadius))
             }.padding(24)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -241,27 +253,31 @@ struct HeadsetMappingView: View {
                                         let supported = value == "auto" || model.selected.map { HeadsetOperationLearning.supports(HeadsetRule.Gesture(rawValue: value)!, device: $0) } == true
                                         Button { model.preset = value } label: {
                                             Text(title).font(.system(size: 13, weight: model.preset == value ? .semibold : .regular))
+                                                .foregroundStyle(model.preset == value ? palette.accent : palette.muted)
                                                 .frame(maxWidth: .infinity).padding(.vertical, 8)
-                                                .background(model.preset == value ? HeadsetUI.card : Color.clear).clipShape(RoundedRectangle(cornerRadius: 7))
+                                                .background(model.preset == value ? palette.accentSoft : Color.clear)
+                                                .clipShape(RoundedRectangle(cornerRadius: palette.controlRadius))
+                                                .overlay(RoundedRectangle(cornerRadius: palette.controlRadius).stroke(model.preset == value ? palette.accentLine : Color.clear, lineWidth: 1))
                                         }.buttonStyle(.plain).disabled(!supported)
+                                            .accessibilityAddTraits(model.preset == value ? .isSelected : [])
                                             .help(supported ? "录制并确认实际信号" : "当前信号不支持这个手势")
                                     }
-                                }.padding(4).background(HeadsetUI.control).clipShape(RoundedRectangle(cornerRadius: 10))
+                                }.padding(4).background(palette.control).clipShape(RoundedRectangle(cornerRadius: palette.controlRadius))
                                 VStack(spacing: 12) {
-                                    Image(systemName: model.phase == .listening ? "dot.radiowaves.left.and.right" : "hand.tap").font(.system(size: 32)).foregroundStyle(.secondary)
+                                    Image(systemName: model.phase == .listening ? "dot.radiowaves.left.and.right" : "hand.tap").font(.system(size: 32)).foregroundStyle(model.phase == .listening ? palette.accent : palette.muted)
                                     Text(model.phase == .listening ? "现在操作耳机" : "录制一次耳机操作").font(.system(size: 16, weight: .semibold))
-                                    Text(model.phase == .listening ? "收到信号后，会在这里显示识别结果。" : "直接录制，或先选择单击、双击、长按。").font(.system(size: 12)).foregroundStyle(.secondary)
+                                    Text(model.phase == .listening ? "收到信号后，会在这里显示识别结果。" : "直接录制，或先选择单击、双击、长按。").font(.system(size: 12)).foregroundStyle(palette.muted)
                                     if model.phase == .listening { Button("停止录制") { model.stop() }.buttonStyle(HeadsetSecondaryButton()) }
                                     else { Button("开始录制") { model.begin() }.buttonStyle(HeadsetPrimaryButton()).disabled(model.selected == nil) }
                                 }.frame(maxWidth: .infinity).padding(.vertical, 20)
                             } else if let operation = model.operation {
                                 HStack(spacing: 12) {
-                                    Image(systemName: "checkmark.circle.fill").font(.system(size: 24)).foregroundStyle(.green)
+                                    Image(systemName: "checkmark.circle.fill").font(.system(size: 24)).foregroundStyle(palette.accent)
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(operation.title).font(.system(size: 16, weight: .semibold))
-                                        Text(model.phase == .editing ? "已保存的操作，无需重新录制。" : "已收到并识别这个信号。").font(.system(size: 12)).foregroundStyle(.secondary)
+                                        Text(model.phase == .editing ? "已保存的操作，无需重新录制。" : "已收到并识别这个信号。").font(.system(size: 12)).foregroundStyle(palette.muted)
                                     }; Spacer()
-                                    Button("重新录制") { model.changedSource() }.buttonStyle(.borderless)
+                                    Button("重新录制") { model.changedSource() }.buttonStyle(.borderless).foregroundStyle(palette.accent)
                                 }
                             }
                             HeadsetMessage(text: model.sourceExplanation)
@@ -278,21 +294,21 @@ struct HeadsetMappingView: View {
                                     HeadsetChoice(label: "执行动作", selection: $model.action, options: HeadsetRule.Action.allCases.map { ($0, $0.label) }).frame(width: 310)
                                 }
                                 if model.action == .openApp {
-                                    HStack { Text(model.appPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "尚未选择应用").foregroundStyle(.secondary); Spacer(); Button("选择应用…") { model.chooseApp() } }
+                                    HStack { Text(model.appPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "尚未选择应用").foregroundStyle(palette.muted); Spacer(); Button("选择应用…") { model.chooseApp() } }
                                 }
                                 if model.action == .hotkey || model.advancedVoice && model.needsVoice {
-                                    HStack { HeadsetShortcutRecorder(model: model).frame(height: 24).padding(8).background(HeadsetUI.control).clipShape(RoundedRectangle(cornerRadius: 8)); Button(model.recordingKey ? "等待按键…" : "录制快捷键") { model.recordKey() }.disabled(model.recordingKey) }
+                                    HStack { HeadsetShortcutRecorder(model: model).frame(height: 24).padding(8).background(palette.control).clipShape(RoundedRectangle(cornerRadius: 8)); Button(model.recordingKey ? "等待按键…" : "录制快捷键") { model.recordKey() }.disabled(model.recordingKey) }
                                 }
-                                if model.action == .hotkey && model.operation?.gesture == .hold { Toggle("按住期间保持快捷键，松开后释放", isOn: $model.holdsKey).toggleStyle(.switch).tint(Color(nsColor: .labelColor)) }
+                                if model.action == .hotkey && model.operation?.gesture == .hold { Toggle("按住期间保持快捷键，松开后释放", isOn: $model.holdsKey).toggleStyle(SwitchToggleStyle(tint: palette.accent)) }
                                 if model.needsVoice {
                                     HeadsetMessage(text: model.operation?.gesture == .hold ? "按住开始说话，松开结束。" : "操作一次开始语音，再操作一次结束。")
                                     DisclosureGroup("语音快捷键与输入法", isExpanded: $model.advancedVoice) {
                                         HeadsetChoice(label: "输入法快捷键方式", selection: $model.voiceToggle, options: [(false, "按住快捷键开始，松开结束"), (true, "点按快捷键开始，再点结束")]).padding(.top, 8)
-                                    }.font(.system(size: 12)).foregroundStyle(.secondary)
+                                    }.font(.system(size: 12)).foregroundStyle(palette.muted)
                                 }
                                 Divider()
-                                HStack { Text("生效范围"); Spacer(); Menu(model.scopeName) { Button("所有应用") { model.scope = nil; model.scopeName = "所有应用" }; Button("选择应用…") { model.chooseApp(scopeOnly: true) } }.menuStyle(.borderlessButton).fixedSize().padding(8).background(HeadsetUI.control).clipShape(RoundedRectangle(cornerRadius: 8)) }
-                                if model.editingID != nil { Toggle("启用此操作", isOn: $model.enabled).toggleStyle(.switch).tint(Color(nsColor: .labelColor)) }
+                                HStack { Text("生效范围"); Spacer(); Menu(model.scopeName) { Button("所有应用") { model.scope = nil; model.scopeName = "所有应用" }; Button("选择应用…") { model.chooseApp(scopeOnly: true) } }.menuStyle(.borderlessButton).fixedSize().padding(8).background(palette.control).clipShape(RoundedRectangle(cornerRadius: 8)) }
+                                if model.editingID != nil { Toggle("启用此操作", isOn: $model.enabled).toggleStyle(SwitchToggleStyle(tint: palette.accent)) }
                             }.font(.system(size: 13))
                         }
                     }
@@ -301,9 +317,9 @@ struct HeadsetMappingView: View {
             }
             HStack { Button("取消") { model.close?() }.buttonStyle(HeadsetSecondaryButton()).keyboardShortcut(.cancelAction); Spacer()
                 if model.operation != nil { Button(model.testing ? "停止试用" : "试用动作") { if model.testing { model.stop() } else { model.test() } }.buttonStyle(HeadsetSecondaryButton()).disabled(model.recordingKey) }
-                Button("保存操作") { model.save() }.buttonStyle(HeadsetPrimaryButton()).disabled(!model.canSave).opacity(model.canSave ? 1 : 0.4).keyboardShortcut(.defaultAction)
-            }.padding(20).background(HeadsetUI.card)
-        }.background(HeadsetUI.canvas)
+                Button("保存操作") { model.save() }.buttonStyle(HeadsetPrimaryButton()).disabled(!model.canSave).keyboardShortcut(.defaultAction)
+            }.padding(20).background(palette.card)
+        }.background(palette.canvas)
             .onChange(of: model.deviceID) { _ in if model.operation == nil { model.changedSource() } }
             .onChange(of: model.preset) { _ in
                 guard model.operation == nil else { return }
@@ -326,7 +342,9 @@ final class HeadsetMappingWindow: NSObject, NSWindowDelegate {
         if let window { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
         let w = NSWindow(contentRect: .init(x: 0, y: 0, width: 710, height: 700), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window = w; w.title = "PocketDesk · 耳机操作"; w.minSize = .init(width: 650, height: 580); w.isReleasedWhenClosed = false; w.delegate = self
-        w.contentView = NSHostingView(rootView: HeadsetMappingView(model: model))
+        w.appearance = NSAppearance(named: .aqua)
+        w.contentView = NSHostingView(rootView: HeadsetThemeSurface(window: w) { HeadsetMappingView(model: self.model) })
+        w.setContentSize(.init(width: 710, height: 700))
         model.close = { [weak self] in self?.window?.close() }
         model.focusRecorder = { [weak self] in self?.window?.makeFirstResponder(self?.model.keyField) }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in

@@ -1,5 +1,13 @@
+/**
+ * [INPUT]: 依赖 IOKit 的实时 Consumer HID 服务及其 IORegistry 父链、已配对型号和绑定当前设备 registry 的短时操作租约。
+ * [OUTPUT]: 合并中键原生 Option 映射；仅真实父链包含租约设备且型号一致才接管指定 usage，健康按规则 identity 回读已核验 registry；不要求服务暴露序列号，未知身份不接管，租约失效按持久化备份恢复来源，不发送语音快捷键。
+ * [POS]: Helpers 的独立映射守护；主应用负责语义动作与输入框准备，本程序只协调硬件映射及失效回退。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 #import <Foundation/Foundation.h>
 #import <signal.h>
+#import <math.h>
+#import <IOKit/IOKitLib.h>
 #import <IOKit/hidsystem/IOHIDEventSystemClient.h>
 #import <IOKit/hidsystem/IOHIDServiceClient.h>
 
@@ -79,21 +87,57 @@ static NSArray *Profiles(void) {
 static NSString *OperationPath(NSString *name) {
     return [[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/VoiceDeck/headset"] stringByAppendingPathComponent:name];
 }
-static NSArray *OperationSources(void) {
-    NSData *data = [NSData dataWithContentsOfFile:OperationPath(@"operation-lease.json")];
-    id lease = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+static NSArray *OperationSourcesFromLease(id lease, double now, BOOL (^alive)(int)) {
     if (![lease isKindOfClass:NSDictionary.class]) return @[];
-    double age = NSDate.date.timeIntervalSince1970 - [lease[@"time"] doubleValue];
+    double age = now - [lease[@"time"] doubleValue];
     int pid = [lease[@"pid"] intValue];
-    if (pid <= 0 || age < 0 || age >= 3 || kill(pid, 0) != 0 || ![lease[@"sources"] isKindOfClass:NSArray.class]) return @[];
+    if (pid <= 0 || !isfinite(age) || age < 0 || age >= 3 || !alive(pid) || ![lease[@"sources"] isKindOfClass:NSArray.class]) return @[];
     NSMutableArray *out = [NSMutableArray array];
     for (id s in lease[@"sources"]) {
         if (![s isKindOfClass:NSDictionary.class] || ![s[@"kind"] isEqual:@"hid"] || ![s[@"device"] isKindOfClass:NSString.class] ||
             ![s[@"page"] isKindOfClass:NSNumber.class] || ![s[@"usage"] isKindOfClass:NSNumber.class] || ![s[@"vendor"] isKindOfClass:NSNumber.class] || ![s[@"product"] isKindOfClass:NSNumber.class] ||
+            ![s[@"registryID"] isKindOfClass:NSNumber.class] || [s[@"registryID"] unsignedLongLongValue] == 0 ||
             [s[@"page"] intValue] != 12 || [s[@"usage"] intValue] <= 0 || [s[@"usage"] intValue] > 65535 || [s[@"vendor"] intValue] <= 0 || [s[@"product"] intValue] <= 0) continue;
         [out addObject:s];
     }
     return out;
+}
+static NSArray *OperationSources(void) {
+    NSData *data = [NSData dataWithContentsOfFile:OperationPath(@"operation-lease.json")];
+    id lease = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    return OperationSourcesFromLease(lease, NSDate.date.timeIntervalSince1970, ^BOOL(int pid) { return kill(pid, 0) == 0; });
+}
+static BOOL OperationSourceMatchesService(NSDictionary *source, id vendor, id product, NSArray *ancestry) {
+    NSNumber *registry = source[@"registryID"];
+    return [registry isKindOfClass:NSNumber.class] && registry.unsignedLongLongValue > 0 &&
+        [source[@"vendor"] isEqual:vendor] && [source[@"product"] isEqual:product] && [ancestry containsObject:registry];
+}
+static NSArray *ServiceRegistryAncestry(IOHIDServiceClientRef service) {
+    id registry = (__bridge id)IOHIDServiceClientGetRegistryID(service);
+    if (![registry isKindOfClass:NSNumber.class] || [registry unsignedLongLongValue] == 0) return @[];
+    io_registry_entry_t entry = IOServiceGetMatchingService(kIOMainPortDefault, IORegistryEntryIDMatching([registry unsignedLongLongValue]));
+    NSMutableArray *ancestry = [NSMutableArray array];
+    // ---------- 绑定真实 HID 父设备 ----------
+    // EventService 不一定暴露 SerialNumber；沿真实父链确认租约设备，不能按同型号兜底。
+    for (NSUInteger depth = 0; entry && depth < 32; depth++) {
+        uint64_t identifier = 0;
+        if (IORegistryEntryGetRegistryEntryID(entry, &identifier) != KERN_SUCCESS) break;
+        if (IOObjectConformsTo(entry, "IOHIDDevice")) [ancestry addObject:@(identifier)];
+        io_registry_entry_t parent = 0;
+        kern_return_t result = IORegistryEntryGetParentEntry(entry, kIOServicePlane, &parent);
+        IOObjectRelease(entry); entry = result == KERN_SUCCESS ? parent : 0;
+    }
+    if (entry) IOObjectRelease(entry);
+    return ancestry;
+}
+static NSDictionary *OperationHealth(NSArray *verified, double timestamp) {
+    NSMutableArray *identities = [NSMutableArray array];
+    NSMutableDictionary *registries = [NSMutableDictionary dictionary];
+    for (NSDictionary *source in verified) {
+        NSString *identity = [NSString stringWithFormat:@"hid:%@:12:%@",source[@"device"],source[@"usage"]];
+        [identities addObject:identity]; registries[identity] = source[@"registryID"];
+    }
+    return @{@"time":@(timestamp),@"sources":identities,@"registries":registries};
 }
 static NSArray *RestoreOperations(id current, NSDictionary *owned) {
     if (![owned isKindOfClass:NSDictionary.class]) return nil;
@@ -143,9 +187,9 @@ static NSDictionary *Check(IOHIDEventSystemClientRef client, BOOL force) {
         for (NSDictionary *p in profiles) {
             if ([Property(service,@"VendorID") isEqual:p[@"vendorID"]] && [Property(service,@"ProductID") isEqual:p[@"productID"]]) { profile = p; break; }
         }
-        NSString *serial = Property(service,@"SerialNumber");
-        NSString *device = [NSString stringWithFormat:@"%@:%@:%@",Property(service,@"VendorID"),Property(service,@"ProductID"),[serial isKindOfClass:NSString.class] ? serial : @"model"];
-        NSArray *custom = [operationSources filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *s, NSDictionary *bindings) { (void)bindings; return [s[@"device"] isEqual:device]; }]];
+        NSArray *ancestry = operationSources.count ? ServiceRegistryAncestry(service) : @[];
+        id vendor = Property(service,@"VendorID"), product = Property(service,@"ProductID");
+        NSArray *custom = [operationSources filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *s, NSDictionary *bindings) { (void)bindings; return OperationSourceMatchesService(s, vendor, product, ancestry); }]];
         NSString *serviceKey = [(__bridge id)IOHIDServiceClientGetRegistryID(service) description];
         if (!serviceKey || (!profile && custom.count == 0 && !backups[serviceKey])) continue;
         matched++;
@@ -173,7 +217,7 @@ static NSDictionary *Check(IOHIDEventSystemClientRef client, BOOL force) {
         if ([Property(service,MapKey) isEqual:desired]) {
             verified++;
             if (owned.count == 0) [backups removeObjectForKey:serviceKey];
-            for (NSDictionary *s in custom) [operationVerified addObject:[NSString stringWithFormat:@"hid:%@:12:%@",s[@"device"],s[@"usage"]]];
+            [operationVerified addObjectsFromArray:custom];
         }
     }
     if (operationSources.count || backupJSON) {
@@ -181,7 +225,7 @@ static NSDictionary *Check(IOHIDEventSystemClientRef client, BOOL force) {
         [recovery writeToFile:OperationPath(@"operation-mapping-backup.json") atomically:YES];
     }
     if (operationSources.count) {
-        NSData *health = [NSJSONSerialization dataWithJSONObject:@{@"time":@(NSDate.date.timeIntervalSince1970),@"sources":operationVerified} options:0 error:nil];
+        NSData *health = [NSJSONSerialization dataWithJSONObject:OperationHealth(operationVerified, NSDate.date.timeIntervalSince1970) options:0 error:nil];
         [health writeToFile:OperationPath(@"operation-health.json") atomically:YES];
     } else [NSFileManager.defaultManager removeItemAtPath:OperationPath(@"operation-health.json") error:nil];
     return @{@"state": matched == 0 ? @"waiting_for_headset" : verified == matched ? @"verified" : @"error",
@@ -222,7 +266,30 @@ static void SelfTest(void) {
     Expect([RestoreOperations(@[otherTool], owned) isEqual:@[otherTool]], @"Another tool's later mapping is not overwritten");
     Expect(RestoreOperations(@[correct], (id)NSNull.null) == nil, @"Malformed recovery refused");
     Expect(RestoreOperations((id)NSNull.null, @{}) == nil, @"Malformed native property is not treated as an empty baseline");
-    puts("PASS: hold takeover, restore, custom preservation, missing, empty, incorrect, duplicate, unrelated-preservation, idempotence, malformed input");
+    // ---------- 租约身份与过期恢复 ----------
+    NSDictionary *bound = @{@"kind":@"hid",@"device":@"13058:4827:serial-A",@"page":@12,@"usage":@0xCD,@"vendor":@13058,@"product":@4827,@"registryID":@101};
+    NSDictionary *lease = @{@"pid":@42,@"time":@100,@"sources":@[bound]};
+    BOOL (^alive)(int) = ^BOOL(int pid) { return pid == 42; };
+    Expect([OperationSourcesFromLease(lease, 102.9, alive) isEqual:@[bound]], @"Fresh lease retains configured identity and current registry");
+    Expect(OperationSourceMatchesService(bound, @13058, @4827, @[@301,@201,@101]), @"Real device ancestor matches even when service has no serial property");
+    Expect(!OperationSourceMatchesService(bound, @13058, @4827, @[@302,@202]), @"Same model on another physical device cannot match");
+    Expect(!OperationSourceMatchesService(bound, @13058, @4827, @[]), @"Missing registry ancestry cannot take over");
+    Expect(!OperationSourceMatchesService(bound, @13058, @9999, @[@101]), @"Registry does not bypass model verification");
+    NSDictionary *health = OperationHealth(@[bound], 102);
+    NSString *identity = @"hid:13058:4827:serial-A:12:205";
+    Expect([health[@"sources"] isEqual:@[identity]] && [health[@"registries"][identity] isEqual:@101], @"Health retains configured identity and acknowledges its verified device registry");
+    Expect([OperationHealth(@[], 102)[@"registries"] count] == 0, @"No unverified registry is acknowledged");
+    Expect(OperationSourcesFromLease(lease, 103, alive).count == 0, @"Expired lease stops custom takeover");
+    Expect(OperationSourcesFromLease(lease, 99, alive).count == 0, @"Future lease cannot take over");
+    Expect(OperationSourcesFromLease(lease, 101, ^BOOL(int pid) { (void)pid; return NO; }).count == 0, @"Retired app cannot retain takeover");
+    NSMutableDictionary *unknown = [bound mutableCopy]; [unknown removeObjectForKey:@"registryID"];
+    Expect(OperationSourcesFromLease(@{@"pid":@42,@"time":@100,@"sources":@[unknown]}, 101, alive).count == 0, @"Legacy source without a bound registry stays native");
+    unknown[@"registryID"] = @0;
+    Expect(OperationSourcesFromLease(@{@"pid":@42,@"time":@100,@"sources":@[unknown]}, 101, alive).count == 0, @"Unknown device registry stays native");
+    NSMutableDictionary *boundOwned = [NSMutableDictionary dictionary];
+    NSArray *boundTaken = TakeOperations(@[correct,custom], OperationSourcesFromLease(lease, 102, alive), boundOwned);
+    Expect([RestoreOperations(boundTaken, boundOwned) isEqual:@[custom,correct]], @"Expired bound takeover restores only its original source");
+    puts("PASS: registry-bound source identity, same-model isolation, missing ancestry, lease expiry/retirement, hold takeover, restore, custom preservation, idempotence, malformed input");
 }
 int main(void) {
     @autoreleasepool {

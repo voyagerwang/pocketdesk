@@ -1,5 +1,5 @@
 #!/bin/zsh
-# [INPUT]: 依赖 Swift/AppKit/WebKit、Sources、Web 和 Resources/Info.plist、AppIcon.icns。 [OUTPUT]: 安装并启动 ~/Applications/PocketDesk.app。 [POS]: scripts 的本机打包入口。 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+# [INPUT]: 依赖 Swift/AppKit/WebKit、Sources、Web、Resources/Info.plist、AppIcon.icns 与米家 JSON 桥接、公开规格网络缓存、最小设备能力策略、一次温湿度读取及可选依赖安装脚本。 [OUTPUT]: 安装并启动 ~/Applications/PocketDesk.app。 [POS]: scripts 的本机打包入口。 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -34,6 +34,12 @@ copy_tree() {
   cp -R "$src" "$dst"
 }
 copy_tree "$ROOT_DIR/Web" "$BUILD_APP/Contents/Resources/Web"
+mkdir -p "$BUILD_APP/Contents/Resources/Mijia"
+cp "$ROOT_DIR/scripts/mijia-bridge.py" "$BUILD_APP/Contents/Resources/Mijia/mijia-bridge.py"
+cp "$ROOT_DIR/scripts/mijia-network.py" "$BUILD_APP/Contents/Resources/Mijia/mijia-network.py"
+cp "$ROOT_DIR/scripts/mijia-policy.py" "$BUILD_APP/Contents/Resources/Mijia/mijia-policy.py"
+cp "$ROOT_DIR/scripts/mijia-sensor.py" "$BUILD_APP/Contents/Resources/Mijia/mijia-sensor.py"
+cp "$ROOT_DIR/scripts/setup-mijia.sh" "$BUILD_APP/Contents/Resources/Mijia/setup-mijia.sh"
 # 固定 designated requirement，避免每次本地重编译都因 CDHash 改变而丢失辅助功能授权。
 # 这是本机开发签名策略；正式分发时应替换为 Apple Developer ID 签名。
 mkdir -p "$BUILD_APP/Contents/Helpers"

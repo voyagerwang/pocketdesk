@@ -1,6 +1,6 @@
 """
 [INPUT]: 依赖 Playwright、Pillow 与本地 Web 文件，以模拟 HTTP/WS 隔离真实桌面。
-[OUTPUT]: 切换取消排队快照不冻结同步、Android 长按输入框保持原生焦点且不靠额外粘贴按钮、回车提交清空、历史存储异常不阻断收尾、旧 IME 迟到事件隔离、启动时已有正文同步、电脑改稿合并回执回填首页与全屏输入、暂停后删空保持 ID、电脑原文不反填、已有草稿聚焦/全屏带入全文同步、候选完成失焦保留、点击/滚动合一与放大精确落点、触控板激活隔离与右缘防抖、锁屏/断屏恢复与重认证序号、原生输入法入口与自绘键盘移除、快捷切屏画面匹配、滚动入口、小屏布局、始终可见输入栏、模拟键盘视口偏移/缩小与首页隔离、首页/全屏 IME 重建、失焦探针取消与首页/全屏失败保留与原 ID 重试、全屏操作回归断言与 /tmp 下的浏览器截图。
+[OUTPUT]: 原生回车/IME换行单次提交与候选保护、失败原ID重试，小窗真实双触点缩放/平移与持久化、切换取消排队快照不冻结同步、Android 长按输入框保持原生焦点且不靠额外粘贴按钮、回车提交清空、历史存储异常不阻断收尾、旧 IME 迟到事件隔离、启动时已有正文同步、电脑改稿合并回执回填首页与全屏输入、暂停后删空保持 ID、电脑原文不反填、已有草稿聚焦/全屏带入全文同步、候选完成失焦保留、点击/滚动合一与放大精确落点、触控板激活隔离与右缘防抖、锁屏/断屏恢复与重认证序号、原生输入法入口与自绘键盘移除、快捷切屏画面匹配、滚动入口、小屏布局、始终可见输入栏、模拟键盘视口偏移/缩小与首页隔离、首页/全屏 IME 重建、失焦探针取消与首页/全屏失败保留与原 ID 重试、全屏操作回归断言与 /tmp 下的浏览器截图。
 [POS]: tests 的浏览器集成验证；手机软键盘和实际捕获性能仍需真机验证。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -233,6 +233,35 @@ with sync_playwright() as p:
     page.evaluate('exitPadMode()')
     page.locator('#screen-open').click()
     page.locator('#screen-image').wait_for(state='visible')
+    # 真实双触点经浏览器命中测试与 Pointer Events 进入小窗，不能只测手势方法。
+    touch_session = page.context.new_cdp_session(page)
+    def pinch_window(factor):
+        box = page.locator('#screen-view').bounding_box()
+        cx, cy = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
+        spread = box['width'] * .18
+        def points(distance):
+            return [{'id': 1, 'x': cx - distance, 'y': cy}, {'id': 2, 'x': cx + distance, 'y': cy}]
+        touch_session.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': points(spread)[:1]})
+        touch_session.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': points(spread)})
+        for step in range(1, 5):
+            touch_session.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': points(spread * (1 + (factor - 1) * step / 4))})
+        touch_session.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': points(spread * factor)[:1]})
+        touch_session.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
+        page.wait_for_timeout(50)
+        after = page.locator('#screen-view').bounding_box()
+        assert abs(after['width'] - box['width'] * factor) < 2, (box, after, factor)
+        assert abs(after['height'] - after['width'] * 9 / 16) < 1, after
+        saved = page.evaluate("JSON.parse(localStorage.getItem('voicedeck.pip'))")
+        assert abs(saved['w'] - after['width']) < 1, (saved, after)
+    pip_controls_start = page.evaluate('sentControls.length')
+    for width, height in [(320, 568), (390, 844), (844, 390)]:
+        page.set_viewport_size({'width': width, 'height': height})
+        page.wait_for_timeout(50)
+        pinch_window(.8)
+        pinch_window(1.1)
+    assert not page.evaluate("sentControls.slice(%d).some(m => ['pointer','move','click','down','scroll'].includes(m.t))" % pip_controls_start)
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.wait_for_timeout(50)
     pip_displays = page.locator('#screen-pip-displays')
     assert pip_displays.locator('button').all_text_contents() == ['屏幕 1', '屏幕 2']
     pip_displays.get_by_role('button', name='屏幕 2').click()
@@ -290,6 +319,57 @@ with sync_playwright() as p:
     page.locator('#screen-send').click()
     page.wait_for_function('textEl.value === "" && document.querySelector("#screen-compose").hidden')
     assert writes[-1]['text'] == '全屏已有正文候选确认' and writes[-1]['submit']
+    # 全屏原生回车和仅派发输入事件的IME都提交整稿，不把已有换行删掉。
+    for action in ['keydown', 'insertLineBreak', 'insertParagraph', 'uncancelable', 'input-only']:
+        page.locator('#kb-toggle').click()
+        raw = '第一行\n豆包听写最后一句' + action
+        page.locator('#kb-proxy').fill(raw)
+        submissions = sum(item.get('submit', False) for item in writes)
+        if action == 'keydown':
+            page.locator('#kb-proxy').press('Enter')
+        else:
+            page.evaluate("""action => {
+                const el = kbProxy;
+                el.setSelectionRange(el.value.length, el.value.length);
+                el.dispatchEvent(new KeyboardEvent('keydown', {key:'Unidentified',keyCode:229,bubbles:true}));
+                const type = action === 'insertParagraph' ? 'insertParagraph' : 'insertLineBreak';
+                if (action !== 'input-only') el.dispatchEvent(new InputEvent('beforeinput', {inputType:type,bubbles:true,cancelable:action !== 'uncancelable'}));
+                if (action === 'uncancelable' || action === 'input-only') {
+                    el.value += '\\n'; el.setSelectionRange(el.value.length, el.value.length);
+                    el.dispatchEvent(new InputEvent('input', {inputType:type,bubbles:true}));
+                }
+            }""", action)
+        page.wait_for_function('textEl.value === "" && document.querySelector("#screen-compose").hidden')
+        assert sum(item.get('submit', False) for item in writes) == submissions + 1, (action, writes)
+        assert writes[-1]['text'] == raw and writes[-1]['submit'], (action, writes[-1])
+        assert writes[-1]['context'] == 'editor-1'
+    # Shift+Enter保留多行；候选确认不能发出提交。
+    page.locator('#kb-toggle').click()
+    page.locator('#kb-proxy').fill('保留换行')
+    submissions = sum(item.get('submit', False) for item in writes)
+    page.locator('#kb-proxy').press('Shift+Enter')
+    assert page.locator('#kb-proxy').input_value() == '保留换行\n'
+    page.evaluate("""() => {
+        kbProxy.dispatchEvent(new CompositionEvent('compositionstart'));
+        kbProxy.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',keyCode:229,isComposing:true,bubbles:true}));
+        kbProxy.dispatchEvent(new CompositionEvent('compositionend'));
+    }""")
+    page.wait_for_timeout(150)
+    assert sum(item.get('submit', False) for item in writes) == submissions
+    # 回车失败仍保留正文和草稿ID，下一次明确回车仅重试一次。
+    page.locator('#kb-proxy').fill('回车失败保留听写')
+    page.wait_for_timeout(150)
+    return_draft_id = writes[-1]['draftId']
+    flags['fail_submit'] = True
+    page.locator('#kb-proxy').press('Enter')
+    page.wait_for_function('!submittingDraft && livePaused')
+    assert page.locator('#kb-proxy').input_value() == '回车失败保留听写'
+    assert not page.locator('#screen-compose').is_hidden()
+    assert writes[-1]['draftId'] == return_draft_id and writes[-1]['submit']
+    flags['fail_submit'] = False
+    page.locator('#kb-proxy').press('Enter')
+    page.wait_for_function('textEl.value === "" && document.querySelector("#screen-compose").hidden')
+    assert writes[-1]['draftId'] == return_draft_id and writes[-1]['retry'] and writes[-1]['submit']
     # 可见编辑与独立提交结果。
     page.locator('#kb-toggle').click()
     assert page.locator('#screen-input-expand').count() == 0
@@ -326,7 +406,7 @@ with sync_playwright() as p:
         assert_editor_in_view()
     page.evaluate("for (const key of ['height','offsetTop','width','offsetLeft']) delete visualViewport[key]; visualViewport.dispatchEvent(new Event('resize'))")
     page.wait_for_timeout(100)
-    assert page.locator('#kb-proxy').get_attribute('enterkeyhint') == 'enter'
+    assert page.locator('#kb-proxy').get_attribute('enterkeyhint') == 'send'
     page.locator('#kb-proxy').fill('全屏清空测试')
     page.evaluate('window.oldProxy = kbProxy')
     page.locator('#kb-proxy').fill('')

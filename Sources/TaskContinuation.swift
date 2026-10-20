@@ -1,4 +1,9 @@
-/** 失败后的短句按上下文分为补充、新任务或需澄清。此判断无工具执行权。 */
+/**
+ * [INPUT]: 依赖 Foundation、AgentTask 的历史消息与任务状态、ModelClient 的只分类请求。
+ * [OUTPUT]: 最近30分钟的失败/待补充/接收未核实任务可按新一句归为继续、新任务或需要澄清；已完成任务不自动续接。
+ * [POS]: TaskService.send 的输入关系判断；只决定上下文归属，不执行工具，实际补充与派单由服务层核验。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 import Foundation
 
 enum TaskContinuation {

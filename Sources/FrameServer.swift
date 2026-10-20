@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Network WebSocket、Auth 与 ScreenStream 的独立 JPEG 帧。
- * [OUTPUT]: 提供鉴权画面服务、结构化捕获状态/错误与帧会话代际；每客户端仅一帧在途，呈现 ACK 后发送最新帧。
+ * [OUTPUT]: 所有连接（含回环）验证配对凭证后提供画面、结构化捕获状态/错误与帧会话代际；每客户端仅一帧在途，呈现 ACK 后发送最新帧。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的画面传输边界；大包不经过控制连接，超时关闭而不堆积 TCP 旧画面。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -66,7 +66,7 @@ final class FrameServer: @unchecked Sendable {
             guard let self, self.clients[c.id] != nil else { return }
             if let data, data.count < 4096, let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 if c.key == nil {
-                    guard body["t"] as? String == "watch", let token = body["token"] as? String, (Auth.verify(token: token) || isLocalPeer(c.connection)),
+                    guard body["t"] as? String == "watch", let token = body["token"] as? String, Auth.verify(token: token),
                           let display = body["display"] as? UInt32 else { self.drop(c.id); return }
                     self.watch(c, display: display, width: body["width"] as? Int == 1920 ? 1920 : 1280)
                 } else if body["t"] as? String == "presented", let seq = body["frameId"] as? UInt64, seq == c.inFlight {

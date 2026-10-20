@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 AppKit 的 NSWorkspace 与 Foundation；消费工作台目标配置并扫描标准应用目录解析本地化名字。
- * [OUTPUT]: 对外提供 AppOperator.resolve（应用名 → 已安装 .app 包路径+显示名），准确名称优先、重复口述名称回退与 COE→Cue 别名；Codex 按真实包身份识别安装名 ChatGPT；AppOperator.open 启动 .app。
+ * [OUTPUT]: 对外提供 AppOperator.resolve（应用名 → 已安装 .app 包路径+显示名），exactOnly 仅接受准确配置名、包身份与已有别名；准确名称优先、重复口述名称回退与 COE→Cue 别名；Codex 按真实包身份识别安装名 ChatGPT；AppOperator.open 启动 .app。
  * [POS]: Sources 的「打开应用」执行器（路径 B）；与 BrowserOperator（路径 A 开网页）对称，
  *        明确打开请求经执行时租约核验后调用，不重复弹确认。
  *        tt-bridge（CC BY-NC）只覆盖浏览器、不启动应用，因此本能力由原生 API 自研，未嵌入其代码。
@@ -86,7 +86,7 @@ enum AppOperator {
         return result
     }
 
-    static func resolve(_ name: String, configured: [TargetConfig]) -> (display: String, path: String)? {
+    static func resolve(_ name: String, configured: [TargetConfig], exactOnly: Bool = false) -> (display: String, path: String)? {
         for query in spokenNameCandidates(name) where !query.isEmpty {
             let configuredMatches = configured.filter { normalized($0.name) == query || normalized($0.id) == query }
             if configuredMatches.count > 1 { return nil }
@@ -127,7 +127,7 @@ enum AppOperator {
                     let partial = candidates.contains { $0.contains(query) }
                     let aliasPartial = candidates.contains { candidate in keywords.dropFirst().contains { candidate.contains($0) } }
                     let score = exact ? 4 : aliasExact ? 3 : partial ? 2 : aliasPartial ? 1 : 0
-                    if score > 0 { matches[appURL.path] = (display, score) }
+                    if score >= (exactOnly ? 3 : 1) { matches[appURL.path] = (display, score) }
                 }
             }
             guard let score = matches.values.map({ $0.score }).max() else { continue }

@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 CoreAudio/AudioToolbox 的输出设备、音量属性与原生变化通知。
+ * [OUTPUT]: 提供当前/可用输出设备及音量读写，监听回调按代际回到主线程，切设备后忽略旧通知。
+ * [POS]: 耳机音量手势与设备设置共享的系统音频适配层，不解释按键动作、不启动语音。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 import CoreAudio
 import AudioToolbox
 import Foundation

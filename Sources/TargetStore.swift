@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 FileManager/Codable 与 AppKit 的 NSWorkspace；消费 Models 的 TargetConfig/ShortcutConfig/ShortcutKeys。
- * [OUTPUT]: 对外提供 TargetStore（targets.json/shortcuts.json 读写、目标解析、appURL 定位、自定义图标路径与孤儿图标清理、旧 shortcuts.json 到 hotkey 语义串的迁移与启动时别名归一化回写）。
+ * [OUTPUT]: 对外提供 TargetStore（targets.json/shortcuts.json 读写、目标解析、appURL 定位、自定义图标路径与孤儿图标清理、旧 shortcuts.json 迁移）；主题保存后发布 themeDidChange，供原生窗口只读跟随。
  * [POS]: Sources 的配置持久化层；Server 把它暴露为 /api/targets 等端点，InputExecutor 用 resolve/appURL 定位应用。
  * [PROTOCOL]: save 对只有 path 的目标按路径反查回填 bundleID（历史遗留的身份缺口在每次保存时自愈）；变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -118,6 +118,7 @@ final class TargetStore {
 
     // MARK: 主题（classic ↔ muji；电脑端控制台是唯一控制点，手机页经 /api/status 跟随）
     static let themeFile = supportDirectory.appendingPathComponent("theme")
+    static let themeDidChange = Notification.Name("PocketDesk.themeDidChange")
 
     // 默认经典蓝：Muji 作为可选的克制主题保留。
     private(set) var theme: String = "classic"
@@ -134,6 +135,7 @@ final class TargetStore {
         theme = name
         try? FileManager.default.createDirectory(at: TargetStore.supportDirectory, withIntermediateDirectories: true)
         try? name.write(to: TargetStore.themeFile, atomically: true, encoding: .utf8)
+        NotificationCenter.default.post(name: Self.themeDidChange, object: self, userInfo: ["theme": name])
     }
 }
 

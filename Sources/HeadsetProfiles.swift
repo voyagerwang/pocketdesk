@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖本机配对配置与已识别的耳机 VendorID/ProductID；Foundation 提供原子文件保存与设备学习时序。
+ * [OUTPUT]: 提供已配对型号、长按/脉冲能力及标准按键学习状态；缺少配置时保留 Quark2，未知设备不会自动获得映射接管权。
+ * [POS]: Sources 的耳机信任与能力清单，被原始监听、设置向导和独立映射守护共同消费，不执行录音或系统按键。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 import Foundation
 
 struct HeadsetProfile: Codable, Equatable {

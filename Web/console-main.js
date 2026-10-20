@@ -1,9 +1,10 @@
 /**
- * [INPUT]: 依赖 console.html 的 DOM、内联 applyTheme 与状态/设备/接收者/目标应用/快捷键 HTTP 接口。
- * [OUTPUT]: 控制台设备与接收者管理、目标应用和快捷键编辑、原有连接二维码与最近动作轮询；保留 refresh/post 与共享页面状态。
- * [POS]: Web 的电脑控制台主业务经典脚本；主题先加载，模型及本机管理事务由后续独立脚本维护，不加 IIFE 以保留共享作用域。
+ * [INPUT]: 依赖 console.html 的 DOM 与内联 applyTheme，消费 console-connection.js 的连接渲染入口及状态、设备、接收者、目标应用、快捷键 HTTP 接口。
+ * [OUTPUT]: 控制台设备与接收者管理、目标应用和快捷键编辑、最近动作轮询；保留 refresh/post 与页面状态的经典脚本全局契约。
+ * [POS]: Web 的电脑控制台主业务入口；主题和连接模块先加载，模型与本机管理事务分别交给后续 console-agent.js、console-actions.js，不包 IIFE 以保持共享作用域。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
+
 const $ = id => document.getElementById(id);
 let state = { targets: [], recipients: [], platform: 'macOS', status: null };
 let configRevision = 0, savingTargets = false, savingShortcuts = false;
@@ -13,15 +14,6 @@ let iconTargetId = null;
 let lastActivityLog = [];
 
 function esc(text) { const div = document.createElement('div'); div.textContent = text ?? ''; return div.innerHTML; }
-
-// 地址一律做成可点的链接：手抄 IP 和端口既容易错也没有必要。没有地址时退回纯文本提示，
-// 并摘掉 href，免得留下一个点开还在原地的死链。
-function setLink(id, url, emptyText) {
-  const el = $(id);
-  el.textContent = url ? url.split('?')[0] : emptyText;
-  if (url) el.href = url; else el.removeAttribute('href');
-  el.classList.toggle('is-empty', !url);
-}
 
 async function post(url, body) {
   const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -91,7 +83,10 @@ async function refresh() {
   const revision = configRevision;
   refreshDevices();
   try {
-    const status = await fetch('/api/status').then(r => r.json());
+    const response = await fetch('/api/status', { cache: 'no-store' });
+    if (!response.ok) throw new Error('无法读取连接状态');
+    const status = await response.json();
+    window.PocketDeskConsoleConnection.render(status);
     state.status = status;
     $('conn').textContent = '已就绪'; $('conn').classList.add('ready');
     // 主题以服务端为准：其他途径改动后 3 秒内自动校正（开关写入请求进行中则跳过避免回跳）。
@@ -119,20 +114,10 @@ async function refresh() {
       lastActivityLog = incomingLog;
       renderActivity(incomingLog);
     }
-    const workspaceURL = status.workspaceURL || status.ipURL;
-    setLink('ipUrl', workspaceURL, '未找到局域网地址，请确认 Wi-Fi 已连接。');
-    if (workspaceURL && ($('qr-ip').dataset.url !== workspaceURL || $('qr-ip').classList.contains('error'))) {
-      $('qr-ip').dataset.url = workspaceURL;
-      $('qr-ip').classList.remove('error');
-      $('qr-ip').src = '/api/qr?type=ip&t=' + Date.now();
-    }
-    // 手机在线状态：标题行右侧的状态徽章（与顶部 #conn 同一 pill 范式），只有"已连接"才点亮。
-    const seen = status.phoneLastSeen * 1000;
-    const phoneState = $('phoneState');
-    if (!seen) { phoneState.textContent = '等待手机连接…'; phoneState.className = 'pill'; }
-    else if (Date.now() - seen < 15000) { phoneState.textContent = '手机已连接'; phoneState.className = 'pill ready'; }
-    else { phoneState.textContent = `手机最后连接于 ${Math.round((Date.now() - seen) / 60000)} 分钟前`; phoneState.className = 'pill'; }
-  } catch { $('conn').textContent = '服务未响应'; }
+  } catch {
+    window.PocketDeskConsoleConnection.unavailable();
+    $('conn').textContent = '服务未响应'; $('conn').classList.remove('ready');
+  }
 }
 
 let dragFrom = null;   // { key, index }：key 区分不同列表，免得跨列表误判落点
@@ -725,5 +710,5 @@ function renderActivity(log) {
   }).join('');
 }
 
-$('qr-ip').onerror = () => { $('qr-ip').classList.add('error'); };
 refresh(); setInterval(refresh, 3000);
+

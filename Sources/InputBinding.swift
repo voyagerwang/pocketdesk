@@ -1,10 +1,11 @@
 /**
- * [INPUT]: 依赖 Util 前台应用观测及 InputFocus 应用/系统级焦点元素，不遍历或移动焦点。
+ * [INPUT]: 依赖 InputFocus 共享键盘应用归属及应用/系统级焦点元素，不遍历或移动焦点；窗口层序不授权建立、续写或附件点击。
  * [OUTPUT]: 提供 InputBinding 的短期上下文令牌、完整写入前校验、当前页面点击范围、附件粘贴期间的目标进程校验、
  *           不可伪造的绑定身份与只读快照（原 PID、元素/页面范围、最后确认文本边界）、以及最近一次校验失败的原因；
  *           Chromium AX 对象变化时以当前聚焦窗口的 WebArea 重新核验；另为图片直发提供应用级兜底绑定 establishRelaxed（白板/画布无输入框目标，validate 届时只核验前台进程）。
  * [POS]: Sources 的全屏输入目标边界；HTTP 建立上下文，InputExecutor 每次写入前验证并据失效原因分级草稿状态。
- * [PROTOCOL]: validate 在切应用/编辑器重建导致 AX 元素失效时自愈（沿用原令牌更新元素引用，避免可恢复中断误判 needs-user-focus）；establish/establishRelaxed 的绑定进程跟随键盘焦点归属（focusedApplicationPID），读不出焦点才退回窗口层序——半激活态下按层序绑会绑错应用；变更时更新此头部，然后检查 CLAUDE.md
+ * [NOTES]: 建立、续写和附件点击同用共享键盘归属；编辑器重建时仅在归属仍明确成立后刷新元素，未知或反证不由窗口层序补证。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 
@@ -30,14 +31,10 @@ final class InputBinding {
         InputFocus.focusedElement(pid: pid)
     }
 
-    /// 绑定目标进程：键盘焦点归属的应用优先（键入会落到谁就绑谁），读不出焦点才退回
-    /// 窗口层序的最上层应用。后台 agent 激活 Electron 应用的半激活态（窗口在最上、活跃
-    /// 应用是别人）下按层序绑会把 A 应用的元素当靶子、键却打进了 B 应用。
+    /// 建立和续写使用同一键盘归属证据；未知或交叉证据冲突时不能按窗口最上层放行。
     private static func bindingTargetApp() -> NSRunningApplication? {
-        if let focusPID = InputFocus.focusedApplicationPID() {
-            return NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == focusPID })
-        }
-        return Util.frontmostApp()
+        guard let focusPID = InputFocus.focusedApplicationPID() else { return nil }
+        return NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == focusPID })
     }
 
     func establish() -> [String: Any] {
@@ -103,7 +100,7 @@ final class InputBinding {
         lock.lock(); defer { lock.unlock() }
         guard var b = binding, b.token == token else { lastInvalidReason = "绑定令牌已失效（会话已重建）"; return false }
         guard ProcessInfo.processInfo.systemUptime - b.touched < 600 else { lastInvalidReason = "绑定已过期"; return false }
-        guard Util.frontmostApp()?.processIdentifier == b.pid else { lastInvalidReason = "目标应用已不在前台"; return false }
+        guard InputFocus.focusedApplicationPID() == b.pid else { lastInvalidReason = "目标应用的键盘归属已变化或无法核实"; return false }
         if let element = b.element {
             // 正常路径：原 AX 元素对象仍指向同一输入框。
             if let current = focused(b.pid), CFEqual(element, current) {
@@ -131,7 +128,7 @@ final class InputBinding {
         lock.lock(); defer { lock.unlock() }
         guard let b = binding, b.token == token else { lastInvalidReason = "绑定令牌已失效（会话已重建）"; return false }
         guard ProcessInfo.processInfo.systemUptime - b.touched < 600 else { lastInvalidReason = "绑定已过期"; return false }
-        guard Util.frontmostApp()?.processIdentifier == b.pid else { lastInvalidReason = "目标应用已不在前台"; return false }
+        guard InputFocus.focusedApplicationPID() == b.pid else { lastInvalidReason = "目标应用的键盘归属已变化或无法核实"; return false }
         binding?.touched = ProcessInfo.processInfo.systemUptime
         lastInvalidReason = ""
         return true
@@ -165,7 +162,7 @@ final class InputBinding {
     func captureClickAnchor(_ token: String, point: CGPoint) -> InputFocus.EditableAnchor? {
         lock.lock(); defer { lock.unlock() }
         guard let b = binding, b.token == token, ProcessInfo.processInfo.systemUptime - b.touched < 600,
-              Util.frontmostApp()?.processIdentifier == b.pid else { return nil }
+              InputFocus.focusedApplicationPID() == b.pid else { return nil }
         let anchor = b.clickScope.flatMap { InputFocus.captureBoundAnchor(pid: b.pid, point: point, scope: $0) }
             ?? InputFocus.captureCurrentWebAnchor(pid: b.pid, point: point)
         guard let anchor else { return nil }

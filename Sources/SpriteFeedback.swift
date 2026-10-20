@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 与 AgentModels 的 AgentTask/TaskStatus；消费 SpriteSession 快照。
- * [OUTPUT]: 派单已交接/未核实用单行短回执并按任务时间退场，可见本次执行直接退场； 提供 SpriteFeedback 桌面反馈协调层：合并展示会话与任务事实（taskProvider 注入），
+ * [OUTPUT]: 派单已交接按任务时间退场，未核实保留核对入口；以 TaskRecovery 事实投影恢复主动作与首条用户目标，提供 SpriteFeedback 桌面反馈协调层：合并展示会话与任务事实（taskProvider 注入），
  *           仅恢复活动或本会话任务，以任务身份与修订跟踪最新问题，显式重选驱动唤醒；project 纯函数产出 ViewModel（明确交互阶段/原版表情 ID/阶段标题/正文/提交及活动任务忙碌态/历史轮次/连接状态）；自适应轮询（活动期 1s/静默期 5s）。
  * [POS]: Sources 桌面反馈的协调层；不执行工具、不修改任务状态机、不写任务存储；
  *        只读 TaskStore 事实（由 main.swift 注入 provider），UI 一律经主线程面板呈现。
@@ -31,7 +31,7 @@ final class SpriteFeedback {
         var displayText: String {
             switch phase {
             case .drafting: return draft
-            case .waiting, .succeeded, .handedOff, .failed, .abandoned: return answer ?? ""
+            case .waiting, .succeeded, .handedOff, .unconfirmed, .failed, .abandoned: return answer ?? ""
             default: return ""
             }
         }
@@ -48,6 +48,9 @@ final class SpriteFeedback {
         /// 本轮问题与回答。
         var question: String?
         var answer: String?
+        var recovery: TaskRecovery?
+        var recoveryAction: TaskRecovery.Action?
+        var recoverySummary = ""
         /// 状态行文案与忙碌动效。
         var statusLine = ""
         var busy = false
@@ -187,6 +190,11 @@ final class SpriteFeedback {
         viewModel.draft = session.draft
         viewModel.submitting = session.submitting
         viewModel.taskId = task?.id ?? session.lastTaskId ?? ""
+        viewModel.recovery = task.flatMap(TaskRecovery.forTask)
+        if let task, viewModel.recovery != nil {
+            viewModel.recoveryAction = TaskRecovery.action(for: task)
+            viewModel.recoverySummary = task.messages.first(where: { $0.role == .user })?.text ?? task.text
+        }
         viewModel.phoneConnected = session.lastReportAt == 0
             || now - session.lastReportAt <= phoneOfflineAfter
 
@@ -270,20 +278,24 @@ final class SpriteFeedback {
             viewModel.busy = true
             viewModel.emotion = "31"
         }
-        // 派单通知只展示一次短回执；按任务时间收起，轮询或重选不会重播。
-        // 旧版误归为 needsInput 的派单记录也不继续索要补充。
+        if let recovery = viewModel.recovery, session.draft.isEmpty, !session.submitting {
+            viewModel.statusLine = recovery.headline
+        }
+        // 已交接通知按任务时间收起；未核实保留事实与核对入口，不鼓励重复发送。
         if let task, !session.submitting, session.draft.isEmpty {
             let legacyUnconfirmed = task.status == .needsInput && task.appDispatchReceipt == nil
                 && task.messages.contains { $0.toolName == "dispatch_to_app" }
-            if viewModel.phase == .handedOff || viewModel.phase == .unconfirmed || legacyUnconfirmed {
-                let unconfirmed = viewModel.phase == .unconfirmed || legacyUnconfirmed
+            if viewModel.phase == .unconfirmed || legacyUnconfirmed {
+                viewModel.busy = false
+                viewModel.phase = .unconfirmed
+                viewModel.recovery = .init(kind: .unconfirmed)
+                viewModel.statusLine = "接收待核实"
+                viewModel.emotion = "02"
+            } else if viewModel.phase == .handedOff {
                 viewModel.answer = nil
                 viewModel.busy = false
-                viewModel.phase = unconfirmed ? .unconfirmed : .handedOff
-                viewModel.emotion = unconfirmed ? "02" : "19"
-                if unconfirmed { viewModel.statusLine = "已尝试发送，接收待核实" }
-                let lifetime: TimeInterval = unconfirmed ? 4 : 2
-                if task.appDispatchReceipt?.executionVisible == true || now - task.updatedAt >= lifetime {
+                viewModel.emotion = "19"
+                if task.appDispatchReceipt?.executionVisible == true || now - task.updatedAt >= 2 {
                     viewModel.phase = .idle
                     viewModel.statusLine = ""
                     viewModel.emotion = "02"

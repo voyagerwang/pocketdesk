@@ -1,19 +1,12 @@
 /**
- * [INPUT]: 依赖 app.js 的草稿/目标/历史与多图处理门闩、ComposeQueue、原生 IME、全屏输入区。
- * [OUTPUT]: 小精灵提交锁释放后再呈现接续回执，防止快速派单漏掉自动跟随； 展示回执绑定本次提交票据；接收者观察到前台身份变化时允许强制作废旧绑定（含未配置应用间切换）； 小精灵任务确认接收后写入统一发送历史，历史保存失败不影响发送收尾；小精灵甩送独立于桌面同步冻结，但复用发送锁；动作采集可略过输入静默等待，实际提交仍强制稳定门禁； 小精灵终态后直接派发新任务、待补充时续接；更新草稿驱动的球球表情；提供可见输入栏、手机全文同步与图文提交，电脑改稿合并回执同步回填手机；发送等待图片处理、补传完整批次并冻结附件编辑，失败保留草稿及附件；用户显式切换目标时保留内容并开启隔离的新草稿轮次。
- *           另提供 clearDraft（注册为 window.pocketdeskClearDraft）：发带 clear:true 的幂等请求，
- *           **先让电脑侧确认删净、成功后才清手机**——反过来的话一次没生效的删除就吃掉了用户草稿；
- *           文档类目标的豁免原因由服务端原样带回提示。
- *           收到可恢复中断（interrupted）时进入冻结态，只发只读探测（probe）等待原绑定重新成立，
- *           recoverable 后按公共前缀只补差量，needs-user-focus 就地提示“点一下电脑输入框”，**绝不重放正文**。
- * [POS]: 全屏切换主动取消的未发送快照不进入失败冻结；实际请求失败仍走只读恢复。
- *        Web 输入编排层；每次提交等待自己的完成结果，不用同步成功代替提交成功。
- *         kb-proxy 的 blur 区分“点屏定位导致的失焦”（window.pocketdeskScreenTapPending 命中即重聚焦、键盘保持）与真收起（返回键/Esc/关闭按钮，照常收起并交还布局权）；
- *         原生长按期间不改变焦点，主页残留焦点自愈延后到短按 pointerup，避免悬浮键盘不缩视口时打断系统粘贴菜单。
- *        发送入口只注册为 window.pocketdeskComposeSend；window.pocketdeskSend 归 pad.js
- *        （画面/指针指令），两者名字不可互换。
- *        安卓 Chrome 专属补丁（键盘残留焦点的再聚焦、内边距补聚焦、IME 卡死自愈）一律由
- *        androidInputPatch 收口：iOS 上同样的 blur→focus 会让听写把同一段字再落一遍。
+ * [INPUT]: 依赖app.js的目标、草稿、历史和多图门闩，ComposeQueue、原生IME与全屏输入区。
+ * [OUTPUT]: 首页/全屏共享草稿ID、全文/选区同步与图文提交；显式切目标保留内容并隔离旧轮次。
+ *           回车及IME换行动作统一提交，Shift+Enter换行，组合态只确认候选；失败保留正文、附件和原ID。
+ *           clearDraft先核验电脑删除再清手机；恢复仅发只读probe，确认原绑定后按公共前缀补差量。
+ *           小精灵独立任务提交、历史和草稿展示；回执绑定本次票据，在提交锁释放后呈现接续状态。
+ * [POS]: Web输入编排层；每次提交等待自己的结果，输入同步不能代替提交成功。
+ *        画面定位失焦与真正收键盘分流，长按不改焦点；安卓IME自愈由androidInputPatch限定。
+ *        发送只注册pocketdeskComposeSend；pad.js拥有pocketdeskSend，画面指令不能进入草稿提交。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 /* ---------- 草稿快照：通用应用持续实时同步，特殊远控才暂存 ---------- */
@@ -29,31 +22,23 @@ let liveTarget = null;
 let livePaused = false;
 let liveFailure = '';
 let submittingDraft = false;
-// 服务端只回结构化状态（active/interrupted/recoverable/needs-user-focus/committed），
-// 人话文案留在这一层。冻结态下**绝不重放正文**：恢复只能靠只读探测重新证明"还是原来那个输入位置"。
+// 服务端给结构化状态，此层给人话；冻结恢复仅探测原绑定，不重放正文。
 let liveState = 'active';
 let liveProbing = false;
 let recoveryTimer = null;
 let recoveryAttempts = 0;
 let recoveryListenersAttached = false;
-// 探测在飞期间又被要求排期（探针自己续期、或又发生一次打断、或用户切回前台）时，
-// 不能丢掉这次请求：记下待排期与延迟，等本次探测收尾后补排。否则恢复链会在
-// 第一次探测结束后自己断掉——表现就是"弹窗关掉了手机也回前台了，但只有切一次应用才能恢复"。
+// 在途探测登记待续期请求，收尾补排；直接return会让恢复链断在首轮。
 let recoveryPending = false;
 let recoveryPendingDelay = 0;
 const RECOVERY_INTERVAL = 1500;
-// 低频探测有上限：连续失败这么多次就停下等用户事件（回到前台/重新聚焦），不再无休止轮询。
-// 20 × 1.5s ≈ 30s，覆盖"电脑侧弹窗自己关掉、手机侧什么都没发生"的常见时长，且始终有界。
+// 1.5秒探测最多20次，耗尽后等用户回前台或重新聚焦。
 const RECOVERY_MAX_ATTEMPTS = 20;
-
 // 最近一次用户输入时间：体感发送门禁用它判断“刚说完/还在输入”时不发。
 let lastInputAt = Date.now();
 function pocketdeskMarkInput() { lastInputAt = Date.now(); }
-
 let liveTimer = null;
-
-// 切换目标或失败后重选当前应用，都以电脑此刻的前台与输入位置开始新一轮；
-// 正文与附件仍保留，旧失败/执行状态及队列不得穿越目标。
+// 显式切换/失败重选以当前电脑位置开新轮，保留正文附件，隔离旧绑定与队列。
 function beginDraftForExplicitTarget(targetId, force = false) {
   if (!force && (!targetId || (targetId === selected && !livePaused))) return false;
   clearTimeout(liveTimer);
@@ -76,7 +61,6 @@ function currentTargetName() {
   if (selected === FRONTMOST_ID) return frontmostLabel || '当前前台';
   return (targets.find(item => item.id === selected) || { name: selected }).name;
 }
-
 // state: off / on / error
 function paintLive(state, note) {
   if (livePaused && liveFailure) { state = 'error'; note = liveFailure; }
@@ -92,7 +76,6 @@ function paintLive(state, note) {
   liveFlagEl.dataset.state = state;
   liveFlagEl.textContent = note || '';
 }
-
 const fullComposeOpen = () => !document.querySelector('#screen-compose').hidden;
 let inputContext = null;
 let contextPromise = null;
@@ -154,10 +137,7 @@ function pushLive(text, submit = false, withImage = false, retry = false, reconc
 }
 
 /* ---------- 跨弹窗安全恢复：只读探测，绝不重放正文 ---------- */
-// 触发来源：手机页面回到前台、窗口重新获得焦点、输入框重新聚焦，以及低频有界探针
-// （覆盖"电脑侧弹窗自己关掉了、手机侧什么都没发生"这一种）。
-// 任一事件都只发一个只读 probe 请求；只有服务端能证明"原目标应用与原编辑位置都回来了、
-// 电脑内容仍等于最后确认状态"时才解除冻结，随后按公共前缀只补差量。
+// 回前台、窗口/输入框聚焦和有界轮询均只读探测，确认原绑定后才补差量。
 function liveStateNote(state, fallback) {
   if (state === 'interrupted') return '输入焦点被弹窗或其它窗口打断，已冻结；回到原输入框会自动继续。';
   if (state === 'needs-user-focus') return '请在电脑上点一下原输入框即可继续；手机文字已保留。';
@@ -198,9 +178,7 @@ function stopRecovery() {
 function scheduleProbe(delay) {
   if (!livePaused) return;
   if (recoveryAttempts >= RECOVERY_MAX_ATTEMPTS) return;
-  // probeLive 内部续期时 liveProbing 仍为 true：这时不能直接 return（会把恢复链断掉），
-  // 也不能在这里再挂一个定时器（会和在飞请求叠加）。登记下来，由 probeLive 的
-  // finally 在 liveProbing 落地之后补排。
+  // 在途只登记续期，由finally补排；避免并发探测，也不丢下一轮。
   if (liveProbing) { recoveryPending = true; recoveryPendingDelay = delay; return; }
   clearTimeout(recoveryTimer);
   recoveryTimer = setTimeout(() => { probeLive(); }, delay);
@@ -255,23 +233,14 @@ function scheduleLive(reconcileOnFailure = false) {
     if (!livePaused && liveMode !== 'deferred' && !submittingDraft) pushLive(liveValue(), false, false, false, reconcileOnFailure).catch(() => {});
   }, LIVE_DEBOUNCE);
 }
-
 // 发送前立刻把最新全文推过去：不等 debounce，否则最后一个字可能还没同步就按了回车。
 function flushLive(text, submit = false, withImage = false, retry = false, reconcileOnFailure = false) {
   clearTimeout(liveTimer);
   return pushLive(text, submit, withImage, retry, reconcileOnFailure);
 }
-
-// 以下两处补丁（编辑会话卡死自愈、点输入框不弹键盘的补聚焦）都是**安卓 Chrome / Gboard 专属**的。
-// iOS 必须排除：iPhone 上对正在输入的输入框做 blur→focus，听写或输入法会把同一段内容再提交
-// 一遍，用户看到的就是“同一段字被输入了两遍”。平台判定在这里收口，别让两边走岔。
+// 安卓编辑会话自愈独立门禁；iOS重建焦点会导致听写重复落字。
 const androidInputPatch = /Android/i.test(navigator.userAgent);
-
-// 输入法卡死防御（修 Gboard 等第三方键盘“上滑清空”后输入框点不进、只能刷新页面）：
-// 该手势是一次超大的 deleteSurroundingText，Android WebView 的编辑会话常被它搞死——
-// 之后敲字不出 input、点也点不进输入框，只剩刷新整页一条路。
-// 判据不看组合态（liveComposing）：Gboard 常在**没开组合态**时直接发这次大删除，
-// 只看组合态就等于把最常见的那条路漏掉了。
+// 安卓会话卡死时重建编辑元素，保留正文/选区并重新接事件。
 function endCompositionState() {
   liveComposing = false;
 }
@@ -294,9 +263,7 @@ function recoverIME(el) {
 
 function wireHomeCompose(el) {
   wireComposeIME(el, false);
-  // 退出触控板模式只在 focus 上做：原先在 pointerdown 里同步摘掉 pad-mode，会让输入框
-  // 在这一次点按**还没结束时就**从 52px 撑回 140px；安卓会因此把这一下判成无效点按，
-  // 焦点拿不到、键盘也不弹。焦点到手后再变布局就与手势无关了。
+  // 焦点到手才退出触控板；pointerdown改布局会让安卓拒绝这次点按。
   let tapStart = null;
   el.addEventListener('pointerdown', event => {
     if (!androidInputPatch || event.pointerType === 'mouse') return;
@@ -313,22 +280,21 @@ function wireHomeCompose(el) {
   });
   el.addEventListener('pointercancel', () => { tapStart = null; });
   el.addEventListener('focus', exitPadMode);
-  el.addEventListener('keydown', handleHomeComposeKeydown);
 }
-
 // 上一次 input 之后的长度：用来认"一次清空"这个指纹。
 const imePrevLen = new WeakMap();
-
-// 任一输入框（主页 textarea 或全屏键盘代理）都接同一套卡死防御；
-// 全屏代理的改动要镜像回主页 textarea，因为直播同步的"真值"始终读 textEl。
-// 首页与全屏都替换故障元素；镜像在事件触发时读取当前 textEl，避免引用已移除的首页框。
+const composeReturnState = new WeakMap();
+// 两个编辑框共用IME防御；全屏镜像读取当前首页框，隔离已移除元素。
 function wireComposeIME(el, mirrorTo, recover = recoverIME) {
   const current = () => el.isConnected && el === (mirrorTo ? kbProxy : textEl);
+  el.addEventListener('keydown', event => { if (current()) handleComposeSubmitKeydown(event); });
+  el.addEventListener('keyup', () => { if (current()) composeReturn(el).keepLineBreak = false; });
   imePrevLen.set(el, el.value.length);
   el.addEventListener('compositionstart', () => { if (current()) liveComposing = true; });
   el.addEventListener('compositionend', () => {
     if (!current()) return;
     liveComposing = false;
+    composeReturn(el).compositionReturn = false;
     pocketdeskMarkInput();
     if (mirrorTo) textEl.value = el.value;
     scheduleLive();
@@ -341,41 +307,41 @@ function wireComposeIME(el, mirrorTo, recover = recoverIME) {
     const was = imePrevLen.get(el) ?? 0;
     imePrevLen.set(el, el.value.length);
     // 没走 compositionend 就直接 input（Gboard 清空常见）→ 组合态其实已结束，强制清掉卡死标记。
+    const wasComposing = liveComposing;
     if (!event.isComposing && liveComposing) liveComposing = false;
+    const submitted = handleComposeSubmitInput(event, wasComposing);
+    imePrevLen.set(el, el.value.length);
     // 全屏代理敲的字要同步回主页 textarea，直播同频才认得到。
     if (mirrorTo) textEl.value = el.value;
     syncSpriteExpression();
     // 小精灵草稿上报（150ms 节流 latest-only）：只做展示旁路，不影响直播同步与发送事务。
     if (selected === SPRITE_ID) window.pocketdeskSpriteDraft?.();
-    // 删除仍属于本轮草稿。空串立即排队；暂停时先核验原文，
-    // 不丢弃草稿 ID，否则电脑残文会变成下一轮无法管理的“原文”。
+    if (submitted) { syncKeyboardDraft(); return; }
+    // 删除沿用本轮草稿ID；空串立即排队，暂停时先核验原文。
     if (selected && !sendEl.disabled && el.value.length < was && (livePaused || el.value === '') && !submittingDraft) {
       flushLive(el.value, false, false, livePaused, true).catch(() => {});
     } else scheduleLive(el.value.length < was);
-    // 「上滑清空」指纹：一次 input 就从非空一步归零（退格是一格一格删，不会一步清空）。
-    // 命中即重建——**不论是否处于组合态**，这正是以前漏掉 Gboard 的原因。
-    // iOS 不重建：全选删除同样会命中这个指纹，而重建时抢回焦点会让听写把这段再落一遍。
+    // 安卓一次非空归零重建会话；iOS同样的操作不重建，避免听写重复。
     if (androidInputPatch && was > 0 && el.value === '') {
       recover(el);
     }
   });
-  // 兜底：会话死透时连 input 都不派发（渲染进程与 IME 失联，敲字完全没反应）。
-  // beforeinput 到了却迟迟不见 input = 这次编辑没被吃进去，同样重建会话。
-  // 代价极小的误伤：在空框上按退格本来也不出 input，会白重建一次会话（无感）。
+  // beforeinput后700ms无input才探测会话卡死；显式提交不参加该探针。
   let editProbe = 0;
-  el.addEventListener('beforeinput', () => {
+  el.addEventListener('beforeinput', event => {
     if (!current()) return;
+    // 显式提交会取消换行，故意不产生 input，不能交给700ms卡死探针。
+    if (handleComposeSubmitBeforeInput(event)) { clearTimeout(editProbe); return; }
     imePrevLen.set(el, el.value.length);
     clearTimeout(editProbe);
     editProbe = setTimeout(() => {
-      // iOS 不做这个探针：听写/输入法本来就可能隔一会儿才落字，误判成“编辑被吃掉”后
-      // 重建元素并抢回焦点，会把已经落下的那段再提交一次（重复输入）。
+      // iOS可能延迟落字，重建焦点会让听写重复，因此不探测。
       if (androidInputPatch && el.isConnected && document.activeElement === el && !el.readOnly) recover(el);
     }, 700);
   });
   el.addEventListener('input', () => clearTimeout(editProbe));
   // 失焦/聚焦都是全新编辑会话，不该带着上一次的卡死态。
-  el.addEventListener('blur', () => { clearTimeout(editProbe); endCompositionState(); });
+  el.addEventListener('blur', () => { clearTimeout(editProbe); composeReturnState.delete(el); endCompositionState(); });
   el.addEventListener('focus', () => {
     endCompositionState();
     // 回到已有草稿时即同步全文，不要求用户额外输入一个字来触发。
@@ -386,12 +352,7 @@ function wireComposeIME(el, mirrorTo, recover = recoverIME) {
 wireHomeCompose(textEl);
 
 /* ---------- 主页输入框：安卓 Chrome 的“点了不弹键盘” ---------- */
-
-// 键盘被系统返回键/返回手势收走后，textarea 往往**仍然是 activeElement**；焦点没有变化，
-// Chrome 就不会再弹一次键盘——这时再点多少下都没反应。在 pointerdown 阶段先交还焦点
-// （不动内容与光标），随后这一次原生点按就是真正的焦点变化，键盘随之回来。
-// 键盘正开着时绝不动焦点：用户点正文是去挪光标的。
-// 键盘弹起时 Chrome 只收“视觉视口”，window.innerHeight 不变；落差 >120px 即视为键盘已展开。
+// 安卓系统收键盘可能遗留activeElement；仅短按且视口未缩小时重新聚焦。
 function keyboardExpanded() {
   const vv = window.visualViewport;
   return Boolean(vv) && vv.height < window.innerHeight - 120;
@@ -401,7 +362,6 @@ function releaseStaleFocus() {
   if (!androidInputPatch || submittingDraft || liveComposing) return;
   if (document.activeElement === textEl && !keyboardExpanded()) textEl.blur();
 }
-
 // 手指落在卡片内边距/空白处时原生不聚焦，这里补一次；点按钮、滑杆不抢焦点。
 document.querySelector('.compose')?.addEventListener('click', event => {
   if (!androidInputPatch || submittingDraft || liveComposing) return;
@@ -416,19 +376,16 @@ window.addEventListener('pageshow', () => { if (liveValue()) scheduleLive(); });
 // IME 异常时重建 textarea，保留草稿与所在面板，不改变电脑输入目标。
 wireComposeIME(kbProxy, true, recreateKbProxy);
 wireKbProxyExtras(kbProxy);   // 初始代理也要接 blur/focus/keydown（recreate 出来的同样接这一份）
-
 // 这一轮会话里代理有没有真的吃到过字 / 是否怀疑会话已死 / 是否正在重建中。
 let kbGotInput = false;
 let kbSuspect = false;     // 上滑清空或 beforeinput 超时没回 input → 代理可能已死
 let kbRecreating = false; // 重建期间抑制 blur 误触发 pocketdeskKeyboardClosed（避免重建瞬间画面闪一下重排）
-
 // 键盘图标高亮态：键盘抬起=高亮，收起=灭。
 function syncKbToggle() {
   const el = document.getElementById('kb-toggle');
   if (el) { el.classList.toggle('kb-active', kbActive); el.setAttribute('aria-pressed', String(kbActive)); }
   if (screenViewEl) screenViewEl.classList.toggle('keyboard-open', kbActive);
 }
-
 // 草稿编辑框的"会话外"监听：失焦复位、聚焦更新视口。初始与 recreate 出来的都接这一份。
 function wireKbProxyExtras(p) {
   let touchStartedAt = 0;
@@ -448,16 +405,13 @@ function wireKbProxyExtras(p) {
   // 用户收起原生键盘（返回键 / 键盘收起键）：失焦即复位，并交还布局权。
   p.addEventListener('blur', () => {
     if (kbRecreating) return;            // 重建时旧元素被移除会触发 blur，那是假失焦，跳过
-    // 点屏定位光标会让焦点从代理短暂移走、触发 blur；手势已在 pointerdown 打了时间戳标记。
-    // 这里若发现是“刚点屏造成的失焦”，立即重新聚焦，键盘保持抬起——用户点一下会话仍能在手机上接着打字。
-    // 返回键 / 收键盘键 / Esc / 关闭按钮这类真收起不打标记，照常收起、交还布局权。
+    // 点屏定位的短暂blur按时间戳重聚焦；真正关闭仍交还布局。
     if ((window.pocketdeskScreenTapPending || 0) && performance.now() - window.pocketdeskScreenTapPending < 400) {
       window.pocketdeskScreenTapPending = 0;
       setTimeout(() => { if (document.activeElement !== p) p.focus({ preventScroll: true }); }, 0);
       return;
     }
-    // 长按/选区菜单引起的临时 blur 不改变布局，也不强抢焦点；前者会打断原生菜单，
-    // 后者会让全屏输入栏误判成键盘已关闭。真正的返回键收起没有这两类证据。
+    // 长按/选区的临时blur不改布局、不抢焦点，避免打断系统菜单。
     if (p.selectionStart !== p.selectionEnd || (touchStartedAt && performance.now() - touchStartedAt >= 350)) return;
     kbActive = false;
     window.pocketdeskKeyboardClosed?.(); // 让画面按真实视口重新铺一次
@@ -465,10 +419,9 @@ function wireKbProxyExtras(p) {
   });
   // 重建会话是 blur→focus 两步，focus 回来要把键盘态补上（blur 那边刚把它清掉）。
   p.addEventListener('focus', () => { kbActive = true; refreshKeyboardViewport(); syncKbToggle(); });
-  // 原生回车交给输入法插入换行；提交使用底栏发送，不抢候选确认键。
+  // 回车提交由 wireComposeIME 统一处理；组合态仍交给输入法确认候选。
 
 }
-
 // 造一个全新的可见编辑框：自带干净的原生编辑会话。每次需要都现造，旧的整个丢弃。
 function buildKbProxy() {
   const p = document.createElement('textarea');
@@ -476,23 +429,18 @@ function buildKbProxy() {
   p.className = 'kb-proxy';
   p.rows = 1;
   p.placeholder = '输入文字…';
-  p.setAttribute('enterkeyhint', 'enter');
+  p.setAttribute('enterkeyhint', 'send');
   p.setAttribute('autocomplete', 'off');
   p.setAttribute('autocapitalize', 'sentences');
   p.setAttribute('spellcheck', 'false');
   p.setAttribute('aria-label', '当前输入草稿');
-  // 放进 #screen-view 内部：进原生全屏（requestFullscreen）后整份文档只剩 panel，
-  // 代理若挂在外面会随文档一起不渲染、键盘弹不出来。
+  // 代理须在panel内部，否则原生全屏不渲染它，也无法弹键盘。
   document.querySelector('#screen-compose-editor').appendChild(p);
   wireComposeIME(p, true, recreateKbProxy);
   wireKbProxyExtras(p);
   return p;
 }
-
-// 卡死自愈的终极手段：整个换掉代理元素。被 wireComposeIME 在检测到「上滑清空指纹」
-// （一次 input 从非空一步归零）或「beforeinput 后迟迟没 input」时调用；
-// 也被 showKeyboard 在「代理仍聚焦却一个字都没收到」这种明显死透的情况下调用。
-// 全新元素 = 全新原生编辑会话，这是唯一能甩掉 Gboard 污点、不必刷新整页的办法。
+// 原生编辑会话卡死时替换代理，保持草稿、选区和所在面板。
 function recreateKbProxy(el = kbProxy, { focus = true, feedback = true } = {}) {
   if (el !== kbProxy || !el.isConnected || el.readOnly) return;
   liveComposing = false;
@@ -512,7 +460,6 @@ function recreateKbProxy(el = kbProxy, { focus = true, feedback = true } = {}) {
   syncKbToggle();
   if (feedback) haptic(8);
 }
-
 // 原生键盘动画可能分多次更新可见视口；让工作台跟随布局，不与 Safari 的焦点滚动反复争抢。
 let kbActive = false;
 
@@ -521,18 +468,10 @@ function refreshKeyboardViewport() {
   window.pocketdeskKeyboardClosed?.();
 }
 window.addEventListener('scroll', refreshKeyboardViewport, { passive: true });
-
-// 唤起原生键盘：把主页草稿带过来，聚焦即弹键盘。
-// 关键点：Gboard「上滑清空」会让代理**仍聚焦却已死透**（敲字不出 input）。这种情况
-// blur→focus 同元素在部分 Android WebView 上对 Gboard 无效，必须整个换元素。
-// 所以只要「仍聚焦且本轮没收到过字」或已打上 kbSuspect 标记，就直接 recreateKbProxy()
-// 换新元素——这是唯一能甩掉污点、不必刷新整页的办法。
+// 唤起带入首页草稿；疑似死会话才重建，正常聚焦不闪动键盘。
 const CONTEXT_RETRY_LIMIT = 3;
 const CONTEXT_RETRY_DELAY = 250;
-
-// 绑定输入位置。"WorkBuddy" 这类 Electron 应用提交后会把编辑器对象重建，新窗口刚拿到焦点时
-// AX 可能还只暴露到容器（scope=application）。这里给一个**有上限**的短暂等待，让下一轮首字
-// 能自动绑定上——而不是立刻要求用户去点电脑输入框。等待到上限才提示，绝不无休止轮询。
+// 提交后Electron重建编辑器时有界等待AX输入位置；耗尽后要求人工确认。
 function refreshInputContext() {
   const session = window.pocketdeskControlInfo().session;
   const attempt = remaining => fetch('/api/input-context', {
@@ -579,10 +518,7 @@ function showKeyboard() {
   if (shouldSyncExistingDraft && kbProxy.value) scheduleLive();
   haptic(8);
 }
-
-// 收起：只需交出焦点，键盘自己会落下。
-// 刻意**不清 value**——代理只是草稿的暂存副本，下次唤起一律用 textEl 重新播种；
-// 清了反而可能在 IME 自愈（recreate）后把真值覆盖成空。
+// 收键盘只交出焦点、不清正文；下一次唤起从首页草稿恢复。
 function hideKeyboard() {
   clearTimeout(liveTimer); liveQueue.clear('键盘已收起，未发送的草稿已保留');
   kbActive = false;
@@ -591,21 +527,15 @@ function hideKeyboard() {
   if (document.activeElement === kbProxy) kbProxy.blur();
   window.pocketdeskKeyboardClosed?.();   // 交还布局权，让画面按真实视口重新铺一次
 }
-
 // 发完就收：草稿空了说明已提交，键盘让位给画面。
 async function sendFromKeyboard() {
   await send();
   if (!textEl.value) hideKeyboard();
 }
-
-// 全屏键盘图标（#kb-toggle）：唯一的“点此才弹键盘”入口。
-// 点画面不再自动弹（避免切换窗口时点一下就蹦键盘）—— 见 screen.js 的 sendTap。
-// 关闭 / 退出全屏 → hideKeyboard；视口变化由工作台重新布局。
+// 全屏键盘图标是显式唤起入口；点画面不弹键盘，退出统一收起。
   const kbToggle = document.getElementById('kb-toggle');
   if (kbToggle) {
-    // 关键：在 pointerdown 时就快照 kbActive，再决定 click 时开还是关。
-    // 否则点按钮会让 #kb-proxy 失焦 → blur 先把 kbActive 翻成 false，
-    // 随后 click 里读到 false 反而去 showKeyboard() —— 表现成"再点一下收不起、高亮消不掉"。
+    // pointerdown快照开关意图，避免按钮引发blur后把关闭误判为打开。
     let kbToggleWasActive = false;
     kbToggle.addEventListener('pointerdown', () => { kbToggleWasActive = fullComposeOpen(); });
     kbToggle.addEventListener('click', event => {
@@ -617,27 +547,14 @@ async function sendFromKeyboard() {
 window.pocketdeskShowKeyboard = showKeyboard;
 window.pocketdeskHideKeyboard = hideKeyboard;
 window.pocketdeskKeyboardActive = () => fullComposeOpen();
-
-// 体感发送门禁与触发入口（motion-send.js 委托至此，不重复实现发送逻辑）。
-// 名字必须独立：window.pocketdeskSend 属于 pad.js 的 queuePad（画面/指针指令通道），
-// screen.js 的每一处点按、滚动、cursor-subscribe 都走它。本文件在 pad.js 之后加载，
-// 一旦占用这个名字就会把画面指令全部转成“发送草稿”——表现为没开翻腕也自动发送。
-/**
- * 无桌面副作用的聚焦路径——小精灵专用。
- * showKeyboard() 会 refreshInputContext()，并在已有草稿时走 scheduleLive()，
- * 那等于把还没发送的 AI 指令同步到电脑，正好违反方案 §5「发送前不调 /api/live-input」。
- * 小精灵只需要把焦点放进输入框，所以走这条不联网、不读输入上下文的路。
- */
+// 草稿提交与pad.js的画面指令使用独立全局入口，共用各自的业务锁。
+// 小精灵只聚焦草稿，不取桌面上下文、不触发live-input。
 window.pocketdeskFocusCompose = () => {
   const el = fullComposeOpen() ? kbProxy : textEl;
   el.readOnly = false;
   el.focus({ preventScroll: true });
 };
-
-/**
- * 小精灵发送分支：正文只交给任务 API，不进电脑输入框、不写剪贴板、不发按键（方案 §5）。
- * 与轻甩共用同一个 pocketdeskComposeSend 入口，因此按钮和甩送天生同一把锁。
- */
+// 小精灵正文只交任务API；按钮和甩送复用同一提交锁。
 async function sendToSprite() {
   if (submittingDraft) return;
   if (liveComposing) { message('请先结束听写或确认输入法候选，再发送。', true); return; }
@@ -693,8 +610,7 @@ window.pocketdeskCanMotionSend = ({ requireSettled = true } = {}) => {
     const task = window.pocketdeskAgent?.current();
     if (!liveValue().trim() || (window.pocketdeskAgent?.isActive() && task?.status !== 'needsInput')) return false;
   } else if (livePaused || liveProbing) return false;
-  // 300ms：说完话后的第一次翻腕（起翻+停稳约 300–500ms）即可命中门禁；
-  // 原 700ms 会把说完就翻的候选静默丢掉，用户只能等冷却后再翻一次，体感延迟 1.5s+。
+  // 300ms稳定门禁覆盖说完即翻腕；动作采集可提前，实际提交仍须稳定。
   if (requireSettled && !(window.pocketdeskInputSettled && window.pocketdeskInputSettled(300))) return false; // 仍在输入/听写中
   return true;
 };
@@ -766,8 +682,7 @@ async function send() {
       haptic([12]);
     }
   } catch (error) {
-    // 同频失败时不回退到整段粘贴：内容可能已经打进去一半，再粘一遍就成了重复。
-    // 输入框原样保留，用户看清原因后可以自己重试。
+    // 同频失败保留原稿供核对，不回退整段粘贴，避免重复半段正文。
     message(error.message, true);
     haptic([28, 50, 28]);
   } finally {
@@ -779,10 +694,7 @@ async function send() {
     imagePreview.querySelectorAll('button').forEach(button => { button.disabled = false; });
   }
 }
-
-// 「清空会话」：两边一起清。顺序是刻意的——**先让电脑侧确认删干净，成功后才清手机**。
-// 反过来的话，一次没生效的删除就把用户的草稿吃掉了（项目红线：失败必须保留草稿）。
-// 文档类目标由服务端豁免（整段删除会毁掉正文），那时只清手机侧，并把原因原样带回来。
+// 清空先由电脑确认删除，再清手机；文档类豁免由服务端回执说明。
 async function clearDraft() {
   if (submittingDraft) { message('正在提交，请稍后再清空。', true); return false; }
   if (!selected || sendEl.disabled) { message('请先在上方 Dock 选择一个目标应用。', true); return false; }
@@ -815,13 +727,46 @@ async function clearDraft() {
 window.pocketdeskClearDraft = clearDraft;
 
 sendEl.addEventListener('click', send);
-function handleHomeComposeKeydown(event) {
-  // 中文/日文输入法在选词、候选期间按回车是给 IME 用的，不能当成“发送”。
-  if (event.isComposing || event.keyCode === 229) return;
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault();
-    send();
+/* ---------- 显式回车：桌面键盘与只派发输入事件的手机IME共用提交锁 ---------- */
+function composeReturn(el) {
+  if (!composeReturnState.has(el)) composeReturnState.set(el, {});
+  return composeReturnState.get(el);
+}
+function submitComposeReturn() { return fullComposeOpen() ? sendFromKeyboard() : send(); }
+function handleComposeSubmitKeydown(event) {
+  const state = composeReturn(event.currentTarget);
+  state.keepLineBreak = event.key === 'Enter' && event.shiftKey;
+  state.compositionReturn = event.key === 'Enter' && (event.isComposing || liveComposing);
+  if (event.key !== 'Enter' || state.keepLineBreak || state.compositionReturn || event.keyCode === 229) return;
+  event.preventDefault();
+  if (!event.repeat) submitComposeReturn();
+}
+function handleComposeSubmitBeforeInput(event) {
+  const el = event.currentTarget, state = composeReturn(el);
+  state.beforeLineBreak = null; state.compositionLineBreak = false;
+  if (!['insertLineBreak', 'insertParagraph'].includes(event.inputType)) return false;
+  if (event.isComposing || liveComposing) { state.compositionLineBreak = true; return false; }
+  if (state.keepLineBreak || state.compositionReturn) return false;
+  if (!event.cancelable) {
+    state.beforeLineBreak = { value: el.value, start: el.selectionStart, end: el.selectionEnd };
+    return false;
   }
+  event.preventDefault(); submitComposeReturn(); return true;
+}
+function handleComposeSubmitInput(event, wasComposing = false) {
+  const el = event.currentTarget, state = composeReturn(el), before = state.beforeLineBreak;
+  const keepLineBreak = state.keepLineBreak || state.compositionReturn || state.compositionLineBreak;
+  state.beforeLineBreak = null; state.keepLineBreak = false; state.compositionReturn = false; state.compositionLineBreak = false;
+  if (!['insertLineBreak', 'insertParagraph'].includes(event.inputType) || event.isComposing || wasComposing || keepLineBreak) return false;
+  // 不可取消或缺失beforeinput时，只撤回本次动作插入的换行，保留已有多行正文。
+  if (before && el.value === before.value.slice(0, before.start) + '\n' + before.value.slice(before.end)) {
+    el.value = before.value; el.setSelectionRange(before.start, before.end);
+  } else {
+    const at = el.selectionStart;
+    if (el.selectionEnd !== at || el.value[at - 1] !== '\n') return false;
+    el.value = el.value.slice(0, at - 1) + el.value.slice(at); el.setSelectionRange(at - 1, at - 1);
+  }
+  submitComposeReturn(); return true;
 }
 
 

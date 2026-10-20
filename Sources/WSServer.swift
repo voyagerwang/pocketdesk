@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Network WebSocket、Auth、PointerExecutor 和 CursorMonitor。
- * [OUTPUT]: 提供控制所有权、心跳租约、能力握手、可靠回复和 latest-only 光标广播。
+ * [OUTPUT]: 所有连接（含回环）验证配对凭证后提供控制所有权、心跳租约、能力握手、可靠回复和 latest-only 光标广播。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 控制传输边界；观看者不重置控制者，断线只释放所属按键。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -95,7 +95,7 @@ final class WSServer {
     private func handle(_ body: [String: Any], _ c: Client) {
         let type = body["t"] as? String ?? ""
         if type == "auth" {
-            guard let token = body["token"] as? String, (Auth.verify(token: token) || isLocalPeer(c.connection)) else { drop(c.id); return }
+            guard let token = body["token"] as? String, Auth.verify(token: token) else { drop(c.id); return }
             c.authenticated = true; c.modern = body["v"] as? Int == 1
             c.lastSeen = ProcessInfo.processInfo.systemUptime
             if owner == nil { owner = c.id; pointer.resetSession() }

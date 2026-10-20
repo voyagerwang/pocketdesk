@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Node 内建断言与文件系统，读取 Web/index.html、Web/settings.js 与 Sources/Server.swift。
  * [OUTPUT]: 验证手机设置只有一个入口、触控板内无齿轮、三个旧控件 ID 与存储键未复制第二份、翻腕默认关闭且只留开关与灵敏度、新脚本已进入静态白名单；
- *           并锁住免证书降级：翻腕组在环境不过关时整组隐藏（#wrist-group 默认 hidden），证书向导（CA 下载/描述文件/完全信任/探测跳转）与独立授权按钮一律不得存在于手机端设置面板与体感模块。
+ *           并锁住免证书降级：证书向导（CA 下载/描述文件/完全信任/探测跳转）与独立授权按钮一律不得存在于手机端设置面板与体感模块；控制台默认 IP 与可选电脑名称码不得恢复 HTTPS/证书入口。
  * [POS]: tests 的静态结构回归；不启动服务、不发网络请求、不注入系统事件。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -113,11 +113,16 @@ assert.ok(motionSend.includes("suspend('hidden')") && motionSend.includes("suspe
 assert.ok(fs.readFileSync(path.join(root, 'Web/pad.js'), 'utf8').includes('pocketdeskMotionSuspend'),
   '控制通道失去租约时必须停识别');
 
-// 控制台只保留 App / 浏览器共用的一张局域网二维码；Android App 甩送走原生桥接，
-// 不应为了甩送重新增加 HTTPS 二维码或证书入口。
+// 控制台默认使用已验证可达的 IP，电脑名称收进默认关闭的折叠区；Android App 甩送走原生桥接，
+// 可选名称仍是同一个工作台，不应为了甩送重新增加 HTTPS 二维码或证书入口。
 const consoleHtml = fs.readFileSync(path.join(root, 'Web/console.html'), 'utf8');
+assert.ok(/<a id="hostUrl"[^>]*class="[^"]*url-link/.test(consoleHtml), '控制台可选电脑名称应是链接');
 assert.ok(/<a id="ipUrl"[^>]*class="[^"]*url-link/.test(consoleHtml), '控制台 #ipUrl 应是链接');
-assert.equal((consoleHtml.match(/<img id="qr-/g) || []).length, 1, '控制台只能有一张手机连接二维码');
+assert.deepEqual(Array.from(consoleHtml.matchAll(/<img id="(qr-[^"]+)"/g), match => match[1]),
+  ['qr-ip', 'qr-host'], '连接二维码只包含默认 IP 与可选电脑名称入口');
+assert.ok(/<details id="connectionFallback"[^>]*>[\s\S]*?<img id="qr-host"/.test(consoleHtml),
+  '名称二维码必须放在折叠区，不依赖手机默认支持 .local 解析');
+assert.ok(!/<details id="connectionFallback"[^>]*\bopen\b/.test(consoleHtml), '名称入口默认关闭，不增加初次扫码选择负担');
 assert.ok(!/id="secureQrItem"|id="qr-secure"|id="secureUrl"/.test(consoleHtml), '不得恢复第二张安全连接二维码');
 assert.ok(!/id="caDownload"/.test(consoleHtml), '控制台不再承载证书下载');
 // CA 路由保留：它不是翻腕的入口，而是锁屏 HTTPS 通道（另有自身安全门禁）需要的证书分发。

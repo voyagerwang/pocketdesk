@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 app.js 的目标/连接状态、compose.js 的草稿事务与 agent-panel.js 的任务反馈。
- * [OUTPUT]: 派单后默认只读跟随真实前台，手动回小精灵以当前前台为新基线； 重选小精灵显式恢复桌面反馈；提供实时输入浮层与原版动态球球生命周期与开心/等待/工作状态与接收者渲染、显式应用选择、置顶应用栏进入小精灵与只读前台跟随；启动沿用电脑前台。
+ * [OUTPUT]: 派单后默认只读跟随真实前台，手动回小精灵重置前台基线；输入变化委托 agent-panel 独占任务卡与归属呈现，提供实时输入浮层、原版球体生命周期及接收者渲染，启动沿用电脑前台。
  * [POS]: 手机接收者路由层；显式应用选择才激活电脑，进入小精灵和被动前台跟随不操作桌面；未发送草稿阻止被动换目标。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -68,7 +68,8 @@ function renderTargets() {
 }
 
 // 表情只消费任务与草稿事实；选中柔光由 selected 独立控制。
-function syncSpriteExpression() {
+function syncSpriteExpression(renderPanel = true) {
+  if (renderPanel) window.pocketdeskAgentPanel?.render();
   const transcript = document.getElementById('sprite-transcript');
   if (transcript) {
     transcript.textContent = typeof liveValue === 'function' && liveValue() || '';
@@ -79,8 +80,6 @@ function syncSpriteExpression() {
   const task = window.pocketdeskAgent?.current();
   const working = !!task && ['accepted', 'running', 'verifying'].includes(task.status);
   const hasText = typeof liveValue === 'function' && liveValue().trim().length > 0;
-  const resultPanel = document.getElementById('agent-panel');
-  if (resultPanel && !window.pocketdeskAgent?.isActive()) resultPanel.hidden = selected !== SPRITE_ID || !task || hasText;
   orb.dataset.expression = working ? 'working' : hasText || task?.status === 'needsInput' ? 'listening' : 'idle';
   window.pocketdeskOrb.update(orb.querySelector('.sprite-engine'), selected === SPRITE_ID, working ? '32' : hasText || task?.status === 'needsInput' ? '35' : 'mobile-idle');
 }

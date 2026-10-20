@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 CoreGraphics 的 CGEvent/CGDisplay 系列 API；消费 WSServer 转发的手势 JSON。
- * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、有效屏区域钳制、相对移动携带真实增量 delta、pointer 绝对拖动与 move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置、目标窗口定位（移动到窗口可见区；手动选中且 AX 能检出主输入框时顺带单击聚焦，按代际与用户活动门禁）、语音聚焦点击的队列内授权复核与事件标记、拒绝执行时经 onError 上报）。
+ * [OUTPUT]: 对外提供 PointerExecutor（虚拟光标维护、有效屏区域钳制、相对移动携带真实增量 delta、pointer 绝对拖动与 move/drag/click/scroll/zoom/tap 手势到 CGEvent 的映射、会话重置、目标窗口定位（移动到窗口可见区；手动选中且 AX 能检出主输入框时顺带单击聚焦，按代际与用户活动门禁）、语音聚焦及原生菜单左右键点击的队列内授权复核与事件标记、拒绝执行时经 onError 上报）。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
  * [POS]: Sources 的指针执行层；仅被 WSServer 消费，与 InputExecutor（键盘）平行为一对执行兄弟。
  *          维护的是**命令期望值**，与 CursorMonitor 的**观测值**严格分离，两者互不写入。
@@ -95,9 +95,9 @@ final class PointerExecutor {
         click(at: point, authorized: { true }, marker: 0, completion: completion)
     }
 
-    /// Voice focus binds a queued click to the original application and request.
-    /// Its marker prevents our own focus click from cancelling voice preparation.
-    func click(at point: CGPoint, authorized: @escaping () -> Bool, marker: Int64,
+    /// 语音聚焦和原生菜单共用同一点击队列；动作前重核授权，已按下的左/右键始终成对释放。
+    /// 事件标记避免自身聚焦点击取消语音准备。
+    func click(at point: CGPoint, authorized: @escaping () -> Bool, marker: Int64, button: CGMouseButton = .left,
                completion: ((Bool) -> Void)? = nil) {
         queue.async {
             guard self.clickEnvironment(), !self.dragging, authorized() else { completion?(false); return }
@@ -106,10 +106,10 @@ final class PointerExecutor {
             self.expected = target
             self.post(.mouseMoved, at: target, marker: marker)
             guard self.clickEnvironment(), authorized() else { completion?(false); return }
-            self.post(.leftMouseDown, at: target, clickState: 1, marker: marker)
+            self.post(button == .right ? .rightMouseDown : .leftMouseDown, at: target, button: button, clickState: 1, marker: marker)
             usleep(40_000)
             // A posted down must always be paired with an up, even after cancellation.
-            self.post(.leftMouseUp, at: target, clickState: 1, marker: marker)
+            self.post(button == .right ? .rightMouseUp : .leftMouseUp, at: target, button: button, clickState: 1, marker: marker)
             completion?(true)
         }
     }

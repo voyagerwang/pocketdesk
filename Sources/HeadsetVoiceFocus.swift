@@ -1,8 +1,8 @@
 /**
- * [INPUT]: An explicit headset request PID, bounded AX reads, and the existing authorized pointer executor.
- * [OUTPUT]: A verified ordinary editor in that PID's original focused window, with its untouched text baseline.
- * [POS]: Voice preparation only: no navigation, new conversation, text/selection writes, or Option events.
- * [PROTOCOL]: The injected driver is for isolated tests; production completion always arrives on main.
+ * [INPUT]: 依赖明确的耳机请求 PID、InputFocus 的冷 AX 树准备、原聚焦窗口及有界 AX 读取、InputFocus 的共享应用归属交叉证据，以及现有授权指针执行器。
+ * [OUTPUT]: 仅耳机语音使用的应用归属与无正文诊断；完整候选检查后聚焦原窗口中的唯一普通编辑器，并返回未改动的原文基线；系统焦点确实缺值时允许同 PID 补证，明确失焦或扫描不完整则拒绝。
+ * [POS]: 普通耳机语音的共享准备边界；不导航、不新建会话、不写正文或选区、不发送语音快捷键；完成回调回主线程，调用方核验本轮拥有者后才发键。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
 import ApplicationServices
@@ -19,6 +19,7 @@ final class HeadsetVoiceFocusRequest {
 struct HeadsetVoiceFocusFailure: Error { let message: String; var reason = "unverified" }
 
 enum HeadsetVoiceFocus {
+    typealias ApplicationOwner = InputFocus.ApplicationOwner
     struct Prepared { let pid: pid_t; let element: AXUIElement; let original: String }
     struct TargetedResult {
         var candidates: [AXUIElement]
@@ -46,6 +47,9 @@ enum HeadsetVoiceFocus {
             secure || role == "AXComboBox" || role == "AXSearchField" || subrole.lowercased().contains("search")
         }
         var ordinary: Bool { !excluded && !readOnly && enabled && visible && editable && ["AXTextArea", "AXTextField"].contains(role) }
+        // ---------- 标准叶节点不含独立输入目标 ----------
+        // 对叶节点读取 AXChildren 常返回 unsupported；容器的失败必须保留为未知，不能伪装为空。
+        var terminal: Bool { ["AXTextArea", "AXTextField", "AXStaticText", "AXButton", "AXCheckBox", "AXRadioButton", "AXImage", "AXLink"].contains(role) }
     }
     /// Drivers expose only the operations this request needs. They never receive dictated text for logging.
     struct Driver {
@@ -57,7 +61,8 @@ enum HeadsetVoiceFocus {
         var window: (pid_t) -> AXUIElement?
         var focus: (pid_t) -> AXUIElement?
         var node: (AXUIElement, AXUIElement) -> Node?
-        var children: (AXUIElement) -> [AXUIElement]
+        // nil 表示分支不可核验，空数组仅表示成功读到空子树。
+        var children: (AXUIElement) -> [AXUIElement]?
         var belongs: (AXUIElement, AXUIElement, pid_t) -> Bool
         var equal: (AXUIElement, AXUIElement) -> Bool
         var supportedTextField: (pid_t) -> Bool
@@ -78,6 +83,33 @@ enum HeadsetVoiceFocus {
     static func ordinaryEditor(role: String, declaredEditable: Bool?, readOnly: Bool?) -> Bool {
         ["AXTextArea", "AXTextField"].contains(role) && declaredEditable != false && readOnly != true
     }
+    /// 保留语音测试与调用方接口；应用归属统一由输入能力层判定。
+    static func resolveApplicationOwner(axStatus: AXError, axPID: pid_t?, activePIDs: [pid_t], immediatePID: pid_t?,
+                                        trusted: Bool, secureInput: Bool, systemUIStatus: AXError,
+                                        systemUIOwner: pid_t?) -> ApplicationOwner {
+        InputFocus.resolveApplicationOwner(axStatus: axStatus, axPID: axPID, activePIDs: activePIDs,
+            immediatePID: immediatePID, trusted: trusted, secureInput: secureInput,
+            systemUIStatus: systemUIStatus, systemUIOwner: systemUIOwner)
+    }
+    static func currentApplicationPID(diagnostic: ((ApplicationOwner) -> Void)? = nil) -> pid_t? {
+        let result = InputFocus.applicationOwner()
+        diagnostic?(result)
+        return result.pid
+    }
+    /// 系统已明确返回焦点元素时不能被应用级旧焦点覆盖；仅实际缺值/暂不可读允许补证。
+    static func resolveFocusedElement(pid: pid_t, systemStatus: AXError, systemElement: AXUIElement?,
+                                      systemOwner: pid_t?, application: () -> (AXUIElement, pid_t)? ) -> AXUIElement? {
+        guard pid > 0 else { return nil }
+        if systemStatus == .success {
+            guard let element = systemElement, systemOwner == pid else { return nil }
+            return element
+        }
+        guard [.noValue, .cannotComplete].contains(systemStatus),
+              let (element, owner) = application(), owner == pid else { return nil }
+        return element
+    }
+    /// 完成回调的只读短时核验复用本边界，不再进入全局 focusedElement 的冷树重建路径。
+    static func currentFocusedElement(pid: pid_t) -> AXUIElement? { focusedElement(pid) }
     private static let queue = DispatchQueue(label: "pocketdesk.headset-voice-focus", qos: .userInitiated)
 
     static func prepare(request: HeadsetVoiceFocusRequest, pointer: PointerExecutor?,
@@ -150,7 +182,7 @@ enum HeadsetVoiceFocus {
             anchor = driver.mouse()
             initialFocus = driver.focus(request.pid)
             if let focus = initialFocus, let info = driver.node(focus, captured) {
-                guard !info.secure, !info.readOnly else { fail("当前为密码或只读控件，请选择普通输入框。"); return }
+                guard !info.secure else { fail("当前为密码控件，请选择普通输入框。", reason: "secure-focus"); return }
                 if info.ordinary {
                     guard driver.belongs(focus, captured, request.pid) else { fail("当前输入焦点不属于原窗口，未调整焦点。"); return }
                     capture(focus); return
@@ -194,14 +226,22 @@ enum HeadsetVoiceFocus {
                     let hash = CFHash(element)
                     if visited[hash]?.contains(where: { driver.equal($0, element) }) == true { continue }
                     visited[hash, default: []].append(element); scannedCount += 1
-                    if let info = driver.node(element, captured) {
-                        if info.excluded || info.readOnly || !info.visible || !info.enabled { continue }
-                        if info.ordinary && driver.belongs(element, captured, request.pid) {
-                            if info.role == "AXTextArea" { areas.append(element) } else { fields.append(element) }
-                            areaCount = areas.count; fieldCount = fields.count
-                        }
+                    guard let info = driver.node(element, captured) else {
+                        fail("输入框检查存在不可读分支，未调整焦点。", reason: "scan-node-unavailable"); return
                     }
-                    let childList = driver.children(element)
+                    if info.excluded || !info.visible || !info.enabled { continue }
+                    if info.ordinary {
+                        guard driver.belongs(element, captured, request.pid) else {
+                            fail("输入框不属于原聚焦窗口，未调整焦点。", reason: "scan-editor-outside-window"); return
+                        }
+                        if info.role == "AXTextArea" { areas.append(element) } else { fields.append(element) }
+                        areaCount = areas.count; fieldCount = fields.count
+                    }
+                    // 只读正文和只读容器不阻止检查兄弟/下级的普通输入框。
+                    if info.terminal { continue }
+                    guard let childList = driver.children(element) else {
+                        fail("输入框检查存在不可读子树，未调整焦点。", reason: "scan-children-unavailable"); return
+                    }
                     guard childList.count + pending.count <= nodeLimit - scannedCount else {
                         pendingCount = pending.count + childList.count
                         fail("当前窗口的节点超出检查上限，请手动点一下输入框。", reason: "scan-node-limit"); return
@@ -211,7 +251,7 @@ enum HeadsetVoiceFocus {
                 pendingCount = 0
                 guard valid() else { fail("输入框检查期间应用或窗口已变化。", reason: "scan-state-changed"); return }
                 guard driver.now() < scanEnd else { fail("输入框检查超时。", reason: "scan-time-limit"); return }
-                let candidates = areas.isEmpty && driver.supportedTextField(request.pid) ? fields : areas
+                let candidates = areas + fields
                 guard candidates.count == 1 else {
                     fail(candidates.count > 1 ? "当前窗口有多个输入框，请明确点选一个。" : "未找到可确认的普通输入框，请手动点一下。", reason: candidates.count > 1 ? "scan-ambiguous" : "scan-no-editor"); return
                 }
@@ -307,7 +347,7 @@ enum HeadsetVoiceFocus {
         }
         return Driver(now: { ProcessInfo.processInfo.systemUptime }, sleep: { Thread.sleep(forTimeInterval: $0) },
                unlocked: { !LockScreenInput.locked }, trusted: { AXIsProcessTrusted() },
-               focusedPID: { systemFocusedPID() }, window: { focusedWindow($0) }, focus: { focusedElement($0) },
+               focusedPID: { currentApplicationPID() }, window: { focusedWindow($0) }, focus: { focusedElement($0) },
                node: { describe($0, window: $1) }, children: { children($0) }, belongs: { belongs($0, to: $1, pid: $2) },
                equal: { CFEqual($0, $1) }, supportedTextField: known, text: { HeadsetTextValue($0) }, setFocus: {
                    guard AXUIElementSetMessagingTimeout($0, 0.04) == .success else { return false }
@@ -335,18 +375,26 @@ enum HeadsetVoiceFocus {
         guard let window = axElement(attribute(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute)), owner(window) == pid else { return nil }
         return window
     }
-    private static func systemFocusedPID() -> pid_t? {
-        axElement(attribute(AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute)).flatMap(owner)
-    }
     private static func focusedElement(_ pid: pid_t) -> AXUIElement? {
-        guard let element = axElement(attribute(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute)), owner(element) == pid else { return nil }
-        return element
+        let system = AXUIElementCreateSystemWide()
+        guard AXUIElementSetMessagingTimeout(system, 0.04) == .success else { return nil }
+        var raw: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &raw)
+        let element = axElement(raw)
+        return resolveFocusedElement(pid: pid, systemStatus: status, systemElement: element,
+                                     systemOwner: element.flatMap(owner)) {
+            guard let local = axElement(attribute(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute)),
+                  let localOwner = owner(local) else { return nil }
+            return (local, localOwner)
+        }
     }
     private static func owner(_ element: AXUIElement) -> pid_t? {
         var pid: pid_t = 0
         return AXUIElementGetPid(element, &pid) == .success ? pid : nil
     }
-    private static func children(_ element: AXUIElement) -> [AXUIElement] { attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] }
+    private static func children(_ element: AXUIElement) -> [AXUIElement]? {
+        attribute(element, kAXChildrenAttribute) as? [AXUIElement]
+    }
     private static func belongs(_ element: AXUIElement, to window: AXUIElement, pid: pid_t) -> Bool {
         guard owner(element) == pid else { return false }
         if let ownWindow = axElement(attribute(element, kAXWindowAttribute)) { return CFEqual(ownWindow, window) }

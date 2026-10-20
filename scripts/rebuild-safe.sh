@@ -1,7 +1,7 @@
 #!/bin/zsh
-# [INPUT]: 依赖 Swift/AppKit/WebKit、Sources、Web 和 Resources/Info.plist、AppIcon.icns。 [OUTPUT]: 重装并启动 ~/Applications/PocketDesk.app。
+# [INPUT]: 依赖 Swift/AppKit/WebKit、Sources、Web、Resources/Info.plist、AppIcon.icns 与米家 JSON 桥接、公开规格网络缓存、最小设备能力策略、一次温湿度读取及可选依赖安装脚本。 [OUTPUT]: 重装并启动 ~/Applications/PocketDesk.app。
 # [POS]: scripts 的本机安全重装入口（替代 install-app.sh 中触发 safe-delete 的 rm -rf 整目录删除）。
-# [PROTOCOL]: 与原 install-app.sh 编译/codesign 逻辑一致，仅删除旧安装改为移到废纸篓。
+# [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TEMP_DIR="$(mktemp -d)"
@@ -32,6 +32,12 @@ copy_tree() {
   cp -R "$src" "$dst"
 }
 copy_tree "$ROOT_DIR/Web" "$BUILD_APP/Contents/Resources/Web"
+mkdir -p "$BUILD_APP/Contents/Resources/Mijia"
+cp "$ROOT_DIR/scripts/mijia-bridge.py" "$BUILD_APP/Contents/Resources/Mijia/mijia-bridge.py"
+cp "$ROOT_DIR/scripts/mijia-network.py" "$BUILD_APP/Contents/Resources/Mijia/mijia-network.py"
+cp "$ROOT_DIR/scripts/mijia-policy.py" "$BUILD_APP/Contents/Resources/Mijia/mijia-policy.py"
+cp "$ROOT_DIR/scripts/mijia-sensor.py" "$BUILD_APP/Contents/Resources/Mijia/mijia-sensor.py"
+cp "$ROOT_DIR/scripts/setup-mijia.sh" "$BUILD_APP/Contents/Resources/Mijia/setup-mijia.sh"
 mkdir -p "$BUILD_APP/Contents/Helpers"
 xcrun clang -fobjc-arc -Wall -Wextra -framework Foundation -framework IOKit "$ROOT_DIR/Helpers/HeadsetOptionMapping/main.m" -o "$BUILD_APP/Contents/Helpers/HeadsetOptionMapping"
 "$BUILD_APP/Contents/Helpers/HeadsetOptionMapping" --self-test

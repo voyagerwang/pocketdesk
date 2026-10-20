@@ -1,5 +1,5 @@
 #!/bin/bash
-# [INPUT]: Sources（排除生产 main.swift）、耳机操作识别测试及可选原生预览测试。
+# [INPUT]: Sources（排除生产 main.swift）、耳机操作识别/语音停顿回归及可选原生语音交互/主题预览测试。
 # [OUTPUT]: 隔离测试退出码；二进制、编译缓存与可选预览写入临时或指定目录。
 # [POS]: 耳机 UI 回归入口；不安装应用、不录音、不注入键盘或执行耳机动作。
 # [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -10,7 +10,7 @@ usage() {
 Usage: bash tests/run-headset-ui-tests.sh [--native] [--output-dir DIRECTORY]
 
 Default: build and run synthetic operation-recognition tests without opening UI.
---native: also open native preview windows and save PNGs; requires a macOS UI session.
+--native: also verify native sprite voice interactions and save UI previews; requires a macOS UI session.
 --output-dir: retain binaries and compiler caches in DIRECTORY instead of a new temporary directory.
 PD_HEADSET_TEST_OUTPUT_DIR can also select the output directory.
 PD_HEADSET_PREVIEW_DIR can separately select the native preview destination.
@@ -70,7 +70,14 @@ volume_source_binary="$output_dir/headset-volume-source-test"
 build_test "$project_root/tests/headset-volume-source.test.swift" "$volume_source_binary"
 "$volume_source_binary"
 
+voice_pause_binary="$output_dir/headset-voice-pause-test"
+build_test "$project_root/tests/headset-voice-pause.test.swift" "$voice_pause_binary"
+"$voice_pause_binary"
+
 if [[ "$run_native" == true ]]; then
+  sprite_voice_binary="$output_dir/sprite-voice-interaction-test"
+  build_test "$project_root/tests/sprite-voice-interaction.test.swift" "$sprite_voice_binary"
+  "$sprite_voice_binary"
   native_binary="$output_dir/headset-magpie-native-test"
   build_test "$project_root/tests/headset-magpie-native.test.swift" "$native_binary"
   PD_HEADSET_PREVIEW_DIR="${PD_HEADSET_PREVIEW_DIR:-$output_dir/previews}" "$native_binary"

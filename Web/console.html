@@ -1,8 +1,9 @@
 <!doctype html>
 <!--
-  [INPUT]: 依赖 console-main.js 的主业务与 console-agent.js 的服务商事务，以及 /api/status 的二维码地址与手机在线状态、/api/qr、/api/apps、/api/app-icon、/api/targets、/api/target-icon、/api/shortcuts、/api/open-accessibility；小精灵图标为原版 orb 引擎导出的固定左视 SVG（归属见 docs/orb-attribution.md）。
-  [OUTPUT]: 电脑端控制台：授权引导、扫码连接（卡内只留局域网与跨网二维码 + 标题行右侧的在线状态 pill；Tailscale 与"添加到主屏"等说明文字一律不写，跨网码仅在探测到 Tailscale 时出现）、应用管理（搜索/添加/拖拽排序/删除/自定义图标）、网页文件发送与完整快捷解锁管理；快捷键管理（录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"；主键只认 event.code 物理键位不回退 IME 可污染的 event.key，拦截 isComposing 与纯修饰键；键位标签用 .keycap 样式、label 与键位重复时只显示一个；支持重录/拖拽排序/单击删除，保存失败恢复原项；预设动作由 /api/status.actions 下发，点选即添加、不进录制流程，已添加的置灰判重，预设项不可重录）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
+  [INPUT]: 依赖 console-main.js 管理状态、设备、接收者、应用与快捷键事务，委托 console-connection.js 渲染当前 IP 主入口与可选电脑名称入口，console-mijia.js 管理米家扫码与连接核验，console-mijia-scope.js 独立读取家庭并保存设备控制范围，页面说明灯/开关与只读温湿度最小能力与模型数据边界；主题在样式前预应用，真实值由主脚本读取 /api/status 校正；小精灵图标为原版 orb 引擎导出的固定左视 SVG（归属见 docs/orb-attribution.md）。
+  [OUTPUT]: 电脑端控制台：授权引导、IP 扫码连接（App 与浏览器共用，内嵌 token；明确 IP 会变化，电脑名称连接仅按需展开并说明手机兼容性，服务失败立即清除旧地址和二维码）、应用管理（搜索/添加/拖拽排序/删除/自定义图标）、网页文件发送与完整快捷解锁管理；快捷键管理（录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"；主键只认 event.code 物理键位不回退 IME 可污染的 event.key，拦截 isComposing 与纯修饰键；键位标签用 .keycap 样式、label 与键位重复时只显示一个；支持重录/拖拽排序/单击删除，保存失败恢复原项；预设动作由 /api/status.actions 下发，点选即添加、不进录制流程，已添加的置灰判重，预设项不可重录）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
   小精灵模型配置：每家服务商独立保存名称、模型、地址与密钥，列表提供显式启用与脱敏摘要；添加/编辑表单按需展开，支持仅保存和保存并使用；Codex 登录额度保留试验入口，测试只调用模拟工具。
+  米家连接：电脑本机生成二维码、按服务端期限显示、扫码确认后核验连接；过期/取消/失败移除旧码，重新连接取消时保留原授权。连接后需显式保存允许查询与控制的单个家庭，不默认选择，不提供所有家庭；换账号重新读取并选择，场景暂停执行。
   THESIS: 已保存服务商列表是主体，显式启用决定下一次任务的模型来源。
   OWN-WORLD: 沿用经典蓝/米白令牌、系统字体、细描边与原生表单。
   STORY: 添加服务商后直接启用，切换回来保留该服务商的地址、模型与密钥。
@@ -50,16 +51,25 @@ button{font:inherit;cursor:pointer}
 .qr-item{display:flex;flex-direction:column;gap:8px}
 .qr-item[hidden]{display:none}
 .qr-item b{font-size:12px;font-weight:600}
-#qr-ip{width:132px;height:132px;border:1px solid var(--line);border-radius:4px;background:#fff;padding:6px}
-#qr-ip.error{background:var(--panel)}
+.connection-qr{width:132px;height:132px;border:1px solid var(--line);border-radius:4px;background:var(--panel);padding:6px}
+.connection-qr[hidden]{display:none}
 .mono{font-family:ui-monospace,Menlo,monospace;color:var(--muted);word-break:break-all;font-size:12px}
 .connect-info{display:flex;flex-direction:column;gap:8px;flex:1;min-width:220px}
+.connect-info p{margin:0}
+.connection-fallback{margin-top:16px}
+.connection-fallback[hidden]{display:none}
+.connection-fallback summary{cursor:pointer;color:var(--muted);font-size:12px;padding:12px 0}
+.connection-fallback summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.connection-fallback .qr-item{margin-top:8px}
+.connection-message{max-width:320px;margin:0;color:var(--muted);font-size:12px;line-height:1.7}
+.connection-message.error{color:var(--danger)}
 #url{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--ink);word-break:break-all}
 /* 地址是链接，但要保持"是一行地址"的观感：只用淡下划线示意可点，悬停才变强调色。 */
 a.url-link{text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px;word-break:break-all}
 a.url-link:hover{color:var(--accent);text-decoration-color:currentColor}
 a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
 /* 手机在线状态：与标题同排、靠右的状态徽章（复用 .pill 外观），卡片内不再堆说明文字。 */
+.connection-heading{flex-wrap:wrap;gap:8px 0}
 #phoneState{margin-left:auto}
 .hint{color:var(--muted);font-size:12px;line-height:1.7}
 #search{width:100%;padding:11px 14px;border:1px solid var(--line-strong);border-radius:4px;background:#fff;color:var(--ink);font:inherit}
@@ -157,7 +167,7 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
 :root[data-theme="muji"] .pill{border-radius:4px}
 :root[data-theme="muji"] .step{border-radius:4px;font-weight:700}
 :root[data-theme="muji"] #search,:root[data-theme="muji"] #results,:root[data-theme="muji"] .target-row{border-radius:4px}
-:root[data-theme="muji"] #qr-ip{border-radius:4px}
+:root[data-theme="muji"] .connection-qr{border-radius:4px}
 :root[data-theme="muji"] .keycap{border-radius:4px}
 .keycap{display:inline-block;min-width:22px;margin-left:4px;padding:2px 7px;border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:4px;background:#fff;color:var(--ink);font-size:11px;text-align:center}
 /* 目标设置展开区：默认面板开关 + 专属快捷键组，视觉上从属于目标行。 */
@@ -200,6 +210,7 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
 .device-popover details{margin-top:1rem}
 </style>
 <link rel="stylesheet" href="/console-actions.css?v=1">
+<link rel="stylesheet" href="/console-mijia.css?v=1">
 </head>
 <body>
 <main>
@@ -213,16 +224,26 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
   </section>
 
   <section class="card">
-    <h2><span class="step">2</span>手机扫码连接<span id="phoneState" class="pill">等待手机连接…</span></h2>
-    <nav class="console-shortcuts" aria-label="常用操作"><a class="btn primary" href="#phone-files-card">发送文件</a><a class="btn" href="#quick-unlock-card">快捷解锁设置</a></nav>
+    <h2 class="connection-heading"><span class="step">2</span>手机扫码连接<span id="phoneState" class="pill">等待手机连接…</span></h2>
+    <nav class="console-shortcuts" aria-label="常用操作"><a class="btn primary" href="#phone-files-card">发送文件</a><a class="btn" href="#quick-unlock-card">快捷解锁设置</a><a class="btn" href="#mijia-card">米家连接</a></nav>
     <div id="connect">
       <div class="qr-item">
-        <img id="qr-ip" alt="手机连接二维码，PocketDesk App 和浏览器通用">
-        <b>手机连接 · App 和浏览器通用</b>
-        <a id="ipUrl" class="hint mono url-link" href="#">生成中…</a>
+        <img id="qr-ip" class="connection-qr" alt="当前 IP 连接二维码，PocketDesk App 和浏览器通用" hidden>
+        <b id="connectionLabel">扫码连接手机 · App 和浏览器通用</b>
+        <a id="ipUrl" class="hint mono url-link is-empty">正在读取网址…</a>
+        <p id="connect-message" class="connection-message" role="status">正在生成连接码…</p>
       </div>
-      <div class="connect-info">手机和电脑连接同一 Wi-Fi。在 PocketDesk App 中扫码，或用手机浏览器扫码，即可打开完整工作台。快捷解锁在下方单独设置。</div>
+      <div class="connect-info"><p id="connectionHelp" class="hint">手机和电脑需连同一 Wi-Fi。当前 IP 可能随网络变化。</p></div>
     </div>
+    <details id="connectionFallback" class="connection-fallback" hidden>
+      <summary>电脑名称网址（手机需支持解析）</summary>
+      <p class="hint">此网址不随电脑 IP 变化。先在手机上试开，能打开后再保存到书签；无法解析时，请使用上方 IP 连接。</p>
+      <div class="qr-item">
+        <img id="qr-host" class="connection-qr" alt="电脑名称连接二维码，需要手机支持名称解析" hidden>
+        <a id="hostUrl" class="hint mono url-link is-empty">正在读取电脑名称地址…</a>
+        <p id="fallback-message" class="connection-message" role="status">正在生成电脑名称连接码…</p>
+      </div>
+    </details>
   </section>
 
   <section id="phone-files-card" class="card">
@@ -286,6 +307,53 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
     <h2><span class="step">5</span>最近动作</h2>
     <p class="sub">手机端每一次点击都会记在这里。手机上「点了没反应」时，来这里看它到底走到哪一步——多数情况是电脑锁了屏、或当时前台不是你以为的那个应用。</p>
     <div id="activityLog" class="activity-log"></div>
+  </section>
+
+  <!--
+    THESIS: 在电脑控制台完成米家连接，状态与下一步保持同处。
+    OWN-WORLD: 继承经典蓝/米白令牌、系统字与现有卡片；二维码保留白色底。
+    STORY: 连接米家 → 米家 App 扫码确认 → 显式保存允许控制的家庭。
+    FIRST VIEWPORT: 标题右侧账号状态，下方连接动作与家庭控制范围；仅连接中展开二维码。
+    FORM: 现有控制台的局部扩展，米家与小精灵模型配置相邻。
+  -->
+  <section class="card" id="mijia-card" aria-labelledby="mijia-heading">
+    <h2 class="mijia-heading" id="mijia-heading">米家<span id="mijia-state" class="pill">检查中…</span></h2>
+    <p class="sub">连接米家并选择家庭后，可查询温湿度，或控制已支持的灯和开关。</p>
+    <p id="mijia-message" class="mijia-message" role="status" aria-live="polite">正在检查连接…</p>
+    <p id="mijia-verified" class="hint" hidden></p>
+    <div id="mijia-qr-panel" class="mijia-pair" hidden>
+      <div class="mijia-qr-frame">
+        <img id="mijia-qr" alt="米家账号连接二维码，请使用米家 App 扫描" width="224" height="224" hidden>
+        <p id="mijia-qr-loading" class="hint">正在加载二维码…</p>
+      </div>
+      <div class="mijia-pair-help">
+        <p>用米家 App 扫码，并在手机上确认</p>
+        <p id="mijia-countdown" class="hint"></p>
+        <p class="hint">授权完成后，这里会自动显示连接结果。</p>
+      </div>
+    </div>
+    <div class="row mijia-actions">
+      <button id="mijia-check" class="btn" type="button" hidden>检查连接</button>
+      <button id="mijia-connect" class="btn primary" type="button" disabled>连接米家</button>
+      <button id="mijia-cancel" class="btn ghost" type="button" hidden>取消连接</button>
+    </div>
+    <p id="mijia-retained" class="hint mijia-retained" hidden>新授权完成前会保留原来的连接；取消不会移除原授权。</p>
+    <section id="mijia-scope" class="mijia-scope" aria-labelledby="mijia-scope-heading">
+      <h3 id="mijia-scope-heading">控制范围</h3>
+      <p class="hint mijia-scope-help">仅开放所选家庭中已支持的灯和开关，以及温湿度计的只读查询。摄像头、门锁、音箱、场景和其他未适配设备暂不接入。</p>
+      <p class="hint">家庭范围由 PocketDesk 限制；小米登录凭证仍是账号级授权。使用模型处理请求时，允许设备的名称、房间及所用读数会交给当前配置的模型。</p>
+      <p id="mijia-scope-current" class="mijia-scope-current">连接米家后，请选择允许控制的家庭。</p>
+      <form id="mijia-scope-form" class="mijia-scope-form">
+        <label class="field" for="mijia-home"><span>允许控制的家庭</span>
+          <select id="mijia-home" aria-describedby="mijia-scope-current mijia-scope-message" disabled>
+            <option value="">请选择允许控制的家庭</option>
+          </select>
+        </label>
+        <button id="mijia-home-save" class="btn primary" type="submit" disabled>保存范围</button>
+        <button id="mijia-home-refresh" class="btn" type="button" disabled>刷新家庭列表</button>
+      </form>
+      <p id="mijia-scope-message" class="hint mijia-scope-message" role="status" aria-live="polite"></p>
+    </section>
   </section>
 
   <section class="card" id="modelSettings" aria-labelledby="modelHeading">
@@ -368,10 +436,12 @@ themeSwitch.addEventListener('click',async event=>{
   delete themeSwitch.dataset.busy;
 });
 </script>
+<script src="/console-connection.js?v=2"></script>
 <script src="/console-main.js?v=1"></script>
-
-<!-- 模型配置与本机管理事务在主业务入口之后加载。 -->
+<!-- 模型配置与本机管理事务在控制台主业务入口之后加载。 -->
 <script src="/console-agent.js?v=2"></script>
 <script src="/console-actions.js?v=2"></script>
+<script src="/console-mijia-scope.js?v=1"></script>
+<script src="/console-mijia.js?v=1"></script>
 </body>
 </html>
