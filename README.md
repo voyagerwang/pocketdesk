@@ -66,7 +66,8 @@ Windows helper 未来只需实现同一个命令和目标解析层（例如 `Set
 1. 打开 [Releases](https://github.com/voyagerwang/pocketdesk/releases/latest)，下载 `PocketDesk-<版本>-macOS-arm64.dmg`（或内容相同的 `PocketDesk-macOS-arm64.zip`）；
 2. 双击挂载 DMG（或解压 ZIP），把 `PocketDesk.app` 拖入「应用程序」文件夹；
 3. 首次打开：**右键点击应用 → 打开 → 再点「打开」**；macOS 15 及以上若不再弹出该选项，去 **系统设置 → 隐私与安全性** 点「仍要打开」（应用使用本机开发签名，未经 Apple 公证，直接双击会被 Gatekeeper 拦截），之后可正常启动；
-4. 启动后按电脑端控制台引导：授予辅助功能权限 → 手机扫码 → 选择目标应用。
+4. 启动后按电脑端控制台引导：授予辅助功能权限 → 手机扫码 → 选择目标应用；
+5. 想用语音（耳机或小精灵）还要装 [豆包输入法 macOS 版](https://shurufa.doubao.com/)：语音识别由豆包完成，PocketDesk 只负责发送语音快捷键。控制台「语音输入」卡片会显示“未安装 / 未启用 / 未选中 / 已就绪”四态，并给出对应的下载、键盘设置或一键切换入口；没装之前按语音键不会有任何反应。
 
 ### 从源码运行（开发者）
 

@@ -351,6 +351,9 @@ final class Server {
                 // 最近一次焦点探测现场：判断"没进去"到底是真没聚焦还是 AX 报了容器角色，
                 // 全靠这一份记录（控制台可读）。
                 "focusProbe": InputExecutor.lastFocusProbe,
+                // 语音键走的是豆包输入法的系统快捷键：没装/没启用/没选中时按了就是没反应，
+                // 控制台据此给出安装或切换引导，而不是让用户自己猜。
+                "voiceInput": VoiceInputGuide.snapshot().payload,
             ]
             respond(connection, status: 200, json: payload)
         case ("GET", "/api/input-context"):
@@ -405,6 +408,16 @@ final class Server {
                 NSWorkspace.shared.open(url)
             }
             respond(connection, status: 200, json: ["ok": true])
+        case ("POST", "/api/open-keyboard-settings"):
+            // 输入法启用引导：直接落在系统设置的键盘页，省得用户自己翻。
+            if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") {
+                NSWorkspace.shared.open(url)
+            }
+            respond(connection, status: 200, json: ["ok": true])
+        case ("POST", "/api/voice-input/select"):
+            // 只由控制台显式点击触发：把当前键盘输入源切到豆包，返回切换后的真实状态。
+            let switched = VoiceInputGuide.select()
+            respond(connection, status: 200, json: ["voiceInput": switched.payload])
         case ("POST", "/api/theme"):
             // 主题唯一控制点在电脑端控制台；手机页经 /api/status 轮询跟随。
             guard let body = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],

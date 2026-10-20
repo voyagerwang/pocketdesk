@@ -47,6 +47,7 @@ button{font:inherit;cursor:pointer}
 .btn.ghost{border-color:transparent;background:transparent;color:var(--muted)}
 .btn:disabled{opacity:.45;cursor:wait}
 #authState{font-size:13px}#authState.ok{color:var(--accent)}#authState.bad{color:var(--danger)}
+#viState.ok{color:var(--ok);border-color:var(--ok)}#viState.bad{color:var(--danger);border-color:var(--danger)}#viState.warn{color:var(--warn);border-color:var(--warn-line,#d9a441)}#viActions[hidden],#viActions .btn[hidden]{display:none}
 #connect{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;margin-top:16px}
 .qr-item{display:flex;flex-direction:column;gap:8px}
 .qr-item[hidden]{display:none}
@@ -221,6 +222,17 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
     <p class="sub" id="authSub">Mac 需要辅助功能权限才能把文字和鼠标事件注入目标应用。</p>
     <div class="row"><span id="authState">检查中…</span><button id="openSettings" class="btn primary">打开系统设置</button></div>
     <p class="hint" id="authHint" style="margin-top:12px">在"隐私与安全性 → 辅助功能"中打开 PocketDesk 的开关，完成后本页状态会自动变绿。</p>
+  </section>
+
+  <section class="card" id="voice-input-card">
+    <h2>语音输入 <span id="viState" class="pill">检查中…</span></h2>
+    <p class="sub">语音键（耳机与小精灵）只负责发送豆包输入法的语音快捷键，识别由豆包完成。这台 Mac 上没装、没启用或当前没选中豆包输入法时，按下语音键不会有任何反应。</p>
+    <div class="row" id="viActions">
+      <a id="viDownload" class="btn primary" href="https://shurufa.doubao.com/" target="_blank" rel="noopener">下载豆包输入法</a>
+      <button id="viKeyboard" class="btn" type="button">打开键盘设置</button>
+      <button id="viSelect" class="btn" type="button">切换到豆包输入法</button>
+    </div>
+    <p id="viHint" class="hint" role="status" aria-live="polite"></p>
   </section>
 
   <section class="card">
