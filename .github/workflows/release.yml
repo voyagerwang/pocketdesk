@@ -1,0 +1,59 @@
+name: Release macOS app
+
+# 打标签即出包：push 一个 v* 标签，在 Apple Silicon runner 上构建 DMG/ZIP 并挂到 Release。
+# 这样发布不需要任何人手里有 PAT —— 用的是 Actions 自带的 GITHUB_TOKEN。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain info
+        run: |
+          sw_vers
+          uname -m
+          swiftc --version
+
+      - name: Build DMG and ZIP
+        run: ./scripts/package-macos.sh
+
+      - name: Keep artifacts for debugging
+        uses: actions/upload-artifact@v4
+        with:
+          name: PocketDesk-macOS-artifacts
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## macOS 安装（Apple Silicon）
+
+            1. 下载 `PocketDesk-*-macOS-arm64.dmg`，双击挂载后把 **PocketDesk** 拖进「应用程序」；
+            2. 首次打开：**右键点击应用 → 打开 → 再点「打开」**；macOS 15 及以上若不再弹出该选项，去 **系统设置 → 隐私与安全性** 点「仍要打开」——应用使用本机开发签名，未经 Apple 公证，直接双击会被 Gatekeeper 拦截；
+            3. 启动后按电脑端控制台引导：授予辅助功能权限 → 手机扫码 → 选择目标应用。
+
+            `PocketDesk-macOS-arm64.zip` 内容与 DMG 相同，供脚本或旧链接使用；`SHA256SUMS` 用于校验下载完整性。
+          files: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS
