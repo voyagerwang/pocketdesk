@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖本机耳机偏好 JSON 与 Foundation 原子文件保存。
+ * [OUTPUT]: 提供按设备保存的默认音量语音、结束方式和停顿秒数，以及音量步长校准。
+ * [POS]: Sources 的语音策略配置层；默认与自定义语音共享结束策略，设备 ID 互不回退。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 import Foundation
 
 enum HeadsetFinishMode: String, Codable {

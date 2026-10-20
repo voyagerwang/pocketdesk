@@ -1,9 +1,11 @@
 /**
- * [INPUT]: ConsoleActions 提供严格本机同源管理接口； 依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 PhoneFileHTTP 的独立文件路由、LiveInputReceipt 的草稿模式回执、InputBinding 的输入上下文、控制租约校验闭包与 ScreenCapture 的鉴权画面读取、Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
- * [OUTPUT]: 注入结构化应用派单回执；展示上报复用控制租约校验；注入输入框、指定窗口及应用动作适配；注入复用系统快捷操作的锁屏工具；注入小精灵 new/current 派单与共享输入/指针执行器与执行时控制租约核验；对外提供 Server（静态控制台主业务由 console-main.js 承接；HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活与应用选择后鼠标就位/发送/图片预上传/快捷键触发/草稿实时同步与只读恢复探测、静态页面与 recipients.js 接收者路由服务；非回环写请求强制 Bearer 校验）。
+ * [INPUT]: ServerHTTPTransport承接HTTP分帧与响应，HTTPRequestSecurity统一校验Host/Origin与本机豁免，ConsoleActions 提供严格本机同源管理接口，MijiaHTTP 在同一边界内承接扫码连接；依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 PhoneFileHTTP 的独立文件路由、LiveInputReceipt 的草稿模式回执、InputBinding 的输入上下文、控制租约校验闭包与 ScreenCapture 的鉴权画面读取、Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
+ * [OUTPUT]: 注入结构化应用派单回执；展示上报复用控制租约校验；注入输入框、指定窗口及应用动作适配；注入复用系统快捷操作的锁屏工具；注入小精灵 new/current 派单与共享输入/指针执行器与执行时控制租约核验；对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活与应用选择后鼠标就位/发送/图片预上传/快捷键触发/草稿实时同步与只读恢复探测、静态页面、console-main.js 控制台主业务入口与 recipients.js 接收者路由服务；非回环写请求强制 Bearer 校验）。
  * 原生解锁委托 UnlockNativeHTTP；手动密码委托 ManualUnlockRoute/HTTP，强制 HTTPS 同源页面、Bearer 与控制租约。
+ * 小精灵快速打开使用同一目标配置的准确应用解析，禁止模糊名称绕过模型判断。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
- * [POS]: Sources 的传输层；只翻译协议不做系统调用，与 WSServer（控制/光标）和 FrameServer（持续画面）并列。
+ * 手机入口：配对二维码和状态中的名称/IP配对链接仅向可信本机控制台返回；默认当前IP，Bonjour按需可选。所有入口拒绝未知Host和跨源Origin，回环写豁免还需同源JSON；恢复卡及输入上下文样式由agent-panel.css独立提供。
+ * [POS]: Sources的HTTP业务路由与执行器装配；收发细节委托ServerHTTPTransport，与WSServer（控制/光标）和FrameServer（持续画面）并列。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
@@ -30,7 +32,7 @@ final class Server {
     private let webRoot: URL
     private let executor: InputExecutor
     private let store: TargetStore
-    private let queue = DispatchQueue(label: "dev.voicedeck.server")
+    let queue = DispatchQueue(label: "dev.voicedeck.server")
     private var listener: NWListener?
     private var secureListener: NWListener?
     var secureTransport: SecureTransport?
@@ -39,7 +41,7 @@ final class Server {
     private var phoneLastSeen: TimeInterval = 0
     private var phonePlatform: String = ""   // 手机上报的平台：Android / iOS（首拍心跳里带 userAgent 推断）
     // 图片走 base64 JSON 体，2MB 远远不够；放宽到 12MB（客户端已把图压到 2048px JPEG）。
-    private let maxBodyBytes = 12 * 1024 * 1024
+    let maxBodyBytes = 12 * 1024 * 1024
 
     init(port: UInt16, webRoot: URL, store: TargetStore) {
         self.port = port
@@ -50,6 +52,9 @@ final class Server {
         AgentHTTP.spriteAuthorized = { [weak self] session in self?.controlAuthorized(session) == true }
         AgentRunner.resolveApp = { [weak self] name in
             AppOperator.resolve(name, configured: self?.store.targets ?? [])
+        }
+        AgentRunner.resolveQuickApp = { [weak self] name in
+            AppOperator.resolve(name, configured: self?.store.targets ?? [], exactOnly: true)
         }
         AgentRunner.isCodexApp = { [weak self] name in
             if AgentAppProfile.canonicalName(name) == "codex" { return true }
@@ -95,7 +100,6 @@ final class Server {
                 if case .success = result { done(true) } else { done(false) }
             }
         }
-
     }
 
     func start() throws {
@@ -116,68 +120,7 @@ final class Server {
         secureTransport = transport; secureListener = listener; listener.start(queue: queue)
     }
 
-    private func accept(_ connection: NWConnection, secure: Bool) {
-        connection.start(queue: queue)
-        receiveRequest(connection, buffer: [], secure: secure)
-    }
-
-    // 完整读取请求头与 Content-Length 声明的请求体（图标上传的 base64 体可达数百 KB）。
-    private func receiveRequest(_ connection: NWConnection, buffer: [UInt8], secure: Bool) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 262_144) { [weak self] data, _, isComplete, error in
-            guard let self, error == nil else { connection.cancel(); return }
-            var buffer = buffer
-            if let data { buffer.append(contentsOf: data) }
-            guard let headerEnd = buffer.firstRange(of: Array("\r\n\r\n".utf8)) else {
-                if isComplete || buffer.count > 65_536 { connection.cancel() } else { self.receiveRequest(connection, buffer: buffer, secure: secure) }
-                return
-            }
-            let headerText = String(decoding: buffer[0..<headerEnd.lowerBound], as: UTF8.self)
-            let contentLength = Self.contentLength(of: headerText)
-            if contentLength > self.maxBodyBytes { self.respond(connection, status: 413, json: ["error": "请求体过大。"]); return }
-            let total = headerEnd.upperBound + contentLength
-            if buffer.count < total {
-                if isComplete { connection.cancel() } else { self.receiveRequest(connection, buffer: buffer, secure: secure) }
-                return
-            }
-            let body = Array(buffer[headerEnd.upperBound..<total])
-            self.route(headerText: headerText, body: body, connection: connection, secure: secure)
-        }
-    }
-
-    private static func contentLength(of headerText: String) -> Int {
-        headerText.components(separatedBy: "\r\n")
-            .first { $0.lowercased().hasPrefix("content-length:") }
-            .flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) } ?? 0
-    }
-
-    private static func queryValue(_ name: String, in path: String) -> String? {
-        URLComponents(string: "http://voice-deck.local\(path)")?
-            .queryItems?.first(where: { $0.name == name })?.value
-    }
-
-    private static func headerValue(_ name: String, in headerText: String) -> String? {
-        headerText.components(separatedBy: "\r\n")
-            .first { $0.lowercased().hasPrefix(name.lowercased() + ":") }?
-            .dropFirst(name.count + 1)
-            .trimmingCharacters(in: .whitespaces)
-    }
-
-    // 回环豁免：控制台页面在 Mac 本机浏览器打开（localhost 可能解析为 127.0.0.1 或 ::1），
-    // 本机即机主，无需 token。
-    private static func isLoopback(_ connection: NWConnection) -> Bool {
-        guard case .hostPort(let host, _)? = connection.currentPath?.remoteEndpoint else { return false }
-        switch host {
-        case .ipv4(let address):
-            return address.rawValue.withUnsafeBytes { $0.first == 127 }
-        case .ipv6(let address):
-            return address.rawValue.withUnsafeBytes { $0.dropLast().allSatisfy { $0 == 0 } && $0.last == 1 }
-        default:
-            return false
-        }
-    }
-
-
-    private func route(headerText: String, body: [UInt8], connection: NWConnection, secure: Bool) {
+    func route(headerText: String, body: [UInt8], connection: NWConnection, secure: Bool) {
         let requestLine = headerText.components(separatedBy: "\r\n").first ?? ""
         let parts = requestLine.split(separator: " ")
         let method = parts.first.map(String.init) ?? ""
@@ -185,6 +128,22 @@ final class Server {
         let path = rawPath.components(separatedBy: "?").first ?? rawPath
         let bodyData = Data(body)
         let authorization = Self.headerValue("Authorization", in: headerText)
+        let host = Self.headerValue("Host", in: headerText)
+        let origin = Self.headerValue("Origin", in: headerText)
+        let requestPort = secure ? SecureTransport.port : port
+        let localAddress: String?
+        if case .hostPort(let address, _)? = connection.currentPath?.localEndpoint {
+            localAddress = String(describing: address)
+        } else { localAddress = nil }
+        guard HTTPRequestSecurity.trusted(host: host, origin: origin, port: requestPort, secure: secure,
+                localAddress: localAddress, stableHost: Util.stableHost(),
+                fetchSite: path.hasPrefix("/api/") ? Self.headerValue("Sec-Fetch-Site", in: headerText) : nil) else {
+            respond(connection, status: 403, json: ["error": "请求来源不可信，请使用 PocketDesk 的连接入口。"]); return
+        }
+        let fromLoopback = Self.isLoopback(connection)
+        let localExemption = HTTPRequestSecurity.localExemption(loopback: fromLoopback, method: method,
+            host: host, origin: origin, contentType: Self.headerValue("Content-Type", in: headerText),
+            port: requestPort, secure: secure)
 
         if ManualUnlockRoute.handle(method: method, path: path, body: bodyData, secure: secure,
             host: Self.headerValue("Host", in: headerText), origin: Self.headerValue("Origin", in: headerText),
@@ -202,6 +161,7 @@ final class Server {
                 port: secure ? SecureTransport.port : port, secure: secure) else {
                 respond(connection, status: 403, json: ["error": "请在电脑本机控制台操作。"]); return
             }
+            if MijiaHTTP.handle(method: method, path: path, rawPath: rawPath, body: bodyData, reply: { self.respond(connection, status: $0, data: $1, contentType: $2) }) { return }
             consoleActions.handle(method: method, path: path, body: bodyData) { code, result in
                 self.respond(connection, status: code, json: result)
             }
@@ -222,14 +182,14 @@ final class Server {
                 }
             return
         }
-        // 写端点鉴权：手机 token 来自扫码 URL；控制台走 localhost 回环豁免（本机即机主）。
+        // 写端点鉴权：手机 token 来自扫码 URL；控制台只豁免可信本机同源 JSON。
         // 例外：小精灵的任务接口**连回环也要 Bearer**（方案 §9 v1.1）——回环豁免意味着本机上
         // 任何进程（含网页里被加载的脚本）都能读走全部任务正文与模型返回，这不是"本机即机主"能兜住的。
         let isWrite = method != "GET"
-        let fromLoopback = Self.isLoopback(connection)
         let strictAuth = AgentHTTP.requiresBearer(path)
-        let needsAuth = isWrite || path.hasPrefix("/api/screen/") || path == "/api/input-context" || strictAuth
-        let loopbackExempt = fromLoopback && !strictAuth
+        let privateRead = ["/api/status", "/api/focus-probe", "/api/apps", "/api/recipients"].contains(path)
+        let needsAuth = isWrite || path.hasPrefix("/api/screen/") || path == "/api/input-context" || privateRead || strictAuth
+        let loopbackExempt = localExemption && !strictAuth
         if needsAuth && !loopbackExempt && !Auth.verify(authorizationHeader: authorization) {
             respond(connection, status: 401, json: ["error": "未授权：请重新扫码连接。"])
             return
@@ -330,8 +290,10 @@ final class Server {
             respond(connection, status: 200, data: data, contentType: "application/x-x509-ca-cert")
 
         case ("GET", "/api/status"):
-            let stableURL = Util.stableURL(port)
+            let stableHost = Util.stableHost()
+            let stableURL = stableHost.map { "http://\($0):\(port)" }
             let lanIP = Util.primaryLANAddress()
+            let ipURL = lanIP.map { "http://\($0):\(port)" }
             let tailscaleURL = Util.tailscaleURL(port)
             // 前台应用若命中某个已配置目标，手机端选中态会跟随它；未命中则把 frontmostName
             // 交给手机端做"注入当前前台"的伪目标（不切换应用）。
@@ -350,12 +312,13 @@ final class Server {
                 "phoneLastSeen": Int(phoneLastSeen),
                 "phonePlatform": phonePlatform,
                 "theme": store.theme,
-                "lanURL": (stableURL ?? lanIP.map { "http://\($0):\(port)" }) as Any?,
-                "ipURL": lanIP.map { "http://\($0):\(port)" } as Any?,
-                "workspaceURL": fromLoopback ? lanIP.map { "http://\($0):\(port)/?token=\(Auth.token)" } as Any? : nil,
+                "lanURL": (stableURL ?? ipURL) as Any?,
+                "ipURL": ipURL as Any?,
+                "workspaceURL": fromLoopback ? (stableURL ?? ipURL).map { "\($0)/?token=\(Auth.token)" } as Any? : nil,
+                "ipWorkspaceURL": fromLoopback ? ipURL.map { "\($0)/?token=\(Auth.token)" } as Any? : nil,
                 "remoteURL": tailscaleURL ?? "",
                 "secureURL": secureTransport == nil ? "" : (lanIP.map { "https://\($0):\(SecureTransport.port)" } ?? ""),
-                "hostName": Util.stableHost() ?? "",
+                "hostName": stableHost ?? "",
                 "frontmostId": frontmostId as Any?,
                 "frontmostName": frontmost?.localizedName as Any?,
                 "targets": store.targets.map { config in
@@ -403,8 +366,11 @@ final class Server {
         case ("GET", "/console"), ("GET", "/console.html"):
             serveFile("console.html", connection: connection)
         case ("GET", "/api/qr"):
-            // type=ip 生成局域网 IP 地址版，type=tailscale 生成跨网私有地址版；默认生成 .local
-            // 主机名版。所有 URL 内嵌配对 token，扫码即完成配对。
+            guard localExemption else {
+                respond(connection, status: 403, json: ["error": "请在电脑本机控制台查看配对二维码。"]); return
+            }
+            // 默认或 type=ip 使用当前局域网 IP；type=host 显式选择 Bonjour 名称，
+            // type=tailscale 使用跨网私有地址。所有 URL 内嵌配对 token，扫码即完成配对。
             let lanIP = Util.primaryLANAddress()
             let target: String?
             switch Self.queryValue("type", in: rawPath) {
@@ -414,8 +380,10 @@ final class Server {
                 target = lanIP.map { "http://\($0):\(port)" }
             case "tailscale":
                 target = Util.tailscaleURL(port)
+            case "host":
+                target = Util.stableURL(port)
             default:
-                target = Util.stableURL(port) ?? lanIP.map { "http://\($0):\(port)" }
+                target = lanIP.map { "http://\($0):\(port)" }
             }
             guard let url = target.map({ "\($0)/?token=\(Auth.token)" }), let png = Util.qrPNG(url) else {
                 respond(connection, status: 503, json: ["error": "未找到对应网络地址，无法生成二维码。"]); return
@@ -505,6 +473,7 @@ final class Server {
             }
         case ("POST", "/api/target-icon"):
             guard let upload = try? JSONDecoder().decode(IconUpload.self, from: bodyData),
+                  HTTPRequestSecurity.safeIconID(upload.id),
                   let png = Data(base64Encoded: upload.data), png.count <= 512_000,
                   store.resolve(upload.id) != nil else {
                 respond(connection, status: 400, json: ["error": "图标数据无效。"]); return
@@ -628,7 +597,7 @@ final class Server {
             }
         case ("GET", "/"), ("GET", "/index.html"):
             serveFile("index.html", connection: connection)
-        case ("GET", let asset) where ["phone-files.js", "phone-files.css", "orb-rings.js", "orb-emotions.js", "orb-ball.js", "orb-engine.js", "orb-mobile.js", "device-info.js", "agent-client.js", "agent-panel.js", "sprite-report.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "manual-unlock.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "recipients.js", "style.css", "app-extras.css", "screen.css", "console-agent.js", "console-main.js", "console-actions.js", "console-actions.css"].contains(String(asset.dropFirst())):
+        case ("GET", let asset) where ["phone-files.js", "phone-files.css", "orb-rings.js", "orb-emotions.js", "orb-ball.js", "orb-engine.js", "orb-mobile.js", "device-info.js", "agent-client.js", "agent-panel.js", "agent-panel.css", "sprite-report.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "manual-unlock.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "recipients.js", "style.css", "app-extras.css", "screen.css", "console-agent.js", "console-connection.js", "console-main.js", "console-actions.js", "console-actions.css", "console-mijia.js", "console-mijia.css", "console-mijia-scope.js"].contains(String(asset.dropFirst())):
             serveFile(String(path.dropFirst()), connection: connection)
         default:
             // /api/v1 下的本机管理端点（模型服务配置与连通性实测）委托 AgentHTTP，
@@ -648,6 +617,9 @@ final class Server {
     }
 
     private func serveIcon(_ targetId: String, connection: NWConnection) {
+        guard HTTPRequestSecurity.safeIconID(targetId), store.resolve(targetId) != nil else {
+            respond(connection, status: 404, json: ["error": "图标不可用。"]); return
+        }
         // 图标内容近乎不变（仅控制台换图标时变，且会重置内存缓存），长缓存让浏览器
         // 刷新页面时直接复用本地副本——没有重新下载就没有"先首字后图标"的闪跳。
         if let cached = iconCache["id:" + targetId] {
@@ -823,20 +795,5 @@ final class Server {
         ExecutionLog.shared.append(kind: "focus", label: "聚焦输入框",
                                    outcome: focused == "yes" ? .delivered : focused == "no" ? .failed : .sent,
                                    detail: detail, frontApp: appName)
-    }
-
-    private func respond(_ connection: NWConnection, status: Int, json: Any) {
-        // .sortedKeys：字典键序在 Swift 里是不确定的（每次序列化都可能不同）。客户端用
-        // JSON.stringify 比较目标/快捷键是否变化，键序抖动会被误判为"变了"→ 每拍重建 DOM →
-        // 图标因 no-store 重新下载，表现为图标周期性闪回首字。确定性输出是服务端的契约责任。
-        let data = (try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])) ?? Data("{}".utf8)
-        respond(connection, status: status, data: data, contentType: "application/json; charset=utf-8")
-    }
-
-    private func respond(_ connection: NWConnection, status: Int, data: Data, contentType: String, cacheControl: String = "no-store", extraHeaders: [String: String] = [:]) {
-        let reason = status == 200 ? "OK" : status == 400 ? "Bad Request" : status == 404 ? "Not Found" : status == 413 ? "Payload Too Large" : status == 503 ? "Service Unavailable" : "Unprocessable Entity"
-        let additions = extraHeaders.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)\r\n" }.joined()
-        let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(contentType)\r\nContent-Length: \(data.count)\r\nCache-Control: \(cacheControl)\r\n\(additions)Connection: close\r\n\r\n"
-        connection.send(content: Data(header.utf8) + data, completion: .contentProcessed { _ in connection.cancel() })
     }
 }

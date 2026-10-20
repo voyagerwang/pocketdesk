@@ -1,8 +1,7 @@
 /**
- * [INPUT]: 依赖 AgentAppProfile 的身份/模式、AgentTaskComposer 的新任务页证据和 TaskStore 原子派单占用； 依赖已配置 TargetStore、共享 InputExecutor、InputFocus、TargetWindowLocator、PointerGeometry 与共享 PointerExecutor；控制租约保护聚焦与投递。
- * [OUTPUT]: 支持 WorkBuddy/ZCode 指定项目新建，先填后点语义发送按钮；Cue 按真实包身份注册并向新群聊提交任务；支持已解析 Codex 项目/旧任务/DOT 目标，共用 FIFO 与原子派单；保留目标草稿并核对精确绑定后提交。以真实包身份兼容 Codex 安装为 ChatGPT.app 的接收者别名； 提供 AgentAppDispatch.send：默认创建独立新任务、仅显式 current 才沿用当前对话；核验页面及输入框后提交任务，返回结构化 AppDispatchReceipt，区分发送前失败与发送后待核对，并持久保存成功接续目标。
- * [POS]: Agent 工具与现有输入事务之间的适配层；不创建第二套键盘执行器，不操作聊天联系人。
- *        新任务禁止盲清空，页面证据不成立就停止；投递事务 FIFO 排队，任务执行不互斥；副作用前落幂等记录，不确定结果不重试。
+ * [INPUT]: 依赖应用身份、原生新任务与项目导航、TaskStore原子派单占用，以及共享输入/指针执行器和控制租约。
+ * [OUTPUT]: 提供默认新任务或明确当前会话派单；WorkBuddy统一走保留旧草稿的原生新建及独立窗口，Cola走原生新建和语义发送，Codex使用已解析的深链目标；只认真实接收回执，未知结果不重发。
+ * [POS]: Agent工具与输入事务之间的FIFO适配器；页面准备不发送正文，提交前核验目标/焦点/空框，副作用前持久占用，不清空新任务之外的旧会话草稿。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
@@ -72,10 +71,7 @@ enum AgentAppDispatch {
                     finish(.init(state: .unconfirmed, detail: "本任务已经尝试派单或不再执行，不会重复创建或提交。")); return
                 }
             } catch { finish(.init(state: .failed, detail: "无法保存派单记录，未操作目标应用。")); return }
-            executor.activate(target.id) { result in
-                guard case .success(let activation) = result, let pid = activation.pid else {
-                    finish(.init(state: .failed, detail: "激活应用失败。")); return
-                }
+            let navigate: (pid_t) -> Void = { pid in
                 let prepared: (Result<AgentTaskComposer.Prepared, AgentComposerFailure>) -> Void = { result in
                     switch result {
                     case .failure(let error): finish(.init(state: .needsInput, detail: error.message))
@@ -102,6 +98,25 @@ enum AgentAppDispatch {
                     }
                 }
             }
+            executor.activate(target.id) { result in
+                if case .success(let activation) = result, let pid = activation.pid { navigate(pid); return }
+                guard profile == .workbuddy, mode == .newTask, authorized() else {
+                    finish(.init(state: .failed, detail: "激活应用失败。")); return
+                }
+                let apps = NSWorkspace.shared.runningApplications.filter { app in
+                    !app.isTerminated && ((target.path != nil && app.bundleURL?.path == target.path)
+                        || (target.bundleID != nil && app.bundleIdentifier == target.bundleID))
+                }
+                guard apps.count == 1, let app = apps.first else {
+                    finish(.init(state: .needsInput, detail: "未找到唯一 WorkBuddy 运行实例，未输入正文。")); return
+                }
+                AgentTaskComposer.acquireWorkBuddyFocus(pid: app.processIdentifier, pointer: pointer, authorized: authorized) { focused in
+                    guard focused else {
+                        finish(.init(state: .needsInput, detail: "WorkBuddy 已打开，但可见空框的输入焦点未核实；未输入正文。")); return
+                    }
+                    navigate(app.processIdentifier)
+                }
+            }
         }
     }
 
@@ -110,8 +125,9 @@ enum AgentAppDispatch {
                                destination: CodexDestination?,
                                executor: InputExecutor, pointer: PointerExecutor?, authorized: @escaping () -> Bool,
                                completion: @escaping (AppDispatchReceipt) -> Void) {
+        let profile = AgentAppProfile.resolve(target)
         let stillValid: () -> Bool = {
-            guard authorized(), composer.validateTarget?() != false, InputFocus.focusedApplicationPID() == pid,
+            guard authorized(), composer.validateWindow?() != false, composer.validateTarget?() != false, InputFocus.focusedApplicationPID() == pid,
                   let current = InputFocus.focusedElement(pid: pid) else { return false }
             return CFEqual(current, composer.element)
         }
@@ -126,7 +142,7 @@ enum AgentAppDispatch {
             completion(.init(state: .confirmed, detail: "已交给 " + name, targetName: name, executionVisible: executionVisible))
         }
         if composer.prefilled {
-            AgentTaskComposer.submitPrepared(pid: pid, prepared: composer, text: text, pointer: pointer, authorized: authorized) { result in
+            AgentTaskComposer.submitPrepared(pid: pid, prepared: composer, text: text, profile: profile, pointer: pointer, authorized: authorized) { result in
                 switch result {
                 case .success(let executionVisible): committed(executionVisible)
                 case .failure(let error):
@@ -161,8 +177,9 @@ enum AgentAppDispatch {
         if mode == .current && !executor.clearComposerForAgentDispatch() {
             completion(.init(state: .failed, detail: "当前输入框清空按键未能发出。")); return
         }
-        let profile = AgentAppProfile.resolve(target)
-        let semanticSend = [.cue, .workbuddy, .zcode].contains(profile)
+        // Cola 1.5.0 与 Cue/WorkBuddy/ZCode 一样有可访问的语义发送入口（“发送”按钮，正文空时 disabled）：
+        // 回车只代表按键发出，不能当作已接收，所以 Cola 也走“写草稿 → 点发送 → 接收核验”。
+        let semanticSend = [.cola, .cue, .workbuddy, .zcode].contains(profile)
         let payload: [String: Any] = ["draftId": "agent-" + taskId + "-" + String(TaskStore.task(id: taskId)?.attempt ?? 1), "targetId": target.id, "text": text, "submit": !semanticSend]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let command = try? JSONDecoder().decode(LiveInputCommand.self, from: data) else {

@@ -1,9 +1,10 @@
 """
 [INPUT]: 完整控制台与隔离文件/解锁接口替身。
-[OUTPUT]: 网页选择文件、原地密码保存、开关、配对核对、撤销与错误恢复的真实点击验证。
+[OUTPUT]: 默认 IP 连接在接收者请求阻塞时仍更新、名称入口默认折叠、凭据不展示、服务失败撤下旧码且恢复重现，以及文件发送、密码保存、配对核对与撤销的真实点击验证。
 [POS]: 不接触真实密码/设备配置，网络请求严格截留在测试页。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
+import base64
 import mimetypes
 from pathlib import Path
 from urllib.parse import urlparse
@@ -13,6 +14,7 @@ with sync_playwright() as p:
  browser=p.chromium.launch(headless=True)
  page=browser.new_page(viewport={'width':1100,'height':900});page.set_default_timeout(7000)
  state={'configured':True,'enabled':False,'hasPassword':False,'credentials':[]};files=[];errors=[];writes=[];uploads={}
+ connection={'ip':'192.168.1.2','available':True,'holdRecipients':False};pending_recipients=[]
  page.on('pageerror',lambda e:errors.append(str(e)))
  def route(r):
   path=urlparse(r.request.url).path
@@ -36,16 +38,41 @@ with sync_playwright() as p:
    return r.fulfill(json=state)
   if path=='/api/console/files':return r.fulfill(json={'files':files})
   if path=='/api/console/unlock':return r.fulfill(json=state)
-  if path=='/api/status':return r.fulfill(json={'targets':[],'shortcuts':[],'actions':[],'log':[],'accessibility':True,'theme':'classic','workspaceURL':'http://192.168.1.2:46387/?token=fixture','secureURL':'https://192.168.1.2:46487/'})
+  if path=='/api/qr':return r.fulfill(body=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='),content_type='image/png')
+  if path=='/api/recipients' and connection['holdRecipients']:pending_recipients.append(r);return
+  if path=='/api/status':
+   if not connection['available']:return r.fulfill(status=503,json={'error':'fixture unavailable'})
+   return r.fulfill(json={'targets':[],'shortcuts':[],'actions':[],'log':[],'accessibility':True,'theme':'classic','workspaceURL':'http://pocketdesk-fixture.local:46387/?token=fixture-connection-token','ipWorkspaceURL':f"http://{connection['ip']}:46387/?token=fixture-connection-token",'secureURL':'https://192.168.1.2:46487/'})
   if path.startswith('/api/'):return r.fulfill(json={'ok':True,'devices':[]})
   f=ROOT/'Web'/path.lstrip('/')
   if f.is_file():return r.fulfill(body=f.read_bytes(),content_type=mimetypes.guess_type(str(f))[0] or 'text/plain')
   r.fulfill(status=404,body='')
  page.route('**/*',route);page.goto('http://127.0.0.1:47899/console.html',wait_until='networkidle')
- assert page.locator('#connect img').count()==1
+ assert page.locator('#connect img:visible').count()==1
+ assert page.locator('#qr-ip').is_visible()
+ assert not page.locator('#qr-host').is_visible(), '名称二维码应收进折叠区'
  assert page.locator('#secureQrItem').count()==0
- assert page.get_by_text('手机连接 · App 和浏览器通用',exact=True).is_visible()
- assert page.locator('#ipUrl').get_attribute('href')=='http://192.168.1.2:46387/?token=fixture'
+ assert page.get_by_text('扫码连接手机 · App 和浏览器通用',exact=True).is_visible()
+ assert page.locator('#hostUrl').get_attribute('href')=='http://pocketdesk-fixture.local:46387/?token=fixture-connection-token'
+ assert page.locator('#ipUrl').get_attribute('href')=='http://192.168.1.2:46387/?token=fixture-connection-token'
+ for selector in ['#hostUrl','#ipUrl']:assert 'fixture-connection-token' not in page.locator(selector).inner_text()
+ # 与地址无关的请求不得阻塞连接入口；真实整页脚本执行，接收者响应暂时留在途。
+ first_host_qr=page.locator('#qr-host').get_attribute('src')
+ first_ip_qr=page.locator('#qr-ip').get_attribute('src')
+ connection.update(ip='192.168.1.3',holdRecipients=True)
+ page.evaluate('() => { window.connectionRefresh = refresh(); }')
+ page.wait_for_function('document.querySelector("#ipUrl").href.includes("192.168.1.3")')
+ assert page.locator('#qr-ip').get_attribute('src')!=first_ip_qr, 'IP 变化必须更新默认连接码'
+ assert page.locator('#qr-host').get_attribute('src')==first_host_qr, 'IP 变化不重载可选名称码'
+ assert pending_recipients, '接收者响应确实尚未完成'
+ connection['holdRecipients']=False
+ for pending in pending_recipients:pending.fulfill(json={'order':[]})
+ pending_recipients.clear();page.evaluate('() => window.connectionRefresh')
+ connection['available']=False;page.evaluate('() => refresh()')
+ for selector,attribute in [('#ipUrl','href'),('#qr-ip','src'),('#hostUrl','href'),('#qr-host','src')]:
+  assert page.locator(selector).get_attribute(attribute) is None
+ assert not page.locator('#qr-ip').is_visible()
+ connection['available']=True;page.evaluate('() => refresh()');page.locator('#qr-ip').wait_for(state='visible')
  page.locator('#sendFilePick').click();page.wait_for_function('document.querySelector("#sendFileList").textContent.includes("测试文件")')
  page.evaluate("""() => {
    const transfer=new DataTransfer();transfer.items.add(new File(['hello'],'甲.txt'));transfer.items.add(new File([],'空.txt'));
@@ -68,4 +95,4 @@ with sync_playwright() as p:
  page.locator('#phone-files-card').screenshot(path='/tmp/pd-web-send-files.png')
  page.set_viewport_size({'width':390,'height':844});assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
  assert not errors,errors;browser.close()
-print('PASS: file picker and chunked drop, password not retained, enable, single QR/code confirmation, revoke, responsive layout')
+print('PASS: current IP connection and optional hostname, token hidden, file picker and chunked drop, password not retained, enable, QR/code confirmation, revoke, responsive layout')

@@ -2,6 +2,7 @@
  * [INPUT]: 已鉴权的浏览器心跳；调用者在 Server 串行队列使用。
  * [OUTPUT]: 有界、持久化的连接记录；设备描述不是身份认证依据。
  * [POS]: 连接可见性，独立于配对凭证与控制租约。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import Foundation
 

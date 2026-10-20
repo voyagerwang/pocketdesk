@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 Foundation；不依赖 AX、Network 或任何运行时——本文件只描述任务事实的形状。
- * [OUTPUT]: 补充票据、派单轮次及明确未提交回执；工作台创建持久回执与结构化 AppDispatchReceipt，提交未核实终态 submitted、投递前界面失败终态 failed；可选派单接续目标、飞书个人/群候选及通用操作去重/确认记录； 任务保存控制会话用于执行租约核验；对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
- *           AgentTask、TaskEvent，以及 AgentTask 与字典互转的 json/alternative 方法。
+ * [INPUT]: 依赖 Foundation 与 TaskRecovery 恢复提示契约；不依赖 AX、Network 或任何运行时——本文件只描述任务事实的形状。
+ * [OUTPUT]: 补充票据、派单轮次及明确未提交回执；工作台创建持久回执与结构化 AppDispatchReceipt，提交未核实终态 submitted、投递前界面失败终态 failed；飞书收件者/群成员候选、冻结正文与提及计划及持久发送证据；通用操作去重/确认记录；任务保存控制会话用于执行租约核验；对外提供小精灵任务的类型：TaskStatus、TaskMessage、PageBinding、TaskUsage、
+ *           AgentTask、TaskEvent，以及 AgentTask 与字典互转的 json/alternative 方法；TaskUsage 区分零调用与未知用量，保存可选推理来源/模型，兼容旧任务；保存可选恢复事实，恢复 JSON 共用保守主动作与输入文案；米家设备操作保留可选持久占用与完成回执，未知结果不重放。
  * [POS]: Sources 的 Agent 领域模型层；HTTP 层只做字典与它的互转，任务语义不散落到路由里。
  *        与系统注入解耦：本文件可单独编译，供 tests 直接引用。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -97,14 +97,21 @@ struct TaskUsage: Codable, Equatable {
     var completionTokens: Int?
     var totalTokens: Int?
     var unknown: Bool
+    var provider: String?
+    var model: String?
 
     static let none = TaskUsage(promptTokens: nil, completionTokens: nil, totalTokens: nil, unknown: true)
+    /// 尚未调用模型的累计起点；与已调用但没有返回用量的 unknown 分开。
+    static let zero = TaskUsage(promptTokens: 0, completionTokens: 0, totalTokens: 0, unknown: false)
 
-    init(promptTokens: Int?, completionTokens: Int?, totalTokens: Int?, unknown: Bool) {
+    init(promptTokens: Int?, completionTokens: Int?, totalTokens: Int?, unknown: Bool,
+         provider: String? = nil, model: String? = nil) {
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
         self.totalTokens = totalTokens
         self.unknown = unknown
+        self.provider = provider
+        self.model = model
     }
 
     /// 从 OpenAI 风格 usage 字典解析。字段缺失或类型不符时记 unknown，不猜。
@@ -120,7 +127,8 @@ struct TaskUsage: Codable, Equatable {
         let completion = int("completion_tokens")
         let total = int("total_tokens") ?? (prompt.map { $0 + (completion ?? 0) })
         if prompt == nil && completion == nil && total == nil { return .none }
-        return TaskUsage(promptTokens: prompt, completionTokens: completion, totalTokens: total, unknown: false)
+        return TaskUsage(promptTokens: prompt, completionTokens: completion, totalTokens: total, unknown: false,
+                         provider: raw["provider"] as? String, model: raw["model"] as? String)
     }
 }
 
@@ -163,6 +171,10 @@ struct FeishuChoice: Codable, Equatable {
     var text: String
     var supplement: Int
     var kind: String?
+    /// 收件群已确定时，候选表示该群内待选择的同名成员；nil 兼容旧收件者候选。
+    var recipient: FeishuContact? = nil
+    var mentions: [String]? = nil
+    var resolvedMentions: [FeishuContact]? = nil
 }
 struct FeishuConfirmation: Codable, Equatable {
     var key: String
@@ -241,6 +253,8 @@ struct AgentTask: Codable, Equatable {
     var feishuDelivery: FeishuDelivery?
     /// 工作台创建操作的持久回执；pending 不得自动重放。
     var workbenchOperations: [String: String]?
+    /// 米家设备写操作的持久证据；pending 只能推进至真实回执，旧任务兼容 nil。
+    var mijiaOperations: [String: String]?
     var feishuOperations: [String: String]?
     var feishuConfirmation: FeishuConfirmation?
     /// 仅真实提交成功才设置接续目标，手机不从模型文案猜应用。
@@ -251,6 +265,8 @@ struct AgentTask: Codable, Equatable {
     var inputRequestTexts: [String: String]?
     var safeDispatchRetryAttempt: Int?
     var pendingInputRelation: Bool?
+    /// 未完成原因与恢复提示；nil 兼容旧任务，不从错误文案推断能力限制。
+    var recovery: TaskRecovery?
 
     init(schemaVersion: Int = AgentTask.currentSchemaVersion,
          id: String = UUID().uuidString,
@@ -301,7 +317,7 @@ struct AgentTask: Codable, Equatable {
         var dict: [String: Any] = [
             "id": id,
             "status": status.rawValue,
-            "statusText": status.displayName,
+            "statusText": TaskRecovery.forTask(self)?.headline ?? status.displayName,
             "revision": revision,
             "createdAt": createdAt,
             "updatedAt": updatedAt,
@@ -323,10 +339,14 @@ struct AgentTask: Codable, Equatable {
         if let delivery = feishuDelivery, delivery.messageId != nil { dict["deliveryRecipient"] = delivery.recipient }
         if let result { dict["result"] = result }
         if let error { dict["error"] = error }
-        if status == .failed || status == .needsInput || status == .submitted {
-            dict["continuationHint"] = status == .submitted
-                ? "原任务已保留，可补充或核对结果；不会自动重复发送。"
-                : "原任务已保留，可以直接补充，或说“新任务”另做一件事。"
+        if let recovery = TaskRecovery.forTask(self) {
+            let action = TaskRecovery.action(for: self)
+            var payload: [String: Any] = ["kind": recovery.kind.rawValue, "headline": recovery.headline,
+                                        "continuationHint": recovery.continuationHint, "inputLabel": recovery.inputLabel,
+                                        "primaryAction": ["kind": action.kind.rawValue, "title": action.title]]
+            if let nextStep = recovery.nextStep { payload["nextStep"] = nextStep }
+            dict["recovery"] = payload
+            dict["continuationHint"] = recovery.continuationHint
         }
         if let softDeadline { dict["softDeadline"] = softDeadline }
         if let hardDeadline { dict["hardDeadline"] = hardDeadline }
@@ -364,6 +384,8 @@ extension TaskUsage {
         if let promptTokens { dict["promptTokens"] = promptTokens }
         if let completionTokens { dict["completionTokens"] = completionTokens }
         if let totalTokens { dict["totalTokens"] = totalTokens }
+        if let provider { dict["provider"] = provider }
+        if let model { dict["model"] = model }
         return dict
     }
 }

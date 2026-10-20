@@ -3,6 +3,16 @@
 
 成员清单
 
+mijia-sensor.py: 一次家庭设备发现与规格核验的只读温湿度编排；准确设备/房间唯一匹配，在线传感器直读一次、失败后纯云缓存一次，离线只取缓存；可信秒/毫秒归一化并区分读取时间与上报时间，无账号或设备缓存。
+
+mijia-policy.py: 米家最小能力纯策略；标准设备/服务/属性URN交叉核验，仅开放灯/开关基础标量及标准温湿度只读值，验证单位/范围/位宽；准备/执行/读回共用，名称、摄像头和通用动作不得扩权。
+
+mijia-bridge.py: 委托mijia-policy默认拒绝敏感/未知设备，隐藏场景并取消通用动作执行； 独立安装的 mijiaAPI 5.0.0 JSON 适配；家庭清单仅返 ID/原名，指定家庭时实时核对设备归属，并用本次已取得家庭的唯一 roomlist/dids 映射补房间，错误不回退全部家庭；普通业务直接验证账号、status 查询真实家庭接口，公开规格失败本次不重试，云端离线回执保留明确代码并说明 Mesh 网关前提，不把手机蓝牙可控等同于云端可达；--login-events 输出二维码/唯一终态，独立暂存由 App 提交；--check-runtime 无网络检查固定 SDK。
+mijia-network.py: 米家传输边界；按请求阶段脱敏网络/接口错误、限时调用和本次家庭 owner 复用；只对固定 MIOT 公开规格端点按完整 URN 合并请求并缓存七天，私有原子落盘且限制大小/格式，失败只在本次调用内复用，家庭/设备归属不跨调用缓存。
+setup-mijia.sh: 米家可选依赖安装与电脑扫码入口；固定 SDK 5.0.0，独立用户 venv，--no-login 只安装，随 App 打包供控制台首次连接准备依赖，不将 SDK/凭证打包进 App；取消转发信号并回收当前 uv/登录子进程。
+install-headset-services.py: 安装脚本的用户级服务交接；自测与映射核验通过后部署 launchd，保留旧服务和旧 App 备份，恢复 PocketDesk 登录启动。
+sync-orb-svg.js: 比对 Web 球体引擎与 orb.svg 静态帧的几何、渐变和来源契约；仅检查，不重新生成或手改素材。
+
 build-session-probe.sh: 构建独立本机会话验证应用和临时 Aqua LaunchAgent；RUN.txt 明确先注册 Launch Services 再启动，确保 TCC 能定位应用；prelogin/baseline 只改变 Mach-O 预登录标记，保留相同签名身份；不自动启动、不安装 root 服务、不改正式应用。
 
 unlock-preflight.py: Python 标准库只读探针；仅连接回环 TCP 5900，协商 RFB 版本并读取认证类型后断开，不认证、不传密码、不采集画面、不发输入；区分权限阻断、拒绝连接与协议可达，结果始终保留 unlock_verified=false。

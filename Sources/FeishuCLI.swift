@@ -1,7 +1,7 @@
 /**
- * [INPUT]: Foundation Process，当前 macOS 用户的 lark-cli 安装与授权；不读取或复制令牌。
- * [OUTPUT]: 业务 argv 执行、帮助/Schema/规范读取、脱敏授权范围与 JSON 信封解析，超时终止、输出限额和脱敏错误分类。
- * [POS]: 飞书适配的进程边界，复用 Workbench 同一 CLI 身份；不提供任意 shell 工具。
+ * [INPUT]: Foundation Process，当前 macOS 用户的 lark-cli 原生或 npm 安装与授权；不读取或复制令牌。
+ * [OUTPUT]: 原生 CLI 入口解析（npm 安装绕过依赖 Node 的启动脚本）、固定业务 argv、帮助/Schema/规范读取、用户本人状态与 JSON 信封解析；超时、启动依赖、网络和登录/权限错误分类。
+ * [POS]: 飞书适配的后台进程边界，复用 Workbench 同一 CLI 身份；不依赖交互 shell 的 PATH，不提供任意 shell 工具。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import Foundation
@@ -15,7 +15,21 @@ enum FeishuCLI {
         paths += (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/lark-cli" }
         let nvm = home + "/.nvm/versions/node"
         paths += ((try? FileManager.default.contentsOfDirectory(atPath: nvm)) ?? []).sorted().reversed().map { nvm + "/" + $0 + "/bin/lark-cli" }
-        return paths.first { !$0.isEmpty && FileManager.default.isExecutableFile(atPath: $0) }
+        return paths.lazy.compactMap(resolveExecutable).first
+    }
+
+    static func resolveExecutable(_ path: String) -> String? {
+        guard !path.isEmpty, FileManager.default.isExecutableFile(atPath: path) else { return nil }
+        let launcher = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        let scripts = launcher.deletingLastPathComponent()
+        let package = scripts.deletingLastPathComponent()
+        // npm 的 run.js 仅转交同包 bin/lark-cli；launchd 的系统 PATH 没有 Node，直接调用原生入口。
+        if launcher.lastPathComponent == "run.js", scripts.lastPathComponent == "scripts",
+           package.lastPathComponent == "cli", package.deletingLastPathComponent().lastPathComponent == "@larksuite" {
+            let native = package.appendingPathComponent("bin/lark-cli").path
+            if FileManager.default.isExecutableFile(atPath: native) { return native }
+        }
+        return path
     }
 
     // 管道持续排空，最多保留 2 MiB，防止进程填满 pipe 后无法退出。
@@ -65,20 +79,36 @@ enum FeishuCLI {
             return .success(["help": String(data: data, encoding: .utf8) ?? ""])
         }
         guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            let diagnostic = String(data: stderr.data, encoding: .utf8) ?? ""
+            if process.terminationStatus == 127, diagnostic.lowercased().contains("node") {
+                return .failure(Failure(message: "飞书 CLI 启动失败：后台运行环境找不到 Node，请检查 CLI 安装。"))
+            }
+            if process.terminationStatus != 0 {
+                return .failure(Failure(message: "飞书 CLI 执行失败（退出码 \(process.terminationStatus)），未取得可核对的回执。"))
+            }
             return .failure(Failure(message: "飞书返回结果无法核对。"))
         }
         if mode == "auth", process.terminationStatus == 0 {
             let user = (json["identities"] as? [String: [String: Any]])?["user"] ?? [:]
-            return .success(["verified": json["verified"] as? Bool ?? false,
+            return .success(["verified": user["verified"] as? Bool == true && user["available"] as? Bool == true,
                              "scopes": user["scope"] as? String ?? "",
-                             "status": user["status"] as? String ?? "unknown"])
+                             "status": user["status"] as? String ?? "unknown",
+                             "tokenStatus": user["tokenStatus"] as? String ?? "unknown"])
         }
         guard process.terminationStatus == 0, json["ok"] as? Bool == true else {
             let error = json["error"] as? [String: Any] ?? [:]
             let subtype = error["subtype"] as? String ?? ""
+            let message = (error["message"] as? String ?? "").lowercased()
             if error["missing_scopes"] != nil || subtype.contains("scope") {
                 let scopes = (error["missing_scopes"] as? [String] ?? []).filter { $0.range(of: "^[a-zA-Z0-9_:.-]+$", options: .regularExpression) != nil }
                 return .failure(Failure(message: "当前操作缺少飞书权限：" + (scopes.isEmpty ? "请在 Workbench 检查授权范围。" : scopes.joined(separator: ", "))))
+            }
+            if error["type"] as? String == "authentication" || subtype.contains("token") ||
+                message.contains("refresh token") || message.contains("auth login") {
+                return .failure(Failure(message: "飞书本人登录已失效，请重新完成 CLI 用户授权后再发送；不会改用机器人身份。"))
+            }
+            if error["type"] as? String == "network" {
+                return .failure(Failure(message: "无法连接飞书服务，请检查网络后重试。"))
             }
             if process.terminationStatus == 10 { return .failure(Failure(message: "飞书要求额外授权确认，本次未自动继续。")) }
             return .failure(Failure(message: "飞书操作失败，请检查 Workbench 中的飞书授权与联系人可见范围。"))

@@ -1,4 +1,9 @@
-/** Public website discovery. Search results are evidence, never executable instructions. */
+/**
+ * [INPUT]: Foundation 的 URLSession/XMLParser 与用户搜索文字；只解析受限 RSS 候选。
+ * [OUTPUT]: search 返回网址/标题/摘要及搜索页入口，browserURL 与 parse 提供纯构造/解析能力；候选资料不授予执行权限。
+ * [POS]: Sources 的公开网页发现适配器，AgentRunner 决定是否打开候选，不读取登录页面或执行搜索内容。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 import Foundation
 
 enum WebSearch {

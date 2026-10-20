@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 已解析本机 Codex 目标、官方深链、AgentTaskComposer 的 AX/焦点/语义点击能力与控制租约。
- * [OUTPUT]: 定向打开项目/任务/Your dot 后的准确空白或预填撰写框；优先读取撰写区，兼容新页项目按钮的完整标签/局部裸名并记录核验阶段诊断，旧任务绑定选中路由。
+ * [OUTPUT]: 定向打开项目/任务/Your dot 后的准确空白或预填撰写框；导航初期只读等待短暂未知焦点，明确切应用/失权立即停止并记录门禁事实；优先读取撰写区，兼容新页项目按钮的完整标签/局部裸名并记录核验阶段诊断，旧任务绑定选中路由。
  * [POS]: 原生导航适配器；仅在用户调用 C 时运行，不用猜坐标或私有写接口。DOT 与蓝点语义仍待实机验收。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -146,8 +146,10 @@ enum CodexNavigator {
             guard authorized(), EnvironmentGate.blockReason() == nil else {
                 completion(.failure(.init(message: "控制权或解锁状态已变化，未打开 Codex 目标。"))); return
             }
-            NSWorkspace.shared.open([url], withApplicationAt: URL(fileURLWithPath: path), configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            NSWorkspace.shared.open([url], withApplicationAt: URL(fileURLWithPath: path), configuration: NSWorkspace.OpenConfiguration()) { application, error in
                 guard error == nil else { completion(.failure(.init(message: "Codex 目标链接未能打开。"))); return }
+                ExecutionLog.shared.append(kind: "codex", label: "Codex 目标链接", outcome: .sent,
+                    detail: "系统已接收导航请求；openedPID=\(application.map { String($0.processIdentifier) } ?? "unknown")，尚未提交任务。")
                 observe()
             }
         }
@@ -155,12 +157,17 @@ enum CodexNavigator {
     private static func verify(destination: CodexDestination, pid: pid_t, text: String?, pointer: PointerExecutor?,
                                authorized: @escaping () -> Bool,
                                completion: @escaping (Result<AgentTaskComposer.Prepared, AgentComposerFailure>) -> Void) {
-        let deadline = ProcessInfo.processInfo.systemUptime + 6
+        let started = ProcessInfo.processInfo.systemUptime
+        let deadline = started + 6
+        var focus = AgentTaskComposer.NavigationFocus(deadline: started + AgentTaskComposer.navigationFocusGraceSeconds)
         var reason = "未能核对 Codex 目标页；请在目标页重新下达指令。"
         var diagnostic = "未取得页面快照"
         while ProcessInfo.processInfo.systemUptime < deadline {
-            guard AgentTaskComposer.valid(pid, authorized) else {
-                completion(.failure(.init(message: "导航期间焦点或控制权已变化，未输入正文。"))); return
+            switch AgentTaskComposer.navigationFocus(pid: pid, observer: &focus, authorized: authorized) {
+            case .waiting: Thread.sleep(forTimeInterval: 0.05); continue
+            case .stopped:
+                completion(.failure(.init(message: "Codex 导航焦点或控制权未核实；正文可能已预填，未发送。"))); return
+            case .ready: break
             }
             var truncated = false
             let snapshot = AgentTaskComposer.nodes(pid: pid, prioritizeEditor: true) { _, incomplete in truncated = incomplete }

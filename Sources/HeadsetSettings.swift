@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖耳机设备、共享语音结束偏好和操作规则；复用 HeadsetUI 与录制窗口。
+ * [OUTPUT]: 对外提供按设备配置、默认/自定义语音结束设置、取消/接续提示、自动保存和连接状态刷新。
+ * [POS]: Sources 的耳机配置入口，展示与编辑既有设置，执行职责留给控制运行时。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 import AppKit
 import SwiftUI
 
@@ -34,8 +40,8 @@ final class HeadsetSettingsModel: ObservableObject {
     func refresh() {
         var entries = HeadsetAudio.outputs().map { HeadsetSettingsDevice(id: $0.uid, name: $0.name, kind: .volume, connected: true) }
         for d in HeadsetMappingRuntime.shared.devices() where d.kind == .hid && !entries.contains(where: { $0.id == d.device }) { entries.append(.init(id: d.device, name: d.name, kind: .hid, connected: true)) }
-        for p in HeadsetClickPreferences.shared.all where !entries.contains(where: { $0.id == p.uid }) { entries.append(.init(id: p.uid, name: p.name, kind: .volume, connected: false)) }
         for r in HeadsetRuleStore.shared.rules where !entries.contains(where: { $0.id == r.signal.device }) { entries.append(.init(id: r.signal.device, name: r.signal.name, kind: r.signal.kind, connected: false)) }
+        for p in HeadsetClickPreferences.shared.all where !entries.contains(where: { $0.id == p.uid }) { entries.append(.init(id: p.uid, name: p.name, kind: .volume, connected: false)) }
         if entries != devices { devices = entries }
         if !entries.contains(where: { $0.id == selectedUID }) { selectedUID = HeadsetAudio.current()?.uid ?? entries.first?.id ?? "" }
         reload()
@@ -68,10 +74,10 @@ final class HeadsetSettingsModel: ObservableObject {
     }
     func selectionChanged() { if pauseEditing { savePause() }; message = ""; error = false; reload() }
     func preference(uid: String? = nil, _ change: (inout HeadsetClickPreference) -> Void) {
-        guard let device = devices.first(where: { $0.id == (uid ?? selectedUID) }), device.kind == .volume else { return }
+        guard let device = devices.first(where: { $0.id == (uid ?? selectedUID) }) else { return }
         var p = HeadsetClickPreferences.shared.preference(for: device.id) ?? .init(uid: device.id, name: device.name, enabled: false, step: nil)
         change(&p)
-        do { try HeadsetClickPreferences.shared.save(p); HeadsetClickControl.shared.cancelCurrent(); message = "已保存。"; error = false }
+        do { try HeadsetClickPreferences.shared.save(p); HeadsetClickControl.shared.cancelCurrent(); HeadsetMappingActions.shared.cancel(); message = "已保存。"; error = false }
         catch { message = "保存失败：\(error.localizedDescription)"; self.error = true }
         reload()
     }
@@ -110,6 +116,7 @@ final class HeadsetSettingsModel: ObservableObject {
     }
 }
 struct HeadsetSettingsView: View {
+    @Environment(\.headsetPalette) private var palette
     @ObservedObject var model: HeadsetSettingsModel
     @FocusState private var pauseFocused: Bool
     var body: some View {
@@ -117,29 +124,31 @@ struct HeadsetSettingsView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("耳机控制").font(.system(size: 23, weight: .semibold))
-                    Text("用耳机操作，触发你常用的功能。").font(.system(size: 13)).foregroundStyle(.secondary)
-                }; Spacer(); Image(systemName: "headphones").font(.system(size: 27)).foregroundStyle(.secondary)
+                    Text("用耳机操作，触发你常用的功能。").font(.system(size: 13)).foregroundStyle(palette.muted)
+                }; Spacer(); Image(systemName: "headphones").font(.system(size: 24))
+                    .foregroundStyle(palette.accent).frame(width: 48, height: 48)
+                    .background(palette.accentSoft).clipShape(RoundedRectangle(cornerRadius: palette.controlRadius))
             }.padding(24)
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     HeadsetCard {
                         HStack(spacing: 12) {
-                            Image(systemName: "headphones").font(.system(size: 22))
+                            Image(systemName: "headphones").font(.system(size: 22)).foregroundStyle(palette.accent)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(model.selected?.name ?? "连接你的耳机").font(.system(size: 14, weight: .semibold))
-                                Text(model.selected?.connected == true ? (model.selectedUID == HeadsetAudio.current()?.uid ? "当前声音输出" : "已连接") : "未连接").font(.system(size: 12)).foregroundStyle(.secondary)
+                                Text(model.selected?.connected == true ? (model.selectedUID == HeadsetAudio.current()?.uid ? "当前声音输出" : "已连接") : "未连接").font(.system(size: 12)).foregroundStyle(palette.muted)
                             }; Spacer()
                             HeadsetChoice(label: "耳机", selection: $model.selectedUID, options: model.devices.map { ($0.id, $0.displayName) }).frame(maxWidth: 300)
                             Button { model.refresh() } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.plain).help("刷新设备")
                         }
                     }
-                    HStack { HeadsetSectionTitle(text: "按键操作"); Spacer(); Button { HeadsetMappingWindow.shared.show(deviceUID: model.selectedUID) } label: { Label("录制新操作", systemImage: "plus") }.buttonStyle(.borderless).disabled(model.selected == nil) }
+                    HStack { HeadsetSectionTitle(text: "按键操作"); Spacer(); Button { HeadsetMappingWindow.shared.show(deviceUID: model.selectedUID) } label: { Label("录制新操作", systemImage: "plus") }.buttonStyle(.borderless).foregroundStyle(palette.accent).disabled(model.selected == nil) }
                     HeadsetCard {
                         if model.operations.isEmpty {
                             VStack(spacing: 12) {
-                                Image(systemName: "hand.tap").font(.system(size: 29)).foregroundStyle(.secondary)
+                                Image(systemName: "hand.tap").font(.system(size: 29)).foregroundStyle(palette.muted)
                                 Text("先录制一个耳机操作").font(.system(size: 15, weight: .semibold))
-                                Text("识别成功后，再选择它要执行的动作。").font(.system(size: 12)).foregroundStyle(.secondary)
+                                Text("识别成功后，再选择它要执行的动作。").font(.system(size: 12)).foregroundStyle(palette.muted)
                                 Button("录制操作") { HeadsetMappingWindow.shared.show(deviceUID: model.selectedUID) }.buttonStyle(HeadsetPrimaryButton()).disabled(model.selected == nil)
                             }.frame(maxWidth: .infinity).padding(.vertical, 16)
                         } else {
@@ -147,49 +156,52 @@ struct HeadsetSettingsView: View {
                                 ForEach(Array(model.operations.enumerated()), id: \.element.id) { index, row in
                                     if index > 0 { Divider().padding(.vertical, 13) }
                                     HStack(spacing: 12) {
-                                        Image(systemName: row.signal.kind == .volume ? (row.signal.usage > 0 ? "speaker.wave.2" : "speaker.wave.1") : "hand.tap").font(.system(size: 18)).frame(width: 24).foregroundStyle(.secondary)
-                                        VStack(alignment: .leading, spacing: 5) { Text(row.title).font(.system(size: 14, weight: .medium)); Text(model.scopeLabel(row)).font(.system(size: 11)).foregroundStyle(.secondary) }
+                                        Image(systemName: row.signal.kind == .volume ? (row.signal.usage > 0 ? "speaker.wave.2" : "speaker.wave.1") : "hand.tap").font(.system(size: 18)).frame(width: 24).foregroundStyle(palette.muted)
+                                        VStack(alignment: .leading, spacing: 5) { Text(row.title).font(.system(size: 14, weight: .medium)); Text(model.scopeLabel(row)).font(.system(size: 11)).foregroundStyle(palette.muted) }
                                         Spacer()
                                         Menu {
                                             ForEach([HeadsetRule.Action.voice, .spriteVoice, .spriteWake, .cancel, .disabled], id: \.self) { action in Button(action.label) { model.setFunction(action, row: row) } }
                                             Divider(); Button("快捷键 / 更多设置…") { HeadsetMappingWindow.shared.show(deviceUID: model.selectedUID, ruleID: row.rule?.id, operation: .init(signal: row.signal, gesture: row.gesture)) }
                                             if row.rule != nil { Button("恢复原有功能") { model.restore(row) } }
-                                        } label: { HStack { Text(model.functionLabel(row)).lineLimit(1); Image(systemName: "chevron.down").font(.system(size: 9)) }.padding(.horizontal, 12).padding(.vertical, 9).background(HeadsetUI.control).clipShape(RoundedRectangle(cornerRadius: 9)) }.menuStyle(.borderlessButton).frame(minWidth: 170, maxWidth: 280).help(model.functionLabel(row))
+                                        } label: { HStack { Text(model.functionLabel(row)).lineLimit(1); Image(systemName: "chevron.down").font(.system(size: 9)) }.padding(.horizontal, 12).padding(.vertical, 9).background(palette.control).clipShape(RoundedRectangle(cornerRadius: palette.controlRadius)) }.menuStyle(.borderlessButton).frame(minWidth: 170, maxWidth: 280).help(model.functionLabel(row))
                                         if row.rule != nil { Button { HeadsetMappingWindow.shared.show(deviceUID: model.selectedUID, ruleID: row.rule?.id, operation: .init(signal: row.signal, gesture: row.gesture)) } label: { Image(systemName: "slider.horizontal.3") }.buttonStyle(.plain).help("编辑操作") }
                                     }
                                 }
                             }
                         }
                     }
-                    if model.usesVolume {
-                        HeadsetSectionTitle(text: "默认语音")
+                    if model.selected != nil {
+                        HeadsetSectionTitle(text: "语音结束方式")
                         HeadsetCard {
                             VStack(spacing: 14) {
-                                Toggle(isOn: Binding(get: { model.defaultEnabled }, set: { value in model.preference { $0.enabled = value } })) {
-                                    VStack(alignment: .leading, spacing: 4) { Text("启用默认单击语音").font(.system(size: 13, weight: .medium)); Text("未自定义的音量增加用于普通语音，音量减少用于小精灵。").font(.system(size: 11)).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading)
-                                }.toggleStyle(.switch).tint(Color(nsColor: .labelColor))
-                                HStack { Text("结束方式"); Spacer(); HeadsetChoice(label: "结束方式", selection: Binding(get: { model.finishMode }, set: { value in model.preference { $0.finishMode = value } }), options: [(.manual, "再次操作结束"), (.textPause, "转写文字停顿时结束")]).frame(width: 250).disabled(!model.defaultEnabled) }.font(.system(size: 13))
+                                if model.usesVolume {
+                                    Toggle(isOn: Binding(get: { model.defaultEnabled }, set: { value in model.preference { $0.enabled = value } })) {
+                                        VStack(alignment: .leading, spacing: 4) { Text("启用默认单击语音").font(.system(size: 13, weight: .medium)); Text("未自定义的音量增加用于普通语音，音量减少用于小精灵。").font(.system(size: 11)).foregroundStyle(palette.muted) }.frame(maxWidth: .infinity, alignment: .leading)
+                                    }.toggleStyle(SwitchToggleStyle(tint: palette.accent))
+                                }
+                                HStack { Text("结束方式"); Spacer(); HeadsetChoice(label: "结束方式", selection: Binding(get: { model.finishMode }, set: { value in model.preference { $0.finishMode = value } }), options: [(.manual, "手动结束"), (.textPause, "转写文字停顿时结束")]).frame(width: 250) }.font(.system(size: 13))
                                 if model.finishMode == .textPause {
-                                    HStack { Text("文字不再变化后等待"); Spacer(); TextField("秒数", text: Binding(get: { model.pauseText }, set: { if !model.pauseEditing { model.pauseEditingUID = model.selectedUID }; model.pauseEditing = true; model.pauseText = $0 })).focused($pauseFocused).onSubmit { model.savePause() }.frame(width: 58).textFieldStyle(.roundedBorder); Text("秒").foregroundStyle(.secondary) }.font(.system(size: 13)).disabled(!model.defaultEnabled)
+                                    HStack { Text("文字不再变化后等待"); Spacer(); TextField("秒数", text: Binding(get: { model.pauseText }, set: { if !model.pauseEditing { model.pauseEditingUID = model.selectedUID }; model.pauseEditing = true; model.pauseText = $0 })).focused($pauseFocused).onSubmit { model.savePause() }.frame(width: 58).textFieldStyle(.roundedBorder); Text("秒").foregroundStyle(palette.muted) }.font(.system(size: 13))
                                     HeadsetMessage(text: "文字停顿不等于静音，转写延迟可能提前结束。等待范围 0.5–30 秒。")
                                 }
-                                HeadsetMessage(text: "自定义语音按自己的操作结束方式执行，不受这里的默认结束设置影响。")
+                                HeadsetMessage(text: "适用于这副耳机的普通语音和小精灵语音，包含自定义单击、双击；长按仍在松开时结束。")
+                                HeadsetMessage(text: "小精灵输入时：小精灵操作取消并收起，语音操作开始或重试，再次语音操作结束。键盘 Esc 也可取消。")
                             }
                         }
                     }
                     HeadsetSectionTitle(text: "普通语音发送")
                     HeadsetCard {
                         HStack {
-                            Toggle("结束后自动发送", isOn: Binding(get: { model.autoSend }, set: { value in if value != HeadsetController.shared.autoSend { HeadsetController.shared.toggleAuto() }; model.reload() })).toggleStyle(.switch).tint(Color(nsColor: .labelColor))
+                            Toggle("结束后自动发送", isOn: Binding(get: { model.autoSend }, set: { value in if value != HeadsetController.shared.autoSend { HeadsetController.shared.toggleAuto() }; model.reload() })).toggleStyle(SwitchToggleStyle(tint: palette.accent))
                             Spacer()
-                            HeadsetChoice(label: "发送等待", selection: Binding(get: { model.delay }, set: { value in let item = NSMenuItem(); item.tag = value; HeadsetController.shared.setDelay(item); model.reload() }), options: [1, 2, 3, 5, 10].map { ($0, "等待 \($0) 秒") }).frame(width: 130).disabled(!model.autoSend)
+                            HeadsetChoice(label: "发送等待", selection: Binding(get: { model.delay }, set: { value in let item = NSMenuItem(); item.tag = value; HeadsetController.shared.setDelay(item); model.reload() }), options: [0, 1, 2, 3, 5, 10].map { ($0, $0 == 0 ? "稳定后直接发送" : "等待 \($0) 秒") }).frame(width: 150).disabled(!model.autoSend)
                         }.font(.system(size: 13))
                     }
                     if !model.message.isEmpty { HeadsetMessage(text: model.message, error: model.error) }
                 }.padding(.horizontal, 24).padding(.bottom, 24)
             }
-            HStack { Text("修改自动保存").font(.system(size: 11)).foregroundStyle(.secondary); Spacer(); Menu("高级设置") { Button("添加独立按键设备…") { HeadsetPairing.shared.show() }; Button("检测蓝牙信号…") { HeadsetTouchDiagnostic.shared.show() }; Button("权限说明…") { HeadsetController.shared.showSetup() } }.menuStyle(.borderlessButton).fixedSize() }.padding(20).background(HeadsetUI.card)
-        }.background(HeadsetUI.canvas).onChange(of: model.selectedUID) { _ in pauseFocused = false; model.selectionChanged() }.onChange(of: pauseFocused) { focused in if !focused && model.pauseEditing { model.savePause() } }
+            HStack { Text("修改自动保存").font(.system(size: 11)).foregroundStyle(palette.muted); Spacer(); Menu("高级设置") { Button("添加独立按键设备…") { HeadsetPairing.shared.show() }; Button("检测蓝牙信号…") { HeadsetTouchDiagnostic.shared.show() }; Button("权限说明…") { HeadsetController.shared.showSetup() } }.menuStyle(.borderlessButton).fixedSize() }.padding(20).background(palette.card)
+        }.background(palette.canvas).onChange(of: model.selectedUID) { _ in pauseFocused = false; model.selectionChanged() }.onChange(of: pauseFocused) { focused in if !focused && model.pauseEditing { model.savePause() } }
     }
 }
 final class HeadsetSettings: NSObject, NSWindowDelegate {
@@ -202,7 +214,9 @@ final class HeadsetSettings: NSObject, NSWindowDelegate {
         if let window { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
         let w = NSWindow(contentRect: .init(x: 0, y: 0, width: 730, height: 760), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window = w; w.title = "PocketDesk · 耳机设置"; w.minSize = .init(width: 660, height: 580); w.isReleasedWhenClosed = false; w.delegate = self
-        w.contentView = NSHostingView(rootView: HeadsetSettingsView(model: model))
+        w.appearance = NSAppearance(named: .aqua)
+        w.contentView = NSHostingView(rootView: HeadsetThemeSurface(window: w) { HeadsetSettingsView(model: self.model) })
+        w.setContentSize(.init(width: 730, height: 760))
         model.timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.model.refresh() }; RunLoop.main.add(model.timer!, forMode: .common)
         w.center(); w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }

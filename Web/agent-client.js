@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 消费 localStorage 的配对 token、/api/v1 的任务接口与事件流；
  *          依赖 app.js 的 message() 提示（缺失时降级为静默，不阻塞任务链路）。
- * [OUTPUT]: 提供 window.pocketdeskAgent——小精灵任务的终态后直接新建、待补充续接、提交、追问、放弃、有界轮询、状态订阅与刷新后活动任务找回。
+ * [OUTPUT]: 提供 window.pocketdeskAgent——未完成任务默认续接、明确换件事及原任务重试；新建/补充/重试共用幂等票据和丢包查账，提供忙碌门禁、有界轮询与活动任务找回。
  * [POS]: Web 的小精灵任务客户端；只管与 Mac 的任务 API 对话，不碰输入区、不执行工具、不发桌面输入。
  *        轮询策略按方案 §9：2s 起、连续无事件按 1.5 倍退避至上限 10s；事件到来立即回到 2s。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -23,7 +23,10 @@
     timer: null,
     polling: false,
     listeners: [],
-    pendingRequestId: null,
+    pendingRequest: null,
+    retrying: false,
+    sending: false,
+    inputIntent: null,   // 用户明确选择的输入归属，刷新同一任务不会覆盖
     seq: 0,
     page: null           // 当前网页绑定（用户可解绑）
   };
@@ -58,6 +61,32 @@
   }
 
   function isActive(task) { return Boolean(task && ACTIVE[task.status]); }
+  function canRecover(task) {
+    return Boolean(task && (['failed', 'needsInput', 'submitted'].includes(task.status)
+      || (task.recovery && task.canFollowUp !== false && !isActive(task))));
+  }
+
+  function inputMode() {
+    if (state.inputIntent && state.task && state.inputIntent.taskId === state.task.id) return state.inputIntent.mode;
+    return canRecover(state.task) ? 'supplement' : 'new';
+  }
+
+  // 只选择下一段话的归属；保留旧任务与当前草稿，不执行任务、不清输入框。
+  function chooseInput(mode) {
+    if (mode !== 'supplement' && mode !== 'new') throw new Error('请选择补充解释或新任务。');
+    if (state.retrying || state.sending) throw new Error('正在提交，请稍候。');
+    if (mode === 'new' && state.pendingRequest?.retry) throw new Error('请先核对上次提交，输入的内容会保留。');
+    if (isActive(state.task) && state.task.status !== 'needsInput') throw new Error('正在执行，请稍候。');
+    if (mode === 'supplement' && !canRecover(state.task)) throw new Error('当前没有需要补充的任务。');
+    state.inputIntent = { mode: mode, taskId: state.task && state.task.id };
+    notify('input');
+  }
+
+  function restoreInput() {
+    chooseInput('supplement');
+    state.inputIntent = null;
+    notify('input');
+  }
 
   // MARK: 轮询
 
@@ -98,6 +127,7 @@
     var taskId = state.task.id;
     var res = await api('/api/v1/tasks/' + encodeURIComponent(taskId));
     if (!state.task || state.task.id !== taskId) return state.task;
+    if (isOlder(res.task)) return state.task;
     state.task = res.task || null;
     notify('refresh');
     if (!isActive(state.task)) state.interval = POLL_START;
@@ -127,19 +157,48 @@
    * 请求可能已经落到 Mac 上了，盲发新 ID 会跑出第二个任务。
    */
   async function submit(text, context) {
-    var requestId = state.pendingRequestId || newRequestId();
-    state.pendingRequestId = requestId;
-    var body = { requestId: requestId, text: text, controlSession: window.pocketdeskControlInfo?.().session || "" };
+    var body = { text: text, controlSession: window.pocketdeskControlInfo?.().session || '' };
     if (context) body.context = context;
+    return postInput('/api/v1/tasks', 'new', body, null);
+  }
+
+  async function postInput(path, operation, body, taskId) {
+    if (state.sending) throw new Error('正在提交，请稍候。');
+    state.sending = true;
+    notify('sending');
+    try { return await performInput(path, operation, body, taskId); }
+    finally { state.sending = false; notify('sending'); }
+  }
+
+  async function performInput(path, operation, body, taskId) {
+    var fingerprint = JSON.stringify([operation, taskId, body.text, body.context || null]);
+    if (state.pendingRequest && state.pendingRequest.fingerprint !== fingerprint)
+      throw new Error('上一段内容是否收到还未核实，请先重试原内容；当前草稿已保留。');
+    var request = state.pendingRequest || { id: newRequestId(), fingerprint: fingerprint, retry: state.retrying,
+      taskId: taskId, path: path, body: Object.assign({}, body) };
+    state.pendingRequest = request;
+    body.requestId = request.id;
     var res;
     try {
-      res = await api('/api/v1/tasks', { method: 'POST', body: JSON.stringify(body) });
+      res = await api(path, { method: 'POST', body: JSON.stringify(body) });
     } catch (e) {
-      var recovered = await recoverByRequest(requestId);
-      if (recovered) { state.pendingRequestId = null; adopt(recovered.task || recovered); return state.task; }
+      // 明确拒绝没有接收这段正文，不能把冲突票据查出的其他任务当成本次成功。
+      if (e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429) {
+        state.pendingRequest = null;
+        throw e;
+      }
+      var recovered = null;
+      try { recovered = await recoverByRequest(request.id); } catch (_) { /* 保留票据，重试仍查同一次输入 */ }
+      if (recovered) {
+        var recoveredTask = recovered.task || recovered;
+        if (taskId && recoveredTask.id !== taskId) throw new Error('补充回执与原任务不一致，请刷新后核对。');
+        state.pendingRequest = null; state.inputIntent = null;
+        adopt(recoveredTask); return state.task;
+      }
       throw e;
     }
-    state.pendingRequestId = null;
+    state.pendingRequest = null;
+    state.inputIntent = null;
     adopt(res.task);
     return state.task;
   }
@@ -150,25 +209,51 @@
       var res = await api('/api/v1/tasks/by-request/' + encodeURIComponent(requestId));
       return res.task ? res : null;
     } catch (e) {
-      return null;
+      if (e.status === 404) return null;
+      throw e;
     }
   }
 
   async function followUp(text) {
     if (!state.task) return submit(text, state.page);
-    var res = await api('/api/v1/tasks/' + encodeURIComponent(state.task.id) + '/actions', {
-      method: 'POST',
-      body: JSON.stringify({ action: 'supplement', text: text, expectedRevision: state.task.revision })
-    });
-    adopt(res.task);
-    return state.task;
+    return postInput('/api/v1/tasks/' + encodeURIComponent(state.task.id) + '/actions', 'supplement', {
+      action: 'supplement', text: text, expectedRevision: state.task.revision,
+      controlSession: window.pocketdeskControlInfo?.().session || ''
+    }, state.task.id);
   }
 
-  // 完成后下一句话就是新任务；只有明确待补充时沿用旧任务。
+  // 未完成后下一句默认解释原任务；用户明确选择新任务时才解除输入归属。
   async function send(text) {
-    if (state.task && state.task.status === 'needsInput') return followUp(text);
-    if (isActive(state.task)) throw new Error('正在执行，请稍候。');
+    if (state.retrying || state.sending) throw new Error('正在提交，请稍候。');
+    if (isActive(state.task) && state.task.status !== 'needsInput') throw new Error('正在执行，请稍候。');
+    if (inputMode() === 'supplement') return followUp(text);
     return submit(text, state.page);
+  }
+
+  // 仅接受服务端明确提供的重试动作；旧回执与未核实发送仍须用户补充，不猜测重试安全性。
+  async function retry() {
+    if (state.retrying || state.sending) throw new Error('正在提交，请稍候。');
+    var pending = state.pendingRequest?.retry ? state.pendingRequest : null;
+    if (!pending && (!canRecover(state.task) || state.task.status === 'submitted'
+      || state.task.recovery?.kind === 'unconfirmed'
+      || state.task.recovery?.primaryAction?.kind !== 'retry'))
+      throw new Error('请先补充信息，再继续这件事。');
+    state.retrying = true;
+    notify('retry');
+    try {
+      // 上次提交是否收到仍不明确：先查同一票据；查账失败时保留票据，404才允许原票据恢复。
+      if (pending) {
+        var recovered = await recoverByRequest(pending.id);
+        if (recovered) {
+          var task = recovered.task || recovered;
+          if (task.id !== pending.taskId) throw new Error('刚才的结果暂时无法核对，请稍后再试。');
+          state.pendingRequest = null; state.inputIntent = null; adopt(task); return state.task;
+        }
+        return await postInput(pending.path, 'supplement', Object.assign({}, pending.body), pending.taskId);
+      }
+      return await followUp('继续处理刚才的请求');
+    }
+    finally { state.retrying = false; notify('retry'); }
   }
 
   async function abandon() {
@@ -182,8 +267,15 @@
     return res;
   }
 
+  function isOlder(task) {
+    return task && state.task?.id === task.id && Number.isFinite(task.revision)
+      && Number.isFinite(state.task.revision) && task.revision < state.task.revision;
+  }
+
   function adopt(task) {
     if (!task) return;
+    if (isOlder(task)) return;
+    if (!state.task || state.task.id !== task.id) state.inputIntent = null;
     state.task = task;
     state.cursor = 0;
     notify('adopt');
@@ -217,7 +309,8 @@
     stopPolling();
     state.task = null;
     state.cursor = 0;
-    state.pendingRequestId = null;
+    state.pendingRequest = null;
+    state.inputIntent = null;
     notify('detach');
   }
 
@@ -248,6 +341,15 @@
   window.pocketdeskAgent = {
     submit: submit,
     send: send,
+    retry: retry,
+    isRetrying: function () { return state.retrying; },
+    isSubmitting: function () { return state.sending; },
+    hasPendingRetry: function () { return state.pendingRequest?.retry === true; },
+    chooseInput: chooseInput,
+    restoreInput: restoreInput,
+    inputMode: inputMode,
+    hasInputChoice: function () { return !!state.inputIntent && state.inputIntent.taskId === state.task?.id; },
+    canRecover: function () { return canRecover(state.task); },
     followUp: followUp,
     abandon: abandon,
     resume: resume,

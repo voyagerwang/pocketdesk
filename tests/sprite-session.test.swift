@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation，消费 SpriteSession、SpriteFeedback、AgentModels。
- * [OUTPUT]: 覆盖派单未核实投影为短回执而非待补充/失败； 覆盖刷新重连、提交身份隔离、同任务追问与显式重选；覆盖展示会话的代际/序号/版本去重（迟到输入不覆盖新版、旧会话不复活、提交清空竞态），
+ * [OUTPUT]: 覆盖未完成恢复动作、原始用户目标投影与未核实核对入口；覆盖刷新重连、提交身份隔离、同任务追问与显式重选；覆盖展示会话的代际/序号/版本去重（迟到输入不覆盖新版、旧会话不复活、提交清空竞态），
  *           以及投影的逐状态映射（执行中工具行、待补充、完成/派单不冒充、失败、放弃、断线标注）。
  * [POS]: tests 的桌面反馈逻辑测试；`swiftc -parse-as-library` 编译，不依赖 AppKit、不联网。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -165,13 +165,29 @@ import Foundation
             let failed = makeTask(status: .failed, error: "模型服务不可达。")
             viewModel = SpriteFeedback.project(session: session.current, task: failed, rounds: [],
                                                now: 1_000)
-            check(viewModel.statusLine == "未完成" && viewModel.answer == "模型服务不可达。", "失败展示原因")
+            check(viewModel.statusLine == "这次没完成" && viewModel.answer == "模型服务不可达。"
+                  && viewModel.recovery?.kind == .executionFailure, "失败展示原因与保守恢复入口")
+            check(viewModel.recoveryAction == TaskRecovery.action(for: failed), "桌面主动作复用共享恢复事实")
+            var continued = failed
+            continued.messages.insert(TaskMessage(role: .user, text: "原先要做的完整目标"), at: 0)
+            continued.text = "后来补充的一句"
+            let continuedView = SpriteFeedback.project(session: session.current, task: continued, rounds: [], now: 1_000)
+            check(continuedView.recoverySummary == "原先要做的完整目标", "恢复上下文取原始目标而非最新补充")
+            var unsupported = failed
+            unsupported.recovery = .init(kind: .capabilityLimit, nextStep: "可说明真实目标或调整范围。")
+            viewModel = SpriteFeedback.project(session: session.current, task: unsupported, rounds: [], now: 1_000)
+            check(viewModel.statusLine == "当前能力有限" && viewModel.recovery?.nextStep == "可说明真实目标或调整范围。",
+                  "能力限制不伪装成表达不清")
 
             var pendingDispatch = makeTask(status: .needsInput, result: "发送已点击，请查看目标应用。")
             pendingDispatch.messages.append(TaskMessage(role: .tool, text: "派单尝试", toolName: "dispatch_to_app"))
             viewModel = SpriteFeedback.project(session: session.current, task: pendingDispatch, rounds: [],
                                                now: 1_000)
-            check(viewModel.phase == .unconfirmed && viewModel.statusLine == "已尝试发送，接收待核实", "发送待核对不能投影为待补充、失败或已完成")
+            check(viewModel.phase == .unconfirmed && viewModel.statusLine == "接收待核实"
+                  && viewModel.recovery?.kind == .unconfirmed, "发送待核对不能投影为待补充、失败或已完成")
+            viewModel = SpriteFeedback.project(session: session.current, task: pendingDispatch, rounds: [], now: 2_000)
+            check(viewModel.phase == .unconfirmed && viewModel.displayText == pendingDispatch.result,
+                  "未核实回执不定时消失，核对时仍有原事实")
 
             let needsInput = makeTask(status: .needsInput, result: "要 A 版本还是 B 版本？")
             viewModel = SpriteFeedback.project(session: session.current, task: needsInput, rounds: [],

@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 Foundation 的 Data/URL 与 AppKit 的 NSWorkspace/NSImage、CoreGraphics 的 CGWindowList 与 CGSession、系统 caffeinate 命令行（唤醒显示器）、CoreImage 的二维码滤镜。
+ * [INPUT]: 依赖 Foundation 的 Data/URL 与 AppKit 的 NSWorkspace/NSImage、CoreGraphics 的 CGWindowList 与 CGSession、SystemConfiguration 的 Bonjour 本地主机名、系统 caffeinate 命令行（唤醒显示器）、CoreImage 的二维码滤镜。
  * [OUTPUT]: 对外提供 Util（主局域网地址与 Tailscale 私网地址探测、稳定 .local 主机名、QR PNG 生成、应用图标 PNG 提取、前台应用探测、锁屏状态判定 isScreenLocked 与显示器唤醒 wakeDisplay）。前台探测以用户视角为准：CGWindowList 当前桌面最前的 layer 0 窗口，pid 经 NSWorkspace 运行列表换成带完整 bundle 信息的应用对象。
  * [POS]: Sources 的无状态工具层；Server 的 /api/status、/api/qr、图标端点调用它渲染地址与图像，InputExecutor 的窗口动作调用它定位前台应用。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -9,6 +9,7 @@ import CoreGraphics
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import Foundation
+import SystemConfiguration
 
 enum Util {
     // 前台应用：CGWindowList 直接问窗口服务器，列表按从前到后排序，
@@ -85,11 +86,10 @@ enum Util {
         return octets.count == 4 && octets[0] == 100 && (64...127).contains(octets[1])
     }
 
-    // 稳定主机名：mDNS 的 <计算机名>.local 不随 DHCP 变化，手机保存一次即可长期使用。
+    // 固定入口读取 Bonjour 名称；gethostname 可能由 DHCP 或系统 HostName 改写，不能作为书签身份。
     static func stableHost() -> String? {
-        var buf = [CChar](repeating: 0, count: 256)
-        guard gethostname(&buf, buf.count) == 0 else { return nil }
-        let raw = String(cString: buf).trimmingCharacters(in: .whitespaces)
+        guard let localName = SCDynamicStoreCopyLocalHostName(nil) as String? else { return nil }
+        let raw = localName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty, raw != "localhost", !raw.hasSuffix(".") else { return nil }
         return raw.hasSuffix(".local") ? String(raw.dropLast(".local".count)) + ".local" : raw + ".local"
     }

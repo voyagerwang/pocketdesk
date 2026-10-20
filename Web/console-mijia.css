@@ -1,0 +1,42 @@
+/*
+ * [INPUT]: console.html 的主题令牌、米家连接状态、二维码与家庭范围表单。
+ * [OUTPUT]: 与控制台一致的连接卡片、桌面双列/窄屏单列扫码说明和可访问家庭选择/保存状态。
+ * [POS]: 米家局部样式；二维码始终保留白底，经典蓝与米白共用既有语义颜色。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+.mijia-heading { flex-wrap:wrap; gap:8px; }
+#mijia-state { margin-left:auto; font-weight:400; }
+#mijia-state[data-state="connected"] { color:var(--ok); border-color:var(--ok); }
+#mijia-state[data-state="failed"], #mijia-state[data-state="expired"] { color:var(--danger); border-color:var(--danger); }
+.mijia-message { margin:0; color:var(--ink); font-size:13px; line-height:1.7; overflow-wrap:anywhere; }
+.mijia-message.error { color:var(--danger); }
+#mijia-verified { margin:8px 0 0; }
+.mijia-pair { display:grid; grid-template-columns:224px minmax(0,1fr); align-items:center; gap:24px; margin-top:20px; padding-top:20px; border-top:1px solid var(--line); }
+.mijia-qr-frame { display:grid; place-items:center; width:224px; min-height:224px; background:#fff; color:#171c2c; border:1px solid var(--line); border-radius:4px; }
+#mijia-qr { display:block; width:100%; height:auto; padding:12px; background:#fff; filter:none; }
+#mijia-qr-loading { margin:0; color:#4a5266; }
+.mijia-pair-help { min-width:0; }
+.mijia-pair-help p { margin:0 0 8px; line-height:1.7; }
+.mijia-pair-help p:last-child { margin-bottom:0; }
+#mijia-countdown { font-variant-numeric:tabular-nums; }
+.mijia-actions { flex-wrap:wrap; gap:8px; margin-top:16px; }
+.mijia-actions .btn { min-height:44px; }
+.mijia-actions .btn:hover:not(:disabled) { border-color:var(--accent); }
+.mijia-actions .btn:active:not(:disabled) { transform:translateY(1px); }
+.mijia-actions .btn:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.mijia-retained { margin:12px 0 0; }
+.mijia-scope { margin-top:24px; padding-top:20px; border-top:1px solid var(--line); }
+.mijia-scope h3 { margin:0 0 8px; font-size:14px; font-weight:600; }
+.mijia-scope-help { margin:0 0 12px; }
+.mijia-scope-current { margin:0 0 16px; font-size:13px; line-height:1.7; overflow-wrap:anywhere; }
+.mijia-scope-form { display:flex; flex-wrap:wrap; align-items:end; gap:8px; }
+.mijia-scope-form .field { flex:1 1 240px; }
+.mijia-scope-form select { min-height:44px; }
+.mijia-scope-form .btn { min-height:44px; }
+.mijia-scope-form .btn:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.mijia-scope-form .btn:hover:not(:disabled) { border-color:var(--accent); }
+.mijia-scope-form select:disabled { color:var(--muted); background:var(--panel); cursor:wait; }
+.mijia-scope-message { min-height:20px; margin:10px 0 0; overflow-wrap:anywhere; }
+.mijia-scope-message.error { color:var(--danger); }
+#mijia-card [hidden] { display:none; }
+@media(max-width:560px) { .mijia-pair { grid-template-columns:minmax(0,1fr); gap:16px; } .mijia-qr-frame { max-width:100%; } }

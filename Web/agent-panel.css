@@ -1,0 +1,113 @@
+/*
+ * [INPUT]: 消费 style.css 的主题令牌与 agent-panel.js 的恢复状态、首页及全屏输入归属。
+ * [OUTPUT]: 提供紧凑任务反馈、单一主动作及44px输入归属切换；补充时收紧旧结果，换件事时由展示层隐藏旧卡。
+ * [POS]: Web 的小精灵交互样式边界；任务呈现独立于全屏布局，两种主题共用状态层级。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+.agent-panel {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin: 0 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+.agent-status.is-failed { color: var(--danger); }
+.agent-status.is-succeeded { color: var(--fg); }
+/* 活动中的呼吸点：只做辅助，状态本身始终有文字，不靠颜色单打独斗。 */
+.agent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: agent-pulse 1.4s ease-in-out infinite;
+}
+@keyframes agent-pulse { 0%, 100% { opacity: .25 } 50% { opacity: 1 } }
+@media (prefers-reduced-motion: reduce) { .agent-dot { animation: none; opacity: .8 } }
+.agent-slow { font-weight: 500; color: var(--fg-faint); }
+.agent-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* 小精灵结果卡不是固定高度：短答案直接完整展开，只有长正文才进入滚动区。 */
+  max-height: min(60vh, 480px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg-faint) 48%, transparent) transparent;
+}
+.agent-text::-webkit-scrollbar { width: 5px; }
+.agent-text::-webkit-scrollbar-track { background: transparent; }
+.agent-text::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg-faint) 48%, transparent);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+.agent-text::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--fg-muted) 62%, transparent);
+  background-clip: padding-box;
+}
+.agent-text.is-error { color: var(--danger); }
+.agent-sources { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; }
+.agent-sources-title { color: var(--fg-faint); }
+.agent-source {
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: var(--accent-soft);
+  max-width: 70vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-brief { color: var(--fg-muted); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.agent-result details, .agent-sources details { font-size: 12px; color: var(--fg-muted); }
+.agent-result summary, .agent-sources summary { cursor: pointer; padding: 8px 0; }
+.agent-recovery-detail { margin-top: var(--s-2); }
+.agent-next-step { margin: 8px 0 0; color: var(--fg-muted); font-size: 13px; line-height: 1.5; }
+.agent-panel.is-editing { gap: 4px; padding: 10px 14px; background: transparent; }
+.agent-panel.is-editing:not(.is-question) .agent-recovery-detail,
+.agent-panel.is-editing:not(.is-question) .agent-next-step,
+.agent-panel.is-editing .agent-sources { display: none; }
+.agent-panel.is-editing.is-question .agent-recovery-detail { max-height: 9em; }
+.agent-actions { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.agent-btn, .agent-input-context button {
+  min-height: var(--screen-hit); padding: 0 var(--s-3); border-radius: var(--r-field);
+  border: 1px solid var(--border-strong); background: var(--surface-2);
+  color: var(--fg); font: inherit; font-size: var(--text-md); cursor: pointer;
+}
+.agent-btn.agent-primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+.agent-btn.agent-link { margin-left: auto; }
+.agent-btn.agent-link, .agent-input-context button { background: transparent; border-color: transparent; color: var(--accent); }
+.agent-btn:hover, .agent-input-context button:hover { background: var(--surface-3); }
+.agent-btn.agent-primary:hover { background: var(--accent); filter: brightness(.94); }
+.agent-btn:active, .agent-input-context button:active { transform: translateY(1px); }
+.agent-btn:focus-visible, .agent-input-context button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agent-btn:disabled, .agent-input-context button:disabled { opacity: .55; cursor: default; transform: none; }
+.agent-action-error { margin: 0; color: var(--danger); font-size: 13px; line-height: 1.5; }
+.agent-input-context { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); border-bottom: 1px solid var(--border); margin-bottom: var(--s-2); }
+.agent-context-label { min-width: 0; flex: 1; color: var(--fg); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.agent-input-context button { flex: 0 0 auto; padding: 0 8px; }
+.screen-compose .agent-input-context { margin: 0 0 4px; }
+.screen-compose .agent-context-label { max-height: 3em; overflow-y: auto; }
+.agent-context-question { flex-basis: 100%; margin: 0 0 var(--s-2); max-height: 4.5em; overflow-y: auto; color: var(--fg); font-size: var(--text-md); line-height: 1.5; overflow-wrap: anywhere; }
+@media (max-width: 359px) {
+  .agent-btn { padding: 0 11px; }
+  .agent-btn.agent-link { margin-left: 0; }
+}

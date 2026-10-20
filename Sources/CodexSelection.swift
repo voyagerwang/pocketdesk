@@ -1,6 +1,6 @@
 /**
  * [INPUT]: Codex 专属动作与只读项目/任务快照。
- * [OUTPUT]: 唯一目标、分页候选或待选择问题；项目新页支持明确选择器标签及撰写区内唯一项目名称，限定局部关联，不将侧栏名称当作当前项目。
+ * [OUTPUT]: 唯一目标、模型读取的结构化列表或简短中文选择问题；候选只呈现名称与必要目录，不泄漏内部 ID；项目新页核验限定撰写区关联，不将侧栏名称当作当前项目。
  * [POS]: 与桌面动作无关的目标选择/证据策略，支持无副作用回归。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -24,15 +24,17 @@ enum CodexSelection {
         if let query = request.project {
             let matches = CodexCatalog.matchProjects(query, in: snapshot.projects)
             guard matches.count == 1 else {
-                return .question(matches.isEmpty ? "没有找到这个 Codex 本机项目：" + query
-                    : "有多个匹配项目，请选一个：\n" + json(["projects": matches.map(\.dictionary)]))
+                return .question(matches.isEmpty ? "没找到“" + choiceName(query) + "”项目，请说一下准确项目名。"
+                    : projectQuestion(matches))
             }
             project = matches[0]
         }
         if [.openProject, .sendProject].contains(request.action), let project {
-            let requestedPath = request.project.flatMap { project.paths.contains($0) ? $0 : nil }
+            let requestedPath = request.project.flatMap(CodexCatalog.projectPath)
+                .flatMap { project.paths.contains($0) ? $0 : nil }
             guard let path = requestedPath ?? (project.paths.count == 1 ? project.paths[0] : nil) else {
-                return .question("这个项目有多个目录，请选择要使用的目录：\n" + json(project.dictionary))
+                return .question(choices("“" + choiceName(project.name) + "”有多个目录，请选一个：",
+                    values: project.paths.map(displayPath), guidance: "直接说完整目录即可。"))
             }
             return .destination(.project(project, path, nameUnique: snapshot.projects.filter { CodexCatalog.key($0.name) == CodexCatalog.key(project.name) }.count == 1))
         }
@@ -46,16 +48,59 @@ enum CodexSelection {
                                 ? "只列出已确认未读项；其他状态未知，不等于没有蓝点。可展开项目侧边栏或按任务标题选择。" : "本机任务元数据，不含正文。"] ))
         }
         if snapshot.truncated, request.task.flatMap({ UUID(uuidString: $0) }) == nil {
-            return .question("本机任务索引范围不完整，请用列表返回的准确任务 ID 选择。")
+            return .question("任务太多，暂时无法准确定位。请在 Codex 中打开要继续的任务。")
         }
         let matches = try CodexCatalog.matchChats(request.task, projectId: project?.id, unreadOnly: request.unreadOnly == true, in: scoped)
         guard matches.count == 1 else {
             if matches.isEmpty && snapshot.truncated { throw CodexCatalog.Failure(message: "任务索引范围不完整，请使用更准确的任务名称。") }
-            return .question(matches.isEmpty ? "没有找到符合条件的 Codex 任务。"
-                : "有多个匹配任务，请选一个：\n" + json(["tasks": matches.prefix(40).map(\.dictionary), "hasMore": matches.count > 40]))
+            return .question(matches.isEmpty ? "没找到这个 Codex 任务，请说一下准确任务名。"
+                : taskQuestion(matches, projects: snapshot.projects))
         }
         let chat = matches[0]
         return .destination(.task(chat, titleUnique: !snapshot.truncated && snapshot.chats.filter { $0.title == chat.title }.count == 1))
+    }
+    private static func choiceName(_ value: String) -> String {
+        value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+    private static func displayPath(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+    }
+    private static func choices(_ heading: String, values: [String], guidance: String) -> String {
+        let lines = values.prefix(5).enumerated().map { "\($0.offset + 1). \($0.element)" }
+        let overflow = values.count > 5 ? "\n还有 \(values.count - 5) 项未显示。" : ""
+        return heading + "\n" + lines.joined(separator: "\n") + overflow + "\n" + guidance
+    }
+    private static func projectQuestion(_ projects: [CodexCatalog.Project]) -> String {
+        var indistinguishable = false
+        let values = projects.map { project in
+            let sameName = projects.filter { CodexCatalog.key($0.name) == CodexCatalog.key(project.name) }
+            guard sameName.count > 1 else { return choiceName(project.name) }
+            let otherPaths = sameName.filter { $0.id != project.id }.flatMap(\.paths)
+            guard let path = project.paths.first(where: { !otherPaths.contains($0) }) else {
+                indistinguishable = true
+                return choiceName(project.name) + "（同名且目录相同）"
+            }
+            return choiceName(project.name) + "（" + displayPath(path) + "）"
+        }
+        let guidance = indistinguishable ? "同名且目录相同的项目，请先在 Codex 中修改名称，再告诉我。"
+            : "直接说项目名；同名项目请说完整目录。"
+        return choices("有多个项目符合，请选一个：", values: values, guidance: guidance)
+    }
+    private static func taskQuestion(_ chats: [CodexCatalog.Chat], projects: [CodexCatalog.Project]) -> String {
+        var indistinguishable = false
+        let values = chats.map { chat in
+            let sameTitle = chats.filter { CodexCatalog.key($0.title) == CodexCatalog.key(chat.title) }
+            guard sameTitle.count > 1 else { return choiceName(chat.title) }
+            if sameTitle.contains(where: { $0.id != chat.id && $0.projectId == chat.projectId }) {
+                indistinguishable = true
+            }
+            let project = projects.first { $0.id == chat.projectId }
+            return choiceName(chat.title) + "（" + (project.map { choiceName($0.name) } ?? displayPath(chat.cwd)) + "）"
+        }
+        let guidance = indistinguishable ? "同一项目里的同名任务，请在 Codex 中直接打开。"
+            : "直接说任务名；同名任务请一起说项目名。"
+        return choices("有多个任务符合，请选一个：", values: values, guidance: guidance)
     }
     static func isUnreadLabel(_ label: String, title: String) -> Bool {
         [title + ", Unread", title + ", unread", title + "，未读", title + " 未读",

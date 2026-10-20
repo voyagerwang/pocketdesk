@@ -1,6 +1,6 @@
 /**
  * [INPUT]: FeishuCLI 的实时命令帮助/授权范围/用户身份业务调用，TaskStore 的操作记录。
- * [OUTPUT]: CLI 全业务域发现与执行；按真实命令风险处理幂等记录、高风险补充确认及缺权限错误。
+ * [OUTPUT]: CLI 全业务域发现与执行；按真实命令风险处理原子占用与单调幂等回执、高风险补充确认及缺权限错误。
  * [POS]: PocketDesk 飞书通用适配，不复制 Workbench 业务代码；模型不能更换身份、读取凭证或执行 shell。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -97,9 +97,12 @@ enum FeishuGateway {
             args.append("--yes")
         }
         if risk != "read" {
-            task.feishuOperations = task.feishuOperations ?? [:]
-            task.feishuOperations?[key] = "pending"
-            do { try TaskStore.save(task) } catch { return .failed("无法保存操作记录，未执行。") }
+            do {
+                guard try TaskStore.reserveFeishuOperation(id: taskId, key: key) else {
+                    if let previous = TaskStore.task(id: taskId)?.feishuOperations?[key], previous != "pending" { return .sent(previous) }
+                    return .failed("此前操作结果待核对或任务已结束，不会自动重试。")
+                }
+            } catch { return .failed("无法保存操作记录，未执行。") }
         }
         args += ["--as", "user", "--format", "json"]
         switch invoke(args) {

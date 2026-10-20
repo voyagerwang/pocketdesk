@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Foundation 的 FileManager/JSONEncoder/FileHandle，消费 AgentModels 的任务与事件类型。
  * [OUTPUT]: 补充票据查账及派单轮次门禁；对外提供任务与事件的唯一权威存储：整体快照 tasks.json（原子写）、append-only 事件日志
- *           events.jsonl、requestId 去重表 dedupe.json；以及幂等接受 claim 与工作台创建/派单/桌面动作副作用前的原子占用。
+ *           events.jsonl、requestId 去重表 dedupe.json；以及幂等接受 claim 与工作台创建/派单/桌面动作/飞书/米家副作用前的原子占用；发送与设备操作证据只增不减，米家真实回执允许在任务结束后补存。
  * [POS]: Sources 的 Agent 持久化层；HTTP 层与 TaskService 都通过它读写，不允许两边各自声明权威。
  *        首版用文件化方案而非 SQLite：本项目由 install-app.sh 直接 swiftc 裸编、未链接 -lsqlite3，
  *        引入 SQLite 要改构建并手写 C API 封装，成本与收益不匹配（方案 §9 v1.1 修正）。
@@ -106,8 +106,26 @@ enum TaskStore {
         if let existing = tasks[index].workbenchOperations {
             updated.workbenchOperations = (updated.workbenchOperations ?? [:]).merging(existing) { _, persisted in persisted }
         }
+        if let existing = tasks[index].mijiaOperations {
+            // 米家回执只由原子操作入口推进；普通状态保存不能抹掉占用或替换完成事实。
+            updated.mijiaOperations = (updated.mijiaOperations ?? [:]).merging(existing) { _, persisted in persisted }
+        }
         if let existing = tasks[index].inputRequestTexts {
             updated.inputRequestTexts = (updated.inputRequestTexts ?? [:]).merging(existing) { _, persisted in persisted }
+        }
+        if let existing = tasks[index].feishuDelivery {
+            // 确认回执只能推进原发送占用，旧快照不能清掉占用或替换已确认的消息。
+            if existing.messageId == nil, let incoming = updated.feishuDelivery,
+               incoming.recipient == existing.recipient, incoming.messageId != nil {
+                updated.feishuDelivery = incoming
+            } else {
+                updated.feishuDelivery = existing
+            }
+        }
+        if let existing = tasks[index].feishuOperations {
+            updated.feishuOperations = (updated.feishuOperations ?? [:]).merging(existing) { incoming, persisted in
+                persisted == "pending" ? incoming : persisted
+            }
         }
         tasks[index] = updated
         try persistLocked(tasks: tasks, dedupe: dedupeLocked())
@@ -147,6 +165,29 @@ enum TaskStore {
         return true
     }
 
+    /// 发送前在权威锁内占用一次；旧快照、并发入口与进程重启都不能解除发送证据。
+    static func reserveFeishuDelivery(id: String, recipient: String) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        var tasks = loadLocked()
+        guard let index = tasks.firstIndex(where: { $0.id == id }), tasks[index].status == .running,
+              tasks[index].feishuDelivery == nil else { return false }
+        tasks[index].feishuDelivery = FeishuDelivery(recipient: recipient, messageId: nil)
+        try persistLocked(tasks: tasks, dedupe: dedupeLocked())
+        return true
+    }
+
+    /// 通用飞书写操作按命令摘要原子占用；只有真实完成回执可以从 pending 推进。
+    static func reserveFeishuOperation(id: String, key: String) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        var tasks = loadLocked()
+        guard let index = tasks.firstIndex(where: { $0.id == id }), tasks[index].status == .running,
+              tasks[index].feishuOperations?[key] == nil else { return false }
+        tasks[index].feishuOperations = tasks[index].feishuOperations ?? [:]
+        tasks[index].feishuOperations?[key] = "pending"
+        try persistLocked(tasks: tasks, dedupe: dedupeLocked())
+        return true
+    }
+
     /// 创建前持久占用，旧快照与重启不会解除；所有完成回执也在此锁内更新。
     static func workbenchOperation(id: String, key: String, receipt: String? = nil) throws -> String? {
         lock.lock(); defer { lock.unlock() }
@@ -158,6 +199,30 @@ enum TaskStore {
         if receipt == nil, previous != nil { return previous }
         tasks[index].workbenchOperations = tasks[index].workbenchOperations ?? [:]
         tasks[index].workbenchOperations?[key] = receipt ?? "pending"
+        try persistLocked(tasks: tasks, dedupe: dedupeLocked())
+        return previous
+    }
+
+    /// nil 返回值表示首次持久占用成功；已有 pending 或完成回执均不授权再次执行。
+    /// 完成事实可在任务结束后补存，但必须由既有占用推进，已确认回执不可替换。
+    static func mijiaOperation(id: String, key: String, receipt: String? = nil) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        var tasks = loadLocked()
+        guard !key.isEmpty, let index = tasks.firstIndex(where: { $0.id == id }) else {
+            throw TaskStoreError.writeFailed("米家操作所属任务或操作标识无效。")
+        }
+        let previous = tasks[index].mijiaOperations?[key]
+        if let receipt {
+            guard !receipt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, receipt != "pending", let previous else {
+                throw TaskStoreError.writeFailed("米家完成回执无效或缺少此前操作占用。")
+            }
+            guard previous == "pending" else { return previous }
+        } else {
+            if let previous { return previous }
+            guard tasks[index].status == .running else { throw TaskStoreError.writeFailed("任务已结束，未执行米家操作。") }
+        }
+        tasks[index].mijiaOperations = tasks[index].mijiaOperations ?? [:]
+        tasks[index].mijiaOperations?[key] = receipt ?? "pending"
         try persistLocked(tasks: tasks, dedupe: dedupeLocked())
         return previous
     }

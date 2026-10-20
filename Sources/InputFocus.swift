@@ -1,10 +1,12 @@
 /**
- * [INPUT]: 依赖 AppKit Accessibility 与 Util 前台观测。
- * [OUTPUT]: 系统真实键盘焦点优先，PID 不符时回退到指定应用； 提供 InputFocus 三态焦点探测、带 PID/聚焦窗口/WebArea 校验的安全鼠标锚点、有界查找、显式聚焦及无正文诊断（字符数量、占位文本相等关系与选区）。
+ * [INPUT]: 依赖 AppKit Accessibility、唯一活动应用与 Carbon 即时前台进程的交叉证据；窗口层序不授权输入。
+ * [OUTPUT]: 共享键盘应用归属及来源诊断，AX 明确归属优先，仅实际缺值且活动/即时进程及系统控件一致时补证；提供 InputFocus 三态焦点探测、带 PID/聚焦窗口/WebArea 校验的安全鼠标锚点、有界查找、显式聚焦及无正文诊断。
  * [POS]: Sources 的焦点能力边界；InputExecutor 决定是否允许聚焦，全屏绑定输入只读探测。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md。focusedElement 读不到焦点时对 Electron 应用写 AXManualAccessibility（附 AXEnhancedUserInterface）激活其 AX 树：先 false 再 true 强制状态变化，使清空等可核验路径对 AX 盲的 Electron 应用生效；但**树确认存活过（成功读到过焦点元素）的 pid 不因瞬时读抖动重写激活属性**——重写会强制 Chromium 重建整棵树、作废全部已捕获 AX 引用（实时输入第二字冻结/清空连败的元凶），活树 pid 只做 300ms 有界重试，确需重写时冷却拉长到 10s；撞节流不放弃而是继续等待重读。另提供 focusedApplicationPID（系统级键盘焦点归属，打字落点真值，激活核验与逐键门禁用；窗口 z 序仅供界面展示）。不改变"读不到控件不盲删"的红线
  */
 import AppKit
+import Carbon
+import Darwin
 
 enum InputFocus {
     struct EditableAnchor {
@@ -184,15 +186,86 @@ enum InputFocus {
     /// 与 Util.frontmostApp 的分工：那是"用户看到哪个窗口在最上"（窗口 z 序），用于界面展示；
     /// 这里是"谁的应用拿着键盘焦点"，用于激活核验与逐键门禁。后台 agent 激活 Electron 应用
     /// 常出现"窗口抬到最上、活跃应用还是别人"的半激活态（实测飞书），两者在那一刻分叉。
-    static func focusedApplicationPID() -> pid_t? {
-        var raw: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(),
-                                            kAXFocusedApplicationAttribute as CFString, &raw) == .success,
-              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
-        var pid: pid_t = 0
-        guard AXUIElementGetPid(raw as! AXUIElement, &pid) == .success, pid > 0 else { return nil }
-        return pid
+    static func focusedApplicationPID() -> pid_t? { applicationOwner().pid }
+
+    struct ApplicationOwner {
+        enum Source: String { case accessibility, activeApplication, unavailable }
+        let pid: pid_t?
+        let source: Source
+        let axStatus: AXError
+        var detail = ""
     }
+
+    /// 缺值允许补证；明确的 AX 归属、硬错误或任一反证不能被活动应用缓存覆盖。
+    static func resolveApplicationOwner(axStatus: AXError, axPID: pid_t?, activePIDs: [pid_t], immediatePID: pid_t?,
+                                        trusted: Bool, secureInput: Bool, systemUIStatus: AXError,
+                                        systemUIOwner: pid_t?) -> ApplicationOwner {
+        if axStatus == .success {
+            let pid = axPID.flatMap { $0 > 0 ? $0 : nil }
+            return ApplicationOwner(pid: pid, source: pid == nil ? .unavailable : .accessibility, axStatus: axStatus)
+        }
+        guard [.noValue, .cannotComplete].contains(axStatus), trusted, !secureInput,
+              activePIDs.count == 1, let pid = activePIDs.first, pid > 0, immediatePID == pid else {
+            return ApplicationOwner(pid: nil, source: .unavailable, axStatus: axStatus)
+        }
+        if systemUIStatus == .success {
+            guard systemUIOwner == pid else { return ApplicationOwner(pid: nil, source: .unavailable, axStatus: axStatus) }
+        } else if ![.noValue, .cannotComplete].contains(systemUIStatus) {
+            return ApplicationOwner(pid: nil, source: .unavailable, axStatus: axStatus)
+        }
+        return ApplicationOwner(pid: pid, source: .activeApplication, axStatus: axStatus)
+    }
+
+    /// 派单、绑定和逐键门禁共读一套应用归属；没有正文或界面写入副作用。
+    static func applicationOwner() -> ApplicationOwner {
+        let system = AXUIElementCreateSystemWide()
+        func owner(_ raw: CFTypeRef?) -> pid_t? {
+            guard let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+            var pid: pid_t = 0
+            return AXUIElementGetPid(raw as! AXUIElement, &pid) == .success && pid > 0 ? pid : nil
+        }
+        var raw: CFTypeRef?
+        var status = AXUIElementSetMessagingTimeout(system, 0.04)
+        if status == .success { status = AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &raw) }
+        let axPID = status == .success ? owner(raw) : nil
+        let supplement = [.noValue, .cannotComplete].contains(status)
+        let trusted = supplement && AXIsProcessTrusted()
+        let secure = trusted && IsSecureEventInputEnabled()
+        var activePIDs: [pid_t] = [], immediatePID: pid_t?
+        var uiStatus = AXError.failure, uiOwner: pid_t?
+        if trusted, !secure {
+            activePIDs = NSWorkspace.shared.runningApplications.filter { $0.isActive && !$0.isTerminated }.map(\.processIdentifier)
+            if activePIDs.count == 1 {
+                immediatePID = immediateProcessReader?()
+                var uiRaw: CFTypeRef?
+                uiStatus = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &uiRaw)
+                if uiStatus == .success { uiOwner = owner(uiRaw) }
+            }
+        }
+        var result = resolveApplicationOwner(axStatus: status, axPID: axPID, activePIDs: activePIDs,
+            immediatePID: immediatePID, trusted: trusted, secureInput: secure, systemUIStatus: uiStatus, systemUIOwner: uiOwner)
+        result.detail = "ownerSource=\(result.source.rawValue); axStatus=\(status.rawValue); activePIDs=\(activePIDs); immediatePID=\(immediatePID.map(String.init) ?? "unknown"); systemUIStatus=\(uiStatus.rawValue); systemUIOwner=\(uiOwner.map(String.init) ?? "unknown"); secureInput=\(secure)"
+        return result
+    }
+
+    // ---------- 公开 Carbon C 接口的窄动态桥 ----------
+    // Swift SDK 不暴露这两个旧接口；按头文件 ABI 读取即时前台，不能独立代替 AX 反证。
+    private static let immediateProcessReader: (() -> pid_t?)? = {
+        typealias ReadFront = @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>) -> OSErr
+        typealias ReadPID = @convention(c) (UnsafePointer<ProcessSerialNumber>, UnsafeMutablePointer<pid_t>) -> OSStatus
+        guard let handle = dlopen(nil, RTLD_LAZY) else { return nil }
+        guard let frontAddress = dlsym(handle, "GetFrontProcess"), let pidAddress = dlsym(handle, "GetProcessPID") else {
+            dlclose(handle); return nil
+        }
+        let readFront = unsafeBitCast(frontAddress, to: ReadFront.self)
+        let readPID = unsafeBitCast(pidAddress, to: ReadPID.self)
+        return {
+            _ = handle
+            var serial = ProcessSerialNumber(), pid: pid_t = 0
+            guard readFront(&serial) == noErr, readPID(&serial, &pid) == noErr, pid > 0 else { return nil }
+            return pid
+        }
+    }()
 
     /// Cold Electron windows may not expose their editor until accessibility is
     /// enabled. Voice preparation uses the same cache, short messaging timeouts,

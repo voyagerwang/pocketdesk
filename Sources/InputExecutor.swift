@@ -1,9 +1,9 @@
 /**
- * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard、ApplicationServices 的 AXUIElement、CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的命令词汇、ImageBatchStore 的有界多图资源、ImagePastePolicy 的目标专属时序、ExecutionTrace 的门禁与结果分级、TargetStore/InputFocus/InputBinding/LiveDraft 的目标和草稿事务。
+ * [INPUT]: 依赖 AppKit 的 NSWorkspace/NSPasteboard、ApplicationServices 的 AXUIElement、CoreGraphics 的 CGEvent/CGEventSource；消费 Models 的命令词汇、AgentAppProfile 的应用身份、ImageBatchStore 的有界多图资源、ImagePastePolicy 的目标专属时序、ExecutionTrace 的门禁与结果分级、TargetStore/InputFocus/InputBinding/LiveDraft 的目标和草稿事务。
  * [OUTPUT]: 桌面动作在入队前绑定窗口身份，菜单发现和布局复用串行队列； 桌面 Agent 动作复用串行队列和按键原语；快捷操作支持队列内租约核验，锁屏通过系统状态确认才报成功；对外提供 InputExecutor：应用激活与焦点校验（含已确认目标进程与副屏说明）、草稿快照事务、电脑改稿后手机追加的合并回执、结构化草稿状态（active/interrupted/recoverable/needs-user-focus/committed）与只读恢复探测、显式整段清空（幂等、可从冻结态破冰；文档类目标只清手机侧）、统一的 UU 文字剪贴板时序、有序多图逐张粘贴后单次提交（Chrome 多图在经当前页面核验的鼠标锚点重建附件插入点；白板等无输入框画布退化为纯粘贴序列并用方向键分离相邻图片）、应用切回后从当前焦点继续已输入正文、部分执行失败禁止重放、快捷键注入及最近焦点诊断。
  * 安全边界：锁屏密码仅走 HTTPS 专用执行器，普通输入在锁屏时受阻；安全监听共享原控制租约。
- * [POS]: Sources 的键盘输入执行层；Server 把 /api/activate、/api/send、/api/live-input、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
- * [NOTES]: 删除键经 postDeleteKey 发送（不携带 DEL 字符），避免 Chromium 把 Backspace 当成 Delete 键；clearScopeAllowsComputer 不再按进程白名单一刀切拦掉聊天类应用（飞书/钉钉等同进程文档与消息无法从 bundle 区分），改由 focusedInDocument 按需保护真实文档正文；frontmostMatches/preferredFrontApp 以键盘焦点归属（focusedApplicationPID）为准、窗口层序只作回退——半激活态（窗口在最上、活跃应用是别人，实测 Electron/飞书）按层序判会假通过或误报"不在前台"；verifyActivation 轮询期内每两拍补发一次激活；变更时更新此头部，然后检查 CLAUDE.md
+ * [POS]: Sources 的键盘输入执行层；WorkBuddy 首次激活先准备焦点 AX 树再核验共享应用归属，不点击或放宽门禁；Server 把 /api/activate、/api/send、/api/live-input、/api/image、/api/shortcut-trigger 委托给它，与 PointerExecutor（指针）平行为一对执行兄弟。
+ * [NOTES]: 删除键经 postDeleteKey 发送（不携带 DEL 字符），避免 Chromium 把 Backspace 当成 Delete 键；clearScopeAllowsComputer 不再按进程白名单一刀切拦掉聊天类应用（飞书/钉钉等同进程文档与消息无法从 bundle 区分），改由 focusedInDocument 按需保护真实文档正文；frontmostMatches/preferredFrontApp 只接受 InputFocus 的共享键盘归属交叉证据，未知或反证不由窗口层序补权——半激活态（窗口在最上、活跃应用是别人，实测 Electron/飞书）按层序判会假通过或误报"不在前台"；verifyActivation 轮询期内每两拍补发一次激活；变更时更新此头部，然后检查 CLAUDE.md
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import AppKit
@@ -13,7 +13,16 @@ import Foundation
 final class InputExecutor {
     private typealias FocusVerdict = InputFocus.FocusVerdict
     static var lastFocusProbe: [String: Any] { InputFocus.lastFocusProbe }
-    static func probeFrontmostFocus() -> [String: Any] { InputFocus.probeFrontmostFocus() }
+    static func probeFrontmostFocus() -> [String: Any] {
+        let before = InputFocus.applicationOwner()
+        var probe = InputFocus.probeFrontmostFocus()
+        probe["ownerBeforeProbe"] = before.detail
+        probe["ownerPIDBeforeProbe"] = before.pid
+        let after = InputFocus.applicationOwner()
+        probe["ownerAfterProbe"] = after.detail
+        probe["ownerPIDAfterProbe"] = after.pid
+        return probe
+    }
     static let frontmostPseudoId = "__frontmost__"
     // UU 远程特殊通道：UU 的键盘同步不吃合成 Unicode 事件（表现为只透传占位符），
     // 但剪贴板是应用层双向同步的——发往 UU 的内容改走「写剪贴板 + Cmd+V + Return」。
@@ -181,24 +190,19 @@ final class InputExecutor {
         // 内容会落进谁由键盘焦点决定，不由窗口层序决定：后台 agent 激活 Electron 应用
         // 常见"窗口抬到最上、活跃应用还是别人"的半激活态（实测飞书）——按层序判会假通过
         // （字进了别的应用），下一拍又判失败（反复弹"目标不在前台"）。AX 焦点应用是打字
-        // 落点的真值；读不出来（盲应用/瞬时错误）才退回窗口层序的旧判据。
-        if let focusPID = InputFocus.focusedApplicationPID() {
-            return NSWorkspace.shared.runningApplications
-                .first(where: { $0.processIdentifier == focusPID })
-                .map(matches) ?? false
-        }
-        guard let front = Util.frontmostApp() else { return false }
-        return matches(front)
+        // 落点的真值；缺值只接受共享交叉证据，未知或反证不能退回窗口层序授权。
+        guard let focusPID = InputFocus.focusedApplicationPID() else { return false }
+        return NSWorkspace.shared.runningApplications
+            .first(where: { $0.processIdentifier == focusPID })
+            .map(matches) ?? false
     }
 
-    /// 写入目标进程：键盘焦点归属的应用优先，读不出焦点才退回窗口层序的最上层应用。
+    /// 写入目标进程：只接受共享键盘归属，未知或反证不能由窗口层序补权。
     /// 绑定与读回都必须跟着"键入会落到谁"走，否则半激活态下会把 A 应用的元素当靶子、
     /// 键却打进了 B 应用，读回永远对不上。
     private func preferredFrontApp() -> NSRunningApplication? {
-        if let focusPID = InputFocus.focusedApplicationPID() {
-            return NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == focusPID })
-        }
-        return Util.frontmostApp()
+        guard let focusPID = InputFocus.focusedApplicationPID() else { return nil }
+        return NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == focusPID })
     }
 
 
@@ -754,6 +758,12 @@ final class InputExecutor {
         guard AXIsProcessTrusted() else {
             completion(.success(ActivateOutcome(pid: self.runningApp(targetId: targetId)?.processIdentifier, note: ""))); return
         }
+        // WorkBuddy 冷 AX 树可能还没有系统焦点归属；先准备其真实焦点树，再核验应用归属。
+        // 只读取/开启辅助功能，不点击或输入，也不放宽后续键盘归属门禁。
+        if attempt == 1, let config = store.resolve(targetId), AgentAppProfile.resolve(config) == .workbuddy,
+           let app = runningApp(targetId: targetId) {
+            _ = InputFocus.focusedElement(pid: app.processIdentifier)
+        }
         // 实测：目标窗口在另一块显示器 / 另一个桌面空间时，激活到焦点落定可能要 2~3 秒
         //（显示器或空间切换本身有开销）。只等几百毫秒会把"慢"误判成"失败"——
         // 用户看到报错，可几秒后画面其实已经切过去了。故轮询到 3.5 秒再下结论。
@@ -799,7 +809,9 @@ final class InputExecutor {
                                                         note: "\(name) 的窗口在另一块显示器上，已按那块屏就位。")))
                     return
                 }
-                self.record("activate", label, .failed, "未能置于前台，当前前台是 \(frontName)。", frontName)
+                let owner = InputFocus.applicationOwner()
+                self.record("activate", label, .failed,
+                    "未能核实键盘归属，当前可见应用是 \(frontName)；expectedPID=\(pid); ownerPID=\(owner.pid.map(String.init) ?? "unknown"); \(owner.detail)", frontName)
                 completion(.failure(.message(
                     "\(name) 没能切到前台（画面仍停在 \(frontName)）。它的窗口可能最小化了，或在另一个桌面空间——请先在这台电脑上点一下它，再试一次。")))
                 return

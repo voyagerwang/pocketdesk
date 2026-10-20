@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Install bundled mapping guard; retire the legacy app only after verified handoff."""
+"""
+[INPUT]: PocketDesk App 内的耳机映射助手、launchctl 与当前用户的 LaunchAgents。
+[OUTPUT]: 自测和映射核验通过后安装用户级保活服务，保留旧服务与旧 App 的可恢复备份。
+[POS]: scripts 的本机耳机服务交接层，被两种 App 安装脚本调用，不承担输入或米家控制。
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+"""
 import datetime, json, os, pathlib, plistlib, subprocess
 home = pathlib.Path.home()
 app = home / 'Applications/PocketDesk.app'

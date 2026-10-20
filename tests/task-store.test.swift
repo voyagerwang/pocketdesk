@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation，消费 TaskStore、AgentModels、RecipientOrder。
- * [OUTPUT]: 覆盖任务存储的幂等与冲突、事件单调与增量补取、清理，以及接收者顺序的迁移语义。
+ * [OUTPUT]: 覆盖任务存储的幂等与冲突、事件单调与增量补取、清理、飞书与米家原子占用和跨快照/重载单调证据，以及接收者顺序的迁移语义；米家回执验证旧缓存兼容与任务结束后的事实补存。
  * [POS]: tests 的 Agent 持久化测试；把存储指到临时目录，不碰用户真实数据。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -90,6 +90,130 @@ import Foundation
             check(false, "保存不应失败：\(error)")
         }
 
+        print("task store: 飞书原子占用与持久证据")
+
+        do {
+            var deliveryTask = try TaskStore.claim(subject: "s1", requestId: "feishu-delivery", text: "发飞书消息", context: nil)
+            check(try !TaskStore.reserveFeishuDelivery(id: deliveryTask.id, recipient: "张三"), "未运行的任务不能占用飞书发送")
+            deliveryTask.status = .running
+            try TaskStore.save(deliveryTask)
+            let beforeDelivery = deliveryTask
+            let counterLock = NSLock()
+            var deliveryReservations = 0
+            DispatchQueue.concurrentPerform(iterations: 12) { _ in
+                if (try? TaskStore.reserveFeishuDelivery(id: deliveryTask.id, recipient: "张三")) == true {
+                    counterLock.lock(); deliveryReservations += 1; counterLock.unlock()
+                }
+            }
+            check(deliveryReservations == 1, "并发发送仅一次原子占用成功")
+            try TaskStore.save(beforeDelivery)
+            check(TaskStore.task(id: deliveryTask.id)?.feishuDelivery?.recipient == "张三", "旧空快照不能抹掉飞书发送占用")
+            TaskStore.resetCache()
+            check(try !TaskStore.reserveFeishuDelivery(id: deliveryTask.id, recipient: "李四"), "重载后仍拒绝第二次飞书发送")
+            var confirmed = TaskStore.task(id: deliveryTask.id)!
+            let pendingDelivery = confirmed
+            confirmed.feishuDelivery?.messageId = "om_confirmed"
+            try TaskStore.save(confirmed)
+            check(TaskStore.task(id: deliveryTask.id)?.feishuDelivery?.messageId == "om_confirmed", "发送占用可推进至真实消息回执")
+            try TaskStore.save(pendingDelivery)
+            try TaskStore.save(beforeDelivery)
+            check(TaskStore.task(id: deliveryTask.id)?.feishuDelivery?.messageId == "om_confirmed", "旧 pending 与空快照不能覆盖已确认发送")
+            confirmed.feishuDelivery = FeishuDelivery(recipient: "李四", messageId: "om_other")
+            try TaskStore.save(confirmed)
+            check(TaskStore.task(id: deliveryTask.id)?.feishuDelivery == FeishuDelivery(recipient: "张三", messageId: "om_confirmed"), "后续快照不能替换已确认的接收者和消息")
+
+            var operationTask = try TaskStore.claim(subject: "s1", requestId: "feishu-operation", text: "飞书写操作", context: nil)
+            check(try !TaskStore.reserveFeishuOperation(id: operationTask.id, key: "first"), "未运行的任务不能占用飞书写操作")
+            operationTask.status = .running
+            try TaskStore.save(operationTask)
+            let beforeOperation = operationTask
+            var operationReservations = 0
+            DispatchQueue.concurrentPerform(iterations: 12) { _ in
+                if (try? TaskStore.reserveFeishuOperation(id: operationTask.id, key: "first")) == true {
+                    counterLock.lock(); operationReservations += 1; counterLock.unlock()
+                }
+            }
+            check(operationReservations == 1, "并发相同写操作仅一次原子占用成功")
+            try TaskStore.save(beforeOperation)
+            check(TaskStore.task(id: operationTask.id)?.feishuOperations?["first"] == "pending", "旧空快照不能抹掉飞书写操作占用")
+            TaskStore.resetCache()
+            check(try !TaskStore.reserveFeishuOperation(id: operationTask.id, key: "first"), "重载后仍拒绝重放同一飞书写操作")
+            var result = TaskStore.task(id: operationTask.id)!
+            let pendingOperation = result
+            result.feishuOperations?["first"] = "实际回执"
+            try TaskStore.save(result)
+            check(TaskStore.task(id: operationTask.id)?.feishuOperations?["first"] == "实际回执", "写操作占用可推进至真实回执")
+            try TaskStore.save(pendingOperation)
+            try TaskStore.save(beforeOperation)
+            check(TaskStore.task(id: operationTask.id)?.feishuOperations?["first"] == "实际回执", "旧 pending 与空快照不能覆盖已完成操作")
+            check(try TaskStore.reserveFeishuOperation(id: operationTask.id, key: "second"), "不同写操作可以独立占用")
+            result.feishuOperations?["first"] = "另一个回执"
+            try TaskStore.save(result)
+            let operations = TaskStore.task(id: operationTask.id)?.feishuOperations
+            check(operations?["first"] == "实际回执" && operations?["second"] == "pending", "旧快照保留已确认回执与其他操作占用")
+        } catch {
+            check(false, "飞书持久证据检查不应失败：\(error)")
+        }
+
+        print("task store: 米家原子占用与持久证据")
+
+        do {
+            var operationTask = try TaskStore.claim(subject: "s1", requestId: "mijia-operation", text: "米家设备写操作", context: nil)
+            do {
+                _ = try TaskStore.mijiaOperation(id: operationTask.id, key: "first")
+                check(false, "未运行的任务不能占用米家操作")
+            } catch { check(operationTask.mijiaOperations == nil, "未运行的任务不能占用米家操作") }
+            operationTask.status = .running
+            try TaskStore.save(operationTask)
+            let beforeOperation = operationTask
+            let counterLock = NSLock()
+            var reservations = 0
+            DispatchQueue.concurrentPerform(iterations: 12) { _ in
+                do {
+                    if try TaskStore.mijiaOperation(id: operationTask.id, key: "first") == nil {
+                        counterLock.lock(); reservations += 1; counterLock.unlock()
+                    }
+                } catch { }
+            }
+            check(reservations == 1, "并发相同米家操作仅一次获得执行权")
+            try TaskStore.save(beforeOperation)
+            check(TaskStore.task(id: operationTask.id)?.mijiaOperations?["first"] == "pending", "旧空快照不能抹掉米家占用")
+            TaskStore.resetCache()
+            check(try TaskStore.mijiaOperation(id: operationTask.id, key: "first") == "pending", "重载后未知米家操作不重放")
+            let pendingOperation = TaskStore.task(id: operationTask.id)!
+            _ = try TaskStore.mijiaOperation(id: operationTask.id, key: "first", receipt: "实际设备回执")
+            check(try TaskStore.mijiaOperation(id: operationTask.id, key: "first", receipt: "另一个回执") == "实际设备回执", "米家完成回执不可替换")
+            try TaskStore.save(pendingOperation)
+            try TaskStore.save(beforeOperation)
+            check(TaskStore.task(id: operationTask.id)?.mijiaOperations?["first"] == "实际设备回执", "旧 pending 与空快照不能覆盖米家完成回执")
+            check(try TaskStore.mijiaOperation(id: operationTask.id, key: "second") == nil, "不同米家操作可以独立占用")
+            try TaskStore.save(pendingOperation)
+            let operations = TaskStore.task(id: operationTask.id)?.mijiaOperations
+            check(operations?["first"] == "实际设备回执" && operations?["second"] == "pending", "旧快照保留米家回执与其他占用")
+            for (key, receipt) in [("unclaimed", "无占用回执"), ("second", ""), ("second", "pending")] {
+                do {
+                    _ = try TaskStore.mijiaOperation(id: operationTask.id, key: key, receipt: receipt)
+                    check(false, "无占用或无效米家回执必须拒绝")
+                } catch { check(true, "无占用或无效米家回执必须拒绝") }
+            }
+            var ended = TaskStore.task(id: operationTask.id)!
+            ended.status = .abandoned
+            try TaskStore.save(ended)
+            _ = try TaskStore.mijiaOperation(id: operationTask.id, key: "second", receipt: "迟到设备回执")
+            do {
+                _ = try TaskStore.mijiaOperation(id: operationTask.id, key: "third")
+                check(false, "任务结束后不能新占用米家操作")
+            } catch { check(true, "任务结束后不能新占用米家操作") }
+            TaskStore.resetCache()
+            check(TaskStore.task(id: operationTask.id)?.mijiaOperations?["second"] == "迟到设备回执", "任务结束后真实米家回执仍能持久补存")
+            var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ended)) as! [String: Any]
+            legacy.removeValue(forKey: "mijiaOperations")
+            let decoded = try JSONDecoder().decode(AgentTask.self, from: JSONSerialization.data(withJSONObject: legacy))
+            check(decoded.mijiaOperations == nil, "旧任务缓存缺少米家字段仍可解码")
+        } catch {
+            check(false, "米家持久证据检查不应失败：\(error)")
+        }
+
         print("recipient order: 迁移与清理")
 
         let t1 = TargetConfig(id: "app-1", name: "A", bundleID: "com.a", path: nil)
@@ -121,7 +245,7 @@ import Foundation
         check(TaskUsage.parse(["prompt_tokens": 3, "completion_tokens": 4]).totalTokens == 7, "usage 解析与合计")
 
         if failures == 0 {
-            print("task store: 幂等/冲突/事件/清理/顺序迁移 全部通过")
+            print("task store: 幂等/冲突/事件/清理/飞书证据/米家证据/顺序迁移 全部通过")
         } else {
             print("task store: \(failures) 项失败")
             exit(1)

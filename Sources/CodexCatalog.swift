@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 只读 Codex 本机项目配置与 state_N.sqlite 元数据；SQLite 以 READONLY 打开，不读登录凭证或聊天正文。
- * [OUTPUT]: 项目/任务候选、项目归属与可判定的未读索引；项目动作不依赖任务数据库，字段未知或跨身份有歧义时停止。
+ * [OUTPUT]: 项目/任务候选、项目归属与可判定的未读索引；项目选择先核对 ID/名称，再退回目录，名称兼容语音空格，完整路径严格区分大小写；字段未知或同级候选有歧义时停止。
  * [POS]: Codex 专属适配的发现层；这些本机持久化字段不是公共 API，升级后需重新核验。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -142,13 +142,32 @@ enum CodexCatalog {
     static func key(_ value: String) -> String {
         value.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
+    static func projectPath(_ value: String) -> String? {
+        let path = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if path.hasPrefix("/") { return path }
+        return path.hasPrefix("~/") ? (path as NSString).expandingTildeInPath : nil
+    }
     static func matchProjects(_ query: String, in projects: [Project]) -> [Project] {
-        let query = key(query)
-        let exact = projects.filter { project in
-            [project.id, project.name].contains { key($0) == query }
-                || project.paths.contains { key($0) == query || key(URL(fileURLWithPath: $0).lastPathComponent) == query }
+        let rawQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = key(rawQuery)
+        guard !query.isEmpty else { return [] }
+        let ids = projects.filter { key($0.id) == query }
+        if !ids.isEmpty { return ids }
+        if let path = projectPath(rawQuery) { return projects.filter { $0.paths.contains(path) } }
+        let names = projects.filter { key($0.name) == query }
+        if !names.isEmpty { return names }
+        // 语音常将 PocketDesk 转写成 Pocket Desk；准确名称仍先于目录附带命中。
+        let spokenName = projectNameKey(query)
+        let spokenNames = projects.filter { projectNameKey($0.name) == spokenName }
+        if !spokenNames.isEmpty { return spokenNames }
+        let directoryNames = projects.filter { project in
+            project.paths.contains { projectNameKey(URL(fileURLWithPath: $0).lastPathComponent) == spokenName }
         }
-        return exact.isEmpty ? projects.filter { key($0.name).contains(query) } : exact
+        if !directoryNames.isEmpty { return directoryNames }
+        return projects.filter { projectNameKey($0.name).contains(spokenName) }
+    }
+    private static func projectNameKey(_ value: String) -> String {
+        key(value).filter { !$0.isWhitespace }
     }
     static func matchChats(_ query: String?, projectId: String?, unreadOnly: Bool, in chats: [Chat]) throws -> [Chat] {
         var candidates = chats.filter { projectId == nil || $0.projectId == projectId }

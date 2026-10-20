@@ -1,13 +1,14 @@
 /**
- * [INPUT]: 消费首页 DOM、HTTP 配置/状态与逐图上传接口、浏览器文件读取/图片解码和本地存储；合规 JPEG 保留原始字节，其他图片经 Canvas 转换。
+ * [INPUT]: 消费首页 DOM、带配对鉴权的 HTTP 配置/状态与逐图上传接口、浏览器文件读取/图片解码和本地存储；合规 JPEG 保留原始字节，其他图片经 Canvas 转换。
  * [OUTPUT]: 提供原始完整球球图标、接收者常驻标识与服务端回执驱动的应用接续入口； 应用/小精灵共享当前正文，切换仅重建目标绑定并失效旧选择回执；提供配对鉴权、目标选择（显式点击委托输入层开启隔离的新草稿轮次）、小精灵活动任务启动找回、历史/快捷键，以及最多 8 张图片的原生多选追加、横向预览、逐张删除、批次幂等上传和处理完成门闩。
  *           快捷键按钮条对 action 为 draft.clear 的项走本地分支：调 window.pocketdeskClearDraft()，不投递按键；
  *           该全局缺失时如实报错，不做静默 no-op。唤醒回执按服务端聚焦核验结论分级提示
  *           （clickedInput/inputFocused：已点进输入框 / 请点一下输入框 / 未能确认聚焦），不再一律说"可开始输入"。
  *           心跳失败按原因分流（配对失效 / 手机离线 / 电脑端 HTTP 异常 / 页面脚本出错 / 真断链）：
  *           先琥珀色示警并 1.2 秒补拍，连续不通≥15 秒才升红并给出该原因的下一步，恢复时报出中断时长。
+ *           启动与心跳共享单个有界请求事务；首次失败也自动恢复完整初始化，超时及停止后的迟到回包不改状态；控制通道未认证时不显示已就绪。
  * [POS]: Web 首页编排与共享状态；输入委托 compose.js，控制连接委托 pad.js，全屏委托 screen.js。
- * [PROTOCOL]: boot() 对齐前台目标后主动 activateTarget 一次，使手机“默认选中”与实际桌面绑定就绪对齐（与手动点目标等价，不移动鼠标、不重置草稿）；变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
 const row = document.querySelector('#targets');
@@ -28,6 +29,11 @@ function refreshConnectionBadge() {
     connectionEl.classList.remove('ready', 'warn');
     return;
   }
+  if (!lastContactAt) {
+    connectionEl.textContent = '连接中';
+    connectionEl.classList.remove('ready', 'warn');
+    return;
+  }
   // 控制态由 WS 通道实时维护：viewer = 控制权已旁落，需先接管。
   const ctrl = typeof window.pocketdeskControlState === 'function' ? window.pocketdeskControlState() : 'ready';
   if (lastAccessibility === false) {
@@ -37,6 +43,12 @@ function refreshConnectionBadge() {
   }
   if (ctrl === 'viewer') {
     connectionEl.textContent = '需接管';
+    connectionEl.classList.remove('ready');
+    connectionEl.classList.add('warn');
+    return;
+  }
+  if (ctrl === 'connecting') {
+    connectionEl.textContent = '控制连接中';
     connectionEl.classList.remove('ready');
     connectionEl.classList.add('warn');
     return;
@@ -463,20 +475,45 @@ trackScrollCue(document.querySelector('#shortcut-bar'));
 
 const HEARTBEAT_MS = 5000;         // 正常节拍
 const HEARTBEAT_RETRY_MS = 1200;   // 失败后的补拍节拍：恢复要快，不让用户空等一个 5 秒周期
+const CONNECTION_TIMEOUT_MS = 4500; // 连响应体一起限时，不能依赖系统数分钟的 TCP 超时
 let heartbeat = 0;
 let heartbeatFailures = 0;  // 连续失败计数：≥2 判定断连，成功即清零
 let heartbeatRetry = 0;     // 失败后的补拍定时器（同时最多一个，不叠加）
 let lastContactAt = 0;      // 最近一次心跳成功的本地时刻：算中断时长，徽标显示"多久前"
+let firstContactAttemptAt = 0;
+let connectionFlight = null;
+let connectionGeneration = 0;
+let connectionAbort = null;
+let connectionInitialized = false;
+let connectionSubscribed = false;
 
 // 网络层的失败必须和页面自身的脚本错误分开。两者都会落进同一个 catch，
 // 但只有前者是"连接"问题；不分开的话，页面里任何一个 TypeError 都会被说成
 // "与电脑断开"，把人引到查 Wi-Fi 的方向上去。
-function taggedFetch(input, init) {
-  return fetch(input, init).catch(error => {
-    const wrapped = new Error((error && error.message) || '网络错误');
-    wrapped.isNetwork = true;
-    throw wrapped;
+async function connectionJSON(input, init) {
+  const controller = new AbortController();
+  let timer, abort;
+  const deadline = new Promise((_, reject) => {
+    abort = () => {
+      const error = new Error('电脑响应超时'); error.isNetwork = true;
+      reject(error); controller.abort();
+    };
+    timer = setTimeout(abort, CONNECTION_TIMEOUT_MS);
   });
+  connectionAbort = abort;
+  try {
+    return await Promise.race([deadline, (async () => {
+      const response = await fetch(input, { ...init, signal: controller.signal }).catch(error => {
+        const wrapped = new Error((error && error.message) || '网络错误');
+        wrapped.isNetwork = true; throw wrapped;
+      });
+      if (!response.ok) throw httpStatusError(response.status);
+      return response.json();
+    })()]);
+  } finally {
+    clearTimeout(timer);
+    if (connectionAbort === abort) connectionAbort = null;
+  }
 }
 
 function httpStatusError(status) {
@@ -511,7 +548,7 @@ function heartbeatAdvice(error) {
   // 心跳打不通但控制通道还活着 = 网络没断，是电脑端 HTTP 这一路卡住了。
   const control = typeof window.pocketdeskControlState === 'function' ? window.pocketdeskControlState() : 'connecting';
   if (control !== 'connecting') return '电脑端响应超时（控制通道仍在）';
-  return '手机可能不在同一 Wi-Fi，或电脑端已退出';
+  return '请确认手机和电脑连接同一 Wi-Fi；电脑换网后请重新扫码';
 }
 
 function scheduleHeartbeatRetry() {
@@ -528,22 +565,40 @@ function cancelHeartbeatRetry() {
 // 心跳 + 前台跟随（边沿触发）：前台命中 Dock 目标时选中态跟过去一次；
 // 前台是非目标应用（如 Finder）则进入伪目标态，发送直接注入当前前台。
 // 手动滑动 Dock、刚手动激活的短时间内不跟随，之后可自由手动切换。
-async function heartbeatTick() {
+function heartbeatTick() {
+  if (connectionFlight) return connectionFlight;
+  if (!firstContactAttemptAt) firstContactAttemptAt = Date.now();
+  const generation = connectionGeneration;
+  const flight = updateConnection(generation).finally(() => {
+    if (connectionFlight === flight) connectionFlight = null;
+  });
+  connectionFlight = flight;
+  return flight;
+}
+
+async function updateConnection(generation) {
   try {
-    const paired = await taggedFetch('/api/pair', { method: 'POST', keepalive: true,
-            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(window.pocketdeskDevice?.() || { userAgent: navigator.userAgent || '' }) });
-    if (!paired.ok) throw httpStatusError(paired.status);
-    const current = await taggedFetch('/api/status').then(response => response.json());
+    if (connectionInitialized) await pairConnection();
+    if (generation !== connectionGeneration) return;
+    const current = await connectionJSON('/api/status', { headers: authHeaders() });
+    if (generation !== connectionGeneration) return;
+    let preservedDraft = false;
+    if (!connectionInitialized) {
+      await pairConnection();
+      if (generation !== connectionGeneration) return;
+      preservedDraft = await initializeConnection(current, generation);
+    }
+    if (generation !== connectionGeneration) return;
     window.pocketdeskAccessibility = current.accessibility;
     // 连接恢复：无论此前断过几次，先把顶部状态拉回真实值；中断了多久一并说清，
     // 否则用户会觉得"刚才其实没断、是页面在瞎报"。
     if (heartbeatFailures > 0) {
-      const gap = lastContactAt ? Date.now() - lastContactAt : 0;
+      const gap = Date.now() - (lastContactAt || firstContactAttemptAt);
       heartbeatFailures = 0;
-      cancelHeartbeatRetry();
-      message(gap >= 10000 ? `已重新连接到电脑（中断 ${humanGap(gap)}）。` : '已重新连接到电脑。');
+      message(preservedDraft ? '已重新连接，草稿已保留，请先选择接收者。'
+        : gap >= 10000 ? `已重新连接到电脑（中断 ${humanGap(gap)}）。` : '已重新连接到电脑。');
     }
+    cancelHeartbeatRetry();
     lastContactAt = Date.now();
     httpDown = false;
     lastAccessibility = current.accessibility;
@@ -565,12 +620,13 @@ async function heartbeatTick() {
     followFrontmost(current);
 
   } catch (error) {
+    if (generation !== connectionGeneration) return;
     // 连续两拍失败才改口，避免单次抖动误报；顶部状态立即反映真实值，不挂假"已就绪"。
     // 分级：刚失败按琥珀色示警（"在重试"），持续不通超过 15 秒才升红并带上具体原因——
     // 一次 Wi-Fi 唤醒抖动不该吓人，但一直不通必须说清是哪一种不通。
     heartbeatFailures++;
-    const gap = lastContactAt ? Date.now() - lastContactAt : 0;
-    if (heartbeatFailures >= 2) {
+    const gap = Date.now() - (lastContactAt || firstContactAttemptAt);
+    if (heartbeatFailures >= 2 || !connectionInitialized) {
       httpDown = true;
       connectionEl.textContent = '未连接';
       connectionEl.classList.remove('ready', 'warn');
@@ -583,6 +639,12 @@ async function heartbeatTick() {
   }
 }
 
+function pairConnection() {
+  return connectionJSON('/api/pair', { method: 'POST', keepalive: true,
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(window.pocketdeskDevice?.() || { userAgent: navigator.userAgent || '' }) });
+}
+
 function startHeartbeat(interval = HEARTBEAT_MS) {
   clearInterval(heartbeat);
   heartbeat = setInterval(heartbeatTick, interval);
@@ -592,6 +654,9 @@ function stopHeartbeat() {
   clearInterval(heartbeat);
   heartbeat = 0;
   cancelHeartbeatRetry();
+  ++connectionGeneration;
+  connectionAbort?.();
+  connectionFlight = null;
 }
 
 // 系统层的网络事件是最准的一手信号，但只用它"提前补拍"，不跳过分级判定：
@@ -626,58 +691,56 @@ document.addEventListener('visibilitychange', () => {
   startHeartbeat();
 });
 
-async function boot() {
-  try {
-    const status = await fetch('/api/status').then(response => response.json());
-    window.pocketdeskAccessibility = status.accessibility;
-    targets = status.targets;
-    // 接收者顺序由控制台保存；读失败时退回「小精灵在前 + 应用原顺序」，不阻塞启动。
-    try {
-      const recipients = await fetch('/api/recipients', { headers: authHeaders() }).then(response => response.json());
-      recipientOrder = Array.isArray(recipients.order) ? recipients.order : [];
-    } catch { recipientOrder = []; }
-    syncShortcuts(status.shortcuts || []);
-    renderTargets();
-    applyTheme(status.theme);
-    httpDown = false;
-    lastContactAt = Date.now();
-    lastAccessibility = status.accessibility;
-    refreshConnectionBadge();
-    if (!status.accessibility) message('请先在电脑端控制台完成授权，页面仍可输入。', true);
-    // 启动默认跟随真实前台；只确定接收者，不激活或移动电脑上的焦点。
-    applyFrontmost(status);
-    startHeartbeat();
-    // 控制租约走 WS 通道：服务端易主时下行 control/auth_ok，此时立即刷新徽标，
-    // 不要等到下一拍（≤5s）HTTP 心跳才发现「已就绪」是假的。
-    if (typeof window.pocketdeskOnWSMessage === 'function') {
-      window.pocketdeskOnWSMessage(message => {
-        if (message && (message.t === 'control' || message.t === 'auth_ok')) refreshConnectionBadge();
-      });
-    }
-    // 浏览器恢复的正文可能早于目标就绪；就绪后补齐，不等下一次手敲。
-    // 小精灵正文只在手机上，发送前不进 /api/live-input（方案 §5），所以这里不能同步。
-    if (textEl.value && selected !== SPRITE_ID) scheduleLive();
-    // 小精灵面板：任务卡与当前网页绑定都由它自己渲染，失败不影响主流程。
-    try {
-      window.pocketdeskAgentPanel?.init();
-      await window.pocketdeskAgent?.recoverActive();
-      window.pocketdeskAgent?.fetchPage();
-    } catch { /* 面板缺失只影响小精灵，不拖垮首页 */ }
-    // 安全连接地址（含正确主机，无 token）：供设置面板在开启甩送时升级到 HTTPS 触发证书信任。
-    window.pocketdeskSecureURL = status.secureURL || '';
-    // 若刚才是从 HTTP 升级到安全连接过来的，恢复升级前留在输入框的正文。
-    const preSecureDraft = localStorage.getItem('pd-draft-pre-secure');
-    if (preSecureDraft) {
-      try {
-        localStorage.removeItem('pd-draft-pre-secure');
-        if (textEl) { textEl.value = preSecureDraft; scheduleLive(); }
-      } catch { /* 存储异常忽略 */ }
-    }
-  } catch {
-    httpDown = true;
-    connectionEl.textContent = '未连接';
-    message('无法连接本机服务。确认手机与 Mac 在同一网络。', true);
+function boot() {
+  startHeartbeat();
+  if (!connectionSubscribed && typeof window.pocketdeskOnWSMessage === 'function') {
+    connectionSubscribed = true;
+    window.pocketdeskOnWSMessage(event => {
+      if (event && ['control', 'auth_ok', 'closed'].includes(event.t)) refreshConnectionBadge();
+    });
   }
+  return heartbeatTick();
+}
+
+async function initializeConnection(status, generation) {
+  // 接收者顺序由控制台保存；读失败时退回「小精灵在前 + 应用原顺序」，不阻塞启动。
+  let order = [];
+  try {
+    const recipients = await connectionJSON('/api/recipients', { headers: authHeaders() });
+    order = Array.isArray(recipients.order) ? recipients.order : [];
+  } catch { /* 次要配置失败不阻止工作台恢复。 */ }
+  if (generation !== connectionGeneration) return;
+  recipientOrder = order;
+  targets = status.targets || [];
+  syncShortcuts(status.shortcuts || []);
+  renderTargets();
+  applyTheme(status.theme);
+  if (!status.accessibility) message('请先在电脑端控制台完成授权，页面仍可输入。', true);
+  // 首次失败期间新写的草稿尚未确认接收者，恢复网络不能替用户把它送进此刻的电脑前台。
+  const preservedDraft = heartbeatFailures > 0 && hasRecipientDraft();
+  if (preservedDraft) markSelected();
+  else applyFrontmost(status);
+  connectionInitialized = true;
+  // 浏览器恢复的正文可能早于目标就绪；就绪后补齐，不等下一次手敲。
+  // 小精灵正文只在手机上，发送前不进 /api/live-input（方案 §5），所以这里不能同步。
+  if (!preservedDraft && textEl.value && selected !== SPRITE_ID) scheduleLive();
+  // 小精灵面板：任务卡与当前网页绑定都由它自己渲染，失败不影响主流程。
+  try {
+    window.pocketdeskAgentPanel?.init();
+    Promise.resolve(window.pocketdeskAgent?.recoverActive())
+      .then(() => window.pocketdeskAgent?.fetchPage()).catch(() => {});
+  } catch { /* 面板缺失只影响小精灵，不拖垮首页 */ }
+  // 安全连接地址（含正确主机，无 token）：供设置面板在开启甩送时升级到 HTTPS 触发证书信任。
+  window.pocketdeskSecureURL = status.secureURL || '';
+  // 若刚才是从 HTTP 升级到安全连接过来的，恢复升级前留在输入框的正文。
+  const preSecureDraft = localStorage.getItem('pd-draft-pre-secure');
+  if (!preservedDraft && preSecureDraft) {
+    try {
+      localStorage.removeItem('pd-draft-pre-secure');
+      if (textEl) { textEl.value = preSecureDraft; scheduleLive(); }
+    } catch { /* 存储异常忽略 */ }
+  }
+  return preservedDraft;
 }
 
 /* ---------- 主题跟随：唯一控制点在电脑端控制台，手机页经 /api/status 只读跟随 ---------- */

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: WorkBuddy/ZCode 项目动作协议、原生选择器与共享应用/输入执行器。
- * [OUTPUT]: 实时项目候选、空白新任务或指定项目派单回执。
+ * [OUTPUT]: 实时本地工作空间候选、已核验选中项目的空白新任务或指定项目派单回执；只打开回执不冒充发送。
  * [POS]: C 的原生项目能力入口；共用 FIFO、租约与原子派单记录，不改变应用权限/模型。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -42,8 +42,11 @@ enum AgentWorkspaceAdapter {
                                 }
                             }
                         } else {
-                            let name = request.project.map { " · " + $0 } ?? ""
-                            finish(.opened("已打开 " + target.name + name + " 的空白新任务页，输入框已就绪。"))
+                            if let project = request.project {
+                                finish(.opened("已打开 " + target.name + " 的 " + project + " 工作空间，输入框已就绪。"))
+                            } else {
+                                finish(.opened("已打开 " + target.name + " 的空白新任务页，输入框已就绪。"))
+                            }
                         }
                     }
                 }

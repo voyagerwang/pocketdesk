@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 NWConnection 已建立路径的远端地址。
- * [OUTPUT]: 提供 isLocalPeer，供控制/画面连接保持本机调试豁免，非回环仍需 token。
- * [POS]: Sources 的网络地址判定，不接受客户端自报主机名。
+ * [OUTPUT]: 提供纯连接地址判定 isLocalPeer；不能据此豁免配对凭证或授予控制/画面权限。
+ * [POS]: Sources 的网络地址辅助函数；浏览器请求信任由 HTTPRequestSecurity 独立校验。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import Network

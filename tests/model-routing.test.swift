@@ -1,7 +1,7 @@
 /**
- * [INPUT]: ModelConfigStore、AgentHTTP 与 TaskService；配置写临时目录，模型探针注入替身。
- * [OUTPUT]: 验证旧单条只读迁移、多服务商逐条保存与显式切换、移除/旧清空不猜后端、按 ID 和同源隔离密钥且拒绝请求前零联网；保留 Codex 独立、回环边界、探针闭环与活动来源报告。
- * [POS]: tests 的模型服务商与 HTTP 配置集成回归；不请求真实模型、不打开应用、不读取生产配置或任务正文。
+ * [INPUT]: ModelConfigStore、AgentHTTP、TaskService、AgentRunner 与 TaskUsage；配置/任务写临时目录，模型和打开动作均注入替身。
+ * [OUTPUT]: 验证旧单条只读迁移、多服务商逐条保存与显式切换、移除/旧清空不猜后端、按 ID 和同源隔离密钥且拒绝请求前零联网；保留 Codex 独立、回环边界、探针闭环与来源计量回归。
+ * [POS]: tests 的模型后端与计量集成回归；不请求真实模型、不打开应用、不读取生产配置或任务正文。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import Foundation
@@ -16,6 +16,7 @@ import Foundation
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pd-model-routing-" + UUID().uuidString)
         let originalFile = ModelConfigStore.file
         ModelConfigStore.file = directory.appendingPathComponent("model.json")
+        TaskStore.resetCache(directory: directory.appendingPathComponent("tasks"))
         defer {
             ModelConfigStore.file = originalFile
             try? FileManager.default.removeItem(at: directory)
@@ -210,6 +211,43 @@ import Foundation
         }
         AgentHTTP.probeModel = ModelClient.send
 
+        // --- 同一执行循环的计量 ---
+        AgentRunner.canControl = { _ in true }
+        AgentRunner.isCodexApp = { _ in false }
+        AgentRunner.openPage = { _ in .success(()) }
+        func run(_ responses: [Result<ModelTurn, ModelFailure>]) throws -> AgentRunner.Outcome {
+            var index = 0
+            AgentRunner.sendModel = { _, _, _, _, done in
+                precondition(index < responses.count)
+                let response = responses[index]; index += 1; done(response)
+            }
+            var task = try TaskStore.claim(subject: "model-routing-test", requestId: UUID().uuidString,
+                                           text: "帮我处理这项测试工作", context: nil)
+            task.status = .running
+            try TaskStore.save(task)
+            var result: AgentRunner.Outcome?
+            AgentRunner.run(config: ModelConfig(backend: .codex), task: task) { result = $0 }
+            precondition(result != nil && index == responses.count)
+            return result!
+        }
+        let usage: [String: Any] = ["prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10,
+                                    "provider": "codex", "model": "gpt-6-luna"]
+        let answer = ModelTurn(content: "已完成测试。", rawMessage: ["role": "assistant", "content": "已完成测试。"], usage: usage)
+        let first = try run([.success(answer)])
+        check(!first.usage.unknown && first.usage.totalTokens == 10, "首轮不能被未知起点吞掉")
+        check(first.usage.provider == "codex" && first.usage.model == "gpt-6-luna", "保留额度来源")
+        let calls: [[String: Any]] = [["id": "test-call", "type": "function", "function": ["name": "open_page", "arguments": "{\"url\":\"https://example.test\"}"]]]
+        let planned = ModelTurn(toolCalls: calls, rawMessage: ["role": "assistant", "tool_calls": calls], usage: usage)
+        let second = try run([.success(planned), .success(answer)])
+        check(!second.usage.unknown && second.usage.totalTokens == 20, "多轮准确累计")
+        let missing = try run([.success(planned), .success(ModelTurn(content: "结果", rawMessage: ["role": "assistant", "content": "结果"]))])
+        check(missing.usage.unknown, "缺失任一轮用量就不能声称完整")
+        check(missing.usage.provider == "codex" && missing.usage.model == "gpt-6-luna", "未知计量仍保留实际后端")
+        let failed = try run([.success(planned), .failure(ModelFailure(httpStatus: nil, message: "模拟超时"))])
+        check(failed.usage.unknown && failed.usage.totalTokens == nil, "传输失败不拿部分计量冒充账单")
+        check(failed.usage.provider == "codex", "失败仍能识别当前后端")
+        let legacyUsage = try JSONDecoder().decode(TaskUsage.self, from: Data("{\"promptTokens\":1,\"completionTokens\":2,\"totalTokens\":3,\"unknown\":false}".utf8))
+        check(legacyUsage.provider == nil && legacyUsage.model == nil, "旧用量记录不猜归属")
         print("model routing: \(checks) 项通过")
     }
 }

@@ -4,7 +4,26 @@
 ChromeBookmarks.swift：实时读取 Chrome Default/Profile 配置文件书签树，保留名称、文件夹路径、地址和配置文件唯一 ID；search_bookmarks 按需检索，open_bookmark 重新核对 ID 后在 Chrome 打开 http/https/file 地址，打开回执依据 NSWorkspace 回调，不声称网页已加载。
 > L2 | 父级: ../CLAUDE.md
 
+HeadsetAudio.swift: CoreAudio输出设备/音量读写和原生变化通知适配；监听按代际回主线程，供设备设置与音量手势共用，不负责语音动作。
+
+HeadsetVoiceFocus.swift: 普通耳机语音的有界输入框准备；应用归属转发 InputFocus 共享证据，原窗口与唯一普通编辑器单独核验；冷树准备、候选完整性和迟到回调隔离后才允许调用方发送Option，不记录正文、不新建或导航。
+
 成员清单
+
+MijiaSensorQuery.swift: 完整环境读数单句免模型直达受控Gateway；复合/补充/页面请求回原循环，标准数值与来源生成一句话回执，云端历史不冒充当前完成；任务保留真实只读调用历史供恢复。
+
+ServerHTTPTransport.swift: HTTP连接接收、有界分帧、头部/查询解析与统一安全响应；Server保留业务路由和授权，传输不执行设备动作。
+
+HTTPRequestSecurity.swift: HTTP 路由前的纯来源与分帧策略；精确本机 Host、同源 Origin、Fetch Metadata、本机 JSON 豁免与长度/图标 ID 校验，不以回环地址单独授予权限。
+
+MijiaHomeScope.swift: 账号摘要绑定的单家庭持久范围；控制台从真实家庭清单选择，未选/损坏/换账号拒绝设备访问；准备后复核选择版本，实际调用、范围保存与账号替换共用互斥锁，配置只含摘要和家庭信息。
+MijiaConnection.swift: 电脑控制台扫码状态机，账号提交复用范围锁避免与旧账号设备执行并行；依赖检查/安装、短期二维码、取消与代际隔离由串行队列协调，暂存授权经真实账号核验后原子替换正式凭证，失效或迟到会话不覆盖现有连接。
+MijiaLoginProcess.swift: 可取消限时子进程；固定 argv、逐行有界 NDJSON、隐藏 stderr，退出排空事件且不被后代持有管道阻塞，不解释账号数据。
+MijiaHTTP.swift: 本机同源米家 status/connect/check/cancel/qr 与异步 homes/home 协议；复用 Server 的控制台访问边界，状态不含登录链接或凭证，二维码按会话校验并禁止缓存。
+MijiaBridge.swift: 米家隔离进程协议；以固定 Python/脚本/auth argv 与 stdin JSON 调用用户独立安装的 SDK，持续排空有界输出并限时终止，支持显式暂存授权核验，不把 stderr 或凭证回传模型。
+MijiaGateway.swift: 小精灵米家业务入口；仅向模型提供已适配灯/开关属性及只读温湿度查询，通用动作/场景在Swift拒绝，Python标准规格白名单最终授权；transportGuidance统一系统与工具的云端能力说明，手机蓝牙直连不等于云端可达，未知设备不推断缺网关；status 披露范围就绪状态，其余请求强制已保存家庭；未知名称先完整发现，云端在线标记不替代控制回执，灯与开关映射不明须澄清；执行前复核范围票据，旧版未绑定账号的任务台账保守拒绝重放，场景不执行；允许目标经原始标准规格校验、控制租约复核与 TaskStore 原子占用，确认回执可续轮，歧义/登录缺失/未知写入立即收尾，未知结果不重放。
+
+AgentQuickOpen.swift: 单句打开的保守候选识别与 AgentRunner 本机执行分支；有限“好，/好的，/嗯，”前缀不改变目标名，初次无页面/历史任务的明确 http(s) 地址、准确应用、唯一准确书签免模型往返；无当前目标时复用 TaskStore 同主体近30天准确名称的唯一历史地址，仅采纳首次成功任务、显式 completesTask 与调用ID配对的本机回执，拒绝查询/片段地址、冲突、外发/读页与复合/补充记录；当前书签歧义不由历史覆盖。未知/项目/复合/补充回模型，执行前核验原控制租约。
 
 ExecutionTrace.swift: 可观测性层——ExecutionOutcome（delivered 已观察到生效 / sent 已发出无法确认 / blocked 前置条件不满足 / failed 执行出错）与 ExecutionFeedback 回执、ExecutionRecord 与 ExecutionLog（NSLock 守护的进程内环形缓冲，最近 40 条），EnvironmentGate（辅助功能与会话状态门禁；本机验证使用 CGSSessionScreenIsLocked，锁屏或未知会话拒绝普通输入）。InputExecutor 与 Server 共写日志，/api/status 下发最近 30 条给控制台第 5 面板「最近动作」展示；写入与消费同进程但加锁，日志面板只读不重。
 ScreenCapture.swift: 按需显示器枚举与单帧 JPEG，用于 PiP 和持续画面失败后的降级，默认包含鼠标。
@@ -12,34 +31,36 @@ Models.swift: 传输与配置的值类型词汇表——SendCommand/PendingImage
 ImageBatchStore.swift: 图片批次资源层；按 batchId/imageId 幂等暂存，统一执行完整性与解码校验、15 分钟过期及 8 张/40MB 批次、80MB 总量边界，提交成功后消费。
 ImagePastePolicy.swift: 文字/图片剪贴板粘贴时序策略；UU 文字在 Cmd+V 前等待 1.2s 完成本机读取与远端同步、按键后等待 200ms 供目标输入框消费，Chrome 多图采用更保守节奏；画布类目标（白板等无输入框页面）多图退化为方向键分离节奏（右6下4、逐键 30ms），让白板把每次粘贴错开不重叠；策略无桌面副作用并由隔离测试固定边界。
 ShortcutActions.swift: 预设动作库（纯数据无副作用）——Platform（按键投递目标平台，`current` 现为 macOS）与 ShortcutAction（system.lock / app.quit / window.close / app.hide / app.switch：语义 id ↔ 各平台按键串 ↔ 中文名）。这些组合按下即被浏览器或系统消费（Cmd+Q 会退出浏览器、Cmd+Ctrl+Q 真的锁屏），捕获器拿不到 keydown，所以只能点选添加、不能录制；产出的按键串仍交给 Models 的 ShortcutKeys 解析，不另起炉灶。InputExecutor 触发时查表展开，Server 在 /api/shortcuts 校验并在 /api/status 下发可选列表给控制台。`draft.clear`（「清空会话」）是**手机本地动作**：`hotkey` 为空串，`delivery` 为 `.deviceLocal`，由手机执行、服务端只配合电脑侧清空；误发到 /api/shortcut-trigger 会被明确拒绝（blocked），绝不退化成"注入一个空串快捷键"。
-TargetStore.swift: 目标应用、快捷键与主题三份配置的持久化层，~/Library/Application Support/VoiceDeck 下的 targets.json/shortcuts.json/theme 读写，含 appURL 定位、自定义图标路径与孤儿图标清理；快捷键加载双轨：新格式（hotkey 语义串）读后经 ShortcutKeys.canonicalize 归一并按需回写（清洗 Enter 等别名残留），旧格式（modifiers+keycode）经 legacyHotkey 翻译后回写完成迁移；Server 与 InputExecutor 共用。save 对只有 path 没有 bundleID 的目标按路径反查回填——前台判定/激活定位对 bundleID 的依赖远多于路径，路径一变身份就失配（控制台"添加应用"的历史遗留，/api/apps 结果现随应用带 bundleID，老数据靠每次保存自愈）。主题是产品级外观决策，唯一写入点在电脑端控制台（POST /api/theme），手机页只读跟随。
+TargetStore.swift: 目标应用、快捷键与主题三份配置的持久化层，~/Library/Application Support/VoiceDeck 下的 targets.json/shortcuts.json/theme 读写，含 appURL 定位、自定义图标路径与孤儿图标清理；快捷键加载双轨：新格式（hotkey 语义串）读后经 ShortcutKeys.canonicalize 归一并按需回写（清洗 Enter 等别名残留），旧格式（modifiers+keycode）经 legacyHotkey 翻译后回写完成迁移；Server 与 InputExecutor 共用。save 对只有 path 没有 bundleID 的目标按路径反查回填——前台判定/激活定位对 bundleID 的依赖远多于路径，路径一变身份就失配（控制台"添加应用"的历史遗留，/api/apps 结果现随应用带 bundleID，老数据靠每次保存自愈）。主题是产品级外观决策，唯一写入点在电脑端控制台（POST /api/theme），保存后发布 themeDidChange，手机页与耳机原生窗口只读跟随。
 AppDiscovery.swift: 无状态的应用发现层，扫描 /Applications 等目录做名称/路径搜索（结果随应用带 bundleID，控制台建目标时才能写入完整身份），并为新增目标生成安全 slug；/api/apps 搜索与 /api/targets id 补齐依赖它。扫描覆盖两种安装形态：根目录下平铺的 `.app`，以及 `X.localized/` 包装目录内藏的 `.app`（钉钉即 DingTalk.localized/DingTalk.app）——后者取**包装目录**的 displayName 作为显示名，复用 macOS 的目录名本地化机制（中文系统下得"钉钉"而非 "DingTalk"），不维护自己的中英别名表。
-Util.swift: 无状态渲染工具层——主局域网 IP、macOS utun 上的 Tailscale 100.64.0.0/10 地址探测、稳定 .local 主机名、QR PNG、应用图标 PNG 提取；Server 的地址与图标端点调用它。此外承载**前台应用探测**：用 CGWindowList（optionOnScreenOnly，layer 0 的首个有主窗口即用户眼前的应用）；不用 NSWorkspace.frontmostApplication（常驻无窗口进程里其缓存会冻结）。注意分工：这里回答的是"用户看到哪个窗口在最上"（z 序，界面展示用）；**打字落点/激活核验要看键盘焦点归属**（InputFocus.focusedApplicationPID，系统级 kAXFocusedApplicationAttribute）——后台 agent 激活 Electron 应用常见"窗口抬到最上、活跃应用还是别人"的半激活态（实测飞书），两套真值在那一刻分叉，frontmostMatches/preferredFrontApp/InputBinding 均按焦点判、层序只作回退。pid → 应用对象一律从 NSWorkspace.runningApplications 里取同一 pid 的项，现造的 NSRunningApplication(processIdentifier:) 其 bundleIdentifier/bundleURL 常为 nil，一 nil 就匹配不上任何 Dock 目标。
-Auth.swift: 鉴权层——配对 token 的首次生成（SecRandomCopyBytes 32 字节 base64url）、持久化到 Application Support/VoiceDeck/token、写请求 Bearer 校验与 WS 首帧校验（恒定时间比较）；Server 与 WSServer 共用。
-InputExecutor.swift: 串行键盘执行与草稿快照事务；受支持空白纯文本框直接替换，通用应用用选区实时替换，UU 特殊通道才暂存；图文共用提交、近期草稿 ID 去重，Chrome 多图逐张等待网页消费，并在相邻图片间点击经当前页面核验的鼠标锚点；绑定无编辑元素（白板/画布）时锚点预检退化为纯粘贴序列、用方向键分离相邻图片，绑定失败且带图片时按 establishRelaxed 兜底；应用切回后的显式重试按当前焦点重绑，沿用暂停前已实时输入正文而不重复注入。焦点查找与诊断委托 InputFocus。草稿写入/提交/图片粘贴/快捷键整体包在 `InputActivity` 事务里（见 InputActivity.swift）。`mirror` 的失败类型是 `LiveInputFailure`（带 `state`），另有一条**只读分支**：`command.probe == true` 时只走 `probeDraft`，回答"现在能不能续接"，一个字符都不写。`activateTarget` 的结果从 Void 改为 `ActivateOutcome`（pid + 说明），供 Server 在激活成功后做鼠标定位；目标窗口在副屏时报告成功并附说明，不再误判为激活失败。写入落地后调用 `recordConfirmed` 推进绑定基线——恢复时"电脑内容 == 最后确认状态"就靠它。**清空分支**（`command.clear == true`）必须排在 `retry`/`recover` **之前**：冻结态的 recover 要核对原基线，而清空恰恰发生在基线已分叉时，排后面就被"还不能核对原输入框"挡掉——那正是用户看到的"清空之后不能再次输入"死循环。清空**重新捕获当前焦点控件**再删（旧元素在 Electron 重建编辑器后已失效，对着它读回永远对不上），删净后重建写入器，让这一轮后续插入以"空框 @ 光标 0"为起点。**文档类目标只清手机侧**：`documentLikeApps`（TextEdit/Pages/Notes/Word/WPS/飞书 `com.electron.lark`）一律不动电脑——飞书把文档与消息放在同一进程，从进程身份分不出当前是哪一种，宁可清不干净也不赌；原生文档编辑器另用"焦点元素→窗口→AXDocument→文件 URL"这条证据兜住；**认不出应用身份（bundleIdentifier 为 nil）时同样不动电脑**。清空的结论如实回执：动了电脑写 `delivered`，只清手机写 `buffered` 并附原因。**前台判定与激活核验按键盘焦点归属**（InputFocus.focusedApplicationPID），窗口层序只作回退：后台 agent 激活 Electron 应用常见"窗口抬到最上、活跃应用还是别人"的半激活态（实测飞书）——按层序判会假通过（字进别的应用）或下拍误报"目标不在前台"；frontmostMatches/preferredFrontApp（applyDraft 与 InputBinding 的绑定进程用）均以焦点 pid 为准。verifyActivation 轮询期内每两拍补发一次 `activate`，对付"激活只抬窗口不落焦点"，不再干等 3.5s 后失败。
-PointerExecutor.swift: 指针执行层，move/drag/click/scroll/zoom/tap 与 pointer 绝对手势到 CGEvent 的映射；仅被 WSServer 消费，另由 Server 通过注入的 `pointerExecutor` 调用**定位**与**聚焦点击**。维护的是**命令期望值** expected，与 CursorMonitor 的**观测值**严格分离、互不写入。三条真实性约束（都是踩过的坑）：① 相对移动的起点用 basePosition()——系统真值与期望值差 <2px 就用期望值，**否则拖动会被 CGEvent 注入的滞后读数每帧往回拽**；差得远说明实体鼠标动过，改以真值为基准，避免跳回旧缓存；② 钳制用有效显示器矩形集合而非所有屏的外接矩形（L 形排列时外接矩形含无屏空洞，光标会停在不存在的区域），越界投影到最近有效边缘，上界取 maxX-1/maxY-1（maxX 是外沿不是可用像素）；③ 显示器 ID 失效/已拔掉时**拒绝执行并 onError 上报**，绝不静默回退主屏——那会把这次点击送到完全错误的应用上。另有**只移动**的光标定位 `locate(to:generation:anchor:)`（不点击、不改选区、不夺焦点）：在**同一条串行队列**里依次核验锁屏、拖动、代际（只有不早于已执行最大代际的选择生效，防止 A/B 快切时 A 的迟到回执把光标拉走）与用户活动（执行时鼠标与请求发起的 anchor 偏离 >3px 即放弃——不能等用户手势结束再突然挪走），通过后才注入并同步更新 expected；结果区分 moved/unchanged/skipped(原因)。`click(at:completion:)`：先移到该点、按下/抬起间隔 40ms 的单次单击（与 `tap` 分支同款时序，专门把焦点落到 Electron/WebKit 输入框），带可选 completion 供调用方在点击落地后做焦点核验；锁屏或拖动中 completion 收 false。由 Server 在手动选中后经 `focusAndVerify` 调用。
-Server.swift: HTTP :46387 / HTTPS :46487 共用路由，专用解锁强制 TLS、配对和控制租约；，全部端点路由与静态页面服务（含 console-main.js 主业务入口）；/api/screen/* 读写均鉴权、全局单次采集限流，异步读取不阻塞输入，向控制台暴露局域网及 Tailscale 私网地址并生成带配对 token 的二维码；只翻译协议不做系统调用，写操作委托 InputExecutor；/api/status 下发 targets 含 per-app shortcuts/openPanel、/api/targets 保存时对专属快捷键做 resolve 校验 + id 去重、openPanel 白名单清洗；与 WSServer 平行。跨弹窗恢复：/api/live-input 的 `probe:true` 走只读分支，失败回执带 `state`（interrupted / needs-user-focus / committed）。应用选择定位：/api/activate 解析 `locate`/`generation`，**仅在非回环来源且通过 controlAuthorized 时才允许定位**（只凭配对 token 不够：旧客户端或另一台持有同一 token 的手机都不该能挪动光标），否则 409；激活成功后由 `performLocate` 编排 TargetWindowLocator + PointerGeometry + PointerExecutor，激活结果与鼠标结果**分开回报**（`locate: moved/unchanged/skipped` + `locateReason`）。`performLocate` 拆成两步职责：**移动**（光标已在目标窗口内时跳过）与**聚焦输入框**（`focusAndVerify`，只要定位意图在就执行，绝不因光标已就位而短路——窗口铺满主屏的应用鼠标几乎总在窗口矩形里，旧版在这里整条跳过聚焦点击，正是"唤醒了但输入框没激活"且时好时坏的来源）。`focusAndVerify` 三段有界闭环：①找点——AX 优先，Electron 刚激活树未建成时经 `InputFocus.focusedElement` 触发 AXManualAccessibility 并轮询后重试一次，仍无才用启发式落点（窗口底部中央）；②点击——`pointer.click(at:completion:)` 真实单击落焦点；③核验——`InputFocus.probeFocus` 确认焦点真是可输入控件，unknown 时再触发一次 AXManualAccessibility 重探，notEditable 且第一击是 AX 点时换启发式点补一击。回执带 `clickedInput`/`inputMethod`（ax/heuristic/none）与 `inputFocused`（yes/no/unknown）+ `inputNote` 人话原因，结论同时写 ExecutionLog（kind=focus），控制台"最近动作"可见；等激活期间用户动过鼠标（anchor 偏离 >3px）不补点击。**路由扩张纪律**：新端点按职责落进各自的路由文件（`/api/v1` 的本机管理端点在 AgentHTTP），本文件只保留一行委托；静态资源白名单新增文件必须同时登记，否则浏览器拿 404。
+Util.swift: 无状态渲染工具层——主局域网 IP、macOS utun 上的 Tailscale 100.64.0.0/10 地址探测、稳定 .local 主机名、QR PNG、应用图标 PNG 提取；Server 的地址与图标端点调用它。此外承载**前台应用探测**：用 CGWindowList（optionOnScreenOnly，layer 0 的首个有主窗口即用户眼前的应用）；不用 NSWorkspace.frontmostApplication（常驻无窗口进程里其缓存会冻结）。注意分工：这里回答的是"用户看到哪个窗口在最上"（z 序，界面展示用）；**打字落点/激活核验要看键盘焦点归属**（InputFocus.focusedApplicationPID，系统级 kAXFocusedApplicationAttribute）——后台 agent 激活 Electron 应用常见"窗口抬到最上、活跃应用还是别人"的半激活态（实测飞书），两套真值在那一刻分叉，frontmostMatches/preferredFrontApp/InputBinding 统一使用共享键盘归属，窗口层序仅供展示，未知或冲突不授权输入。pid → 应用对象一律从 NSWorkspace.runningApplications 里取同一 pid 的项，现造的 NSRunningApplication(processIdentifier:) 其 bundleIdentifier/bundleURL 常为 nil，一 nil 就匹配不上任何 Dock 目标。
+Auth.swift: 配对凭证边界；以无跟随链接的描述符保留原值并收紧目录0700/文件0600，首次随机生成和原子独占发布，异常存储拒绝鉴权；HTTP/控制/画面共用恒定时间校验，回环不能替代WS令牌。
+InputExecutor.swift: 串行键盘执行与草稿快照事务；受支持空白纯文本框直接替换，通用应用用选区实时替换，UU 特殊通道才暂存；图文共用提交、近期草稿 ID 去重，Chrome 多图逐张等待网页消费，并在相邻图片间点击经当前页面核验的鼠标锚点；绑定无编辑元素（白板/画布）时锚点预检退化为纯粘贴序列、用方向键分离相邻图片，绑定失败且带图片时按 establishRelaxed 兜底；应用切回后的显式重试按当前焦点重绑，沿用暂停前已实时输入正文而不重复注入。焦点查找与诊断委托 InputFocus。草稿写入/提交/图片粘贴/快捷键整体包在 `InputActivity` 事务里（见 InputActivity.swift）。`mirror` 的失败类型是 `LiveInputFailure`（带 `state`），另有一条**只读分支**：`command.probe == true` 时只走 `probeDraft`，回答"现在能不能续接"，一个字符都不写。`activateTarget` 的结果从 Void 改为 `ActivateOutcome`（pid + 说明），供 Server 在激活成功后做鼠标定位；目标窗口在副屏时报告成功并附说明，不再误判为激活失败。写入落地后调用 `recordConfirmed` 推进绑定基线——恢复时"电脑内容 == 最后确认状态"就靠它。**清空分支**（`command.clear == true`）必须排在 `retry`/`recover` **之前**：冻结态的 recover 要核对原基线，而清空恰恰发生在基线已分叉时，排后面就被"还不能核对原输入框"挡掉——那正是用户看到的"清空之后不能再次输入"死循环。清空**重新捕获当前焦点控件**再删（旧元素在 Electron 重建编辑器后已失效，对着它读回永远对不上），删净后重建写入器，让这一轮后续插入以"空框 @ 光标 0"为起点。**文档类目标只清手机侧**：`documentLikeApps`（TextEdit/Pages/Notes/Word/WPS/飞书 `com.electron.lark`）一律不动电脑——飞书把文档与消息放在同一进程，从进程身份分不出当前是哪一种，宁可清不干净也不赌；原生文档编辑器另用"焦点元素→窗口→AXDocument→文件 URL"这条证据兜住；**认不出应用身份（bundleIdentifier 为 nil）时同样不动电脑**。清空的结论如实回执：动了电脑写 `delivered`，只清手机写 `buffered` 并附原因。**前台判定与激活核验按键盘焦点归属**（InputFocus.focusedApplicationPID），窗口层序不授权输入，缺值由共享应用归属交叉核验：后台 agent 激活 Electron 应用常见"窗口抬到最上、活跃应用还是别人"的半激活态（实测飞书）——按层序判会假通过（字进别的应用）或下拍误报"目标不在前台"；frontmostMatches/preferredFrontApp（applyDraft 与 InputBinding 的绑定进程用）均以焦点 pid 为准。verifyActivation 轮询期内每两拍补发一次 `activate`，对付"激活只抬窗口不落焦点"，不再干等 3.5s 后失败。
+PointerExecutor.swift: 指针执行层，move/drag/click/scroll/zoom/tap 与 pointer 绝对手势到 CGEvent 的映射；仅被 WSServer 消费，另由 Server 通过注入的 `pointerExecutor` 调用**定位**与**聚焦点击**。维护的是**命令期望值** expected，与 CursorMonitor 的**观测值**严格分离、互不写入。三条真实性约束（都是踩过的坑）：① 相对移动的起点用 basePosition()——系统真值与期望值差 <2px 就用期望值，**否则拖动会被 CGEvent 注入的滞后读数每帧往回拽**；差得远说明实体鼠标动过，改以真值为基准，避免跳回旧缓存；② 钳制用有效显示器矩形集合而非所有屏的外接矩形（L 形排列时外接矩形含无屏空洞，光标会停在不存在的区域），越界投影到最近有效边缘，上界取 maxX-1/maxY-1（maxX 是外沿不是可用像素）；③ 显示器 ID 失效/已拔掉时**拒绝执行并 onError 上报**，绝不静默回退主屏——那会把这次点击送到完全错误的应用上。另有**只移动**的光标定位 `locate(to:generation:anchor:)`（不点击、不改选区、不夺焦点）：在**同一条串行队列**里依次核验锁屏、拖动、代际（只有不早于已执行最大代际的选择生效，防止 A/B 快切时 A 的迟到回执把光标拉走）与用户活动（执行时鼠标与请求发起的 anchor 偏离 >3px 即放弃——不能等用户手势结束再突然挪走），通过后才注入并同步更新 expected；结果区分 moved/unchanged/skipped(原因)。`click(at:completion:)` 默认左键聚焦，受控重载可明确右键打开原生菜单；两者共用队列内授权、锁屏与拖动门禁，按下/抬起间隔40ms，已按下的按钮即使取消仍成对释放。可选 completion 只证明事件已发出，调用方继续核验目标窗口与焦点；由 Server 的 `focusAndVerify` 及 Agent 原生导航消费。
+Server.swift: 全局执行HTTPRequestSecurity来源/分帧边界，手机状态读取需Bearer，二维码限可信本机并禁止跨站嵌入，图标ID不可越目录；HTTP :46387 / HTTPS :46487 共用路由，专用解锁强制 TLS、配对和控制租约；，全部端点路由与静态页面服务；/api/screen/* 读写均鉴权、全局单次采集限流，异步读取不阻塞输入，向控制台暴露局域网及 Tailscale 私网地址并生成带配对 token 的二维码（默认当前 IP，type=host 显式使用需手机支持解析的 Bonjour 名称）；状态的 workspaceURL 为电脑名称邀请，ipWorkspaceURL 为当前 IP 邀请，两者仅回环可读；只翻译协议不做系统调用，写操作委托 InputExecutor；/api/status 下发 targets 含 per-app shortcuts/openPanel、/api/targets 保存时对专属快捷键做 resolve 校验 + id 去重、openPanel 白名单清洗；与 WSServer 平行。跨弹窗恢复：/api/live-input 的 `probe:true` 走只读分支，失败回执带 `state`（interrupted / needs-user-focus / committed）。应用选择定位：/api/activate 解析 `locate`/`generation`，**仅在非回环来源且通过 controlAuthorized 时才允许定位**（只凭配对 token 不够：旧客户端或另一台持有同一 token 的手机都不该能挪动光标），否则 409；激活成功后由 `performLocate` 编排 TargetWindowLocator + PointerGeometry + PointerExecutor，激活结果与鼠标结果**分开回报**（`locate: moved/unchanged/skipped` + `locateReason`）。`performLocate` 拆成两步职责：**移动**（光标已在目标窗口内时跳过）与**聚焦输入框**（`focusAndVerify`，只要定位意图在就执行，绝不因光标已就位而短路——窗口铺满主屏的应用鼠标几乎总在窗口矩形里，旧版在这里整条跳过聚焦点击，正是"唤醒了但输入框没激活"且时好时坏的来源）。`focusAndVerify` 三段有界闭环：①找点——AX 优先，Electron 刚激活树未建成时经 `InputFocus.focusedElement` 触发 AXManualAccessibility 并轮询后重试一次，仍无才用启发式落点（窗口底部中央）；②点击——`pointer.click(at:completion:)` 真实单击落焦点；③核验——`InputFocus.probeFocus` 确认焦点真是可输入控件，unknown 时再触发一次 AXManualAccessibility 重探，notEditable 且第一击是 AX 点时换启发式点补一击。回执带 `clickedInput`/`inputMethod`（ax/heuristic/none）与 `inputFocused`（yes/no/unknown）+ `inputNote` 人话原因，结论同时写 ExecutionLog（kind=focus），控制台"最近动作"可见；等激活期间用户动过鼠标（anchor 偏离 >3px）不补点击。**路由扩张纪律**：新端点按职责落进各自的路由文件（`/api/v1` 的本机管理端点在 AgentHTTP），本文件只保留一行委托；静态资源白名单新增文件必须同时登记，否则浏览器拿 404；console-main.js 承载控制台主业务并作为独立资源登记。
 CursorMonitor.swift: 光标观测层——仅在有订阅者时以约 30Hz 读 `CGEvent(source: nil)?.location`（**只读位置不需要辅助功能权限，发事件才需要**），对照 CGDisplayBounds 判定显示器归属（矩形语义 minX<=x<maxX 天然避开 maxX 越界），输出 seq + displayId + 归一化 rx/ry；位置未变只发 1 秒心跳，订阅数归零立刻停表。**它只观测、从不写入 PointerExecutor**——观测值与命令期望值混在一起，就会出现实体鼠标一动、手机再发相对移动就跳回旧位置的鬼畜。
-WSServer.swift: 控制与光标 WebSocket（HTTP 端口 +1）；认证后一个控制者，其余观看，显式接管及 2 秒心跳租约。可靠消息队列和最新光标分离；断线仅释放控制者按键。isController 供 HTTP 输入在执行前验证。
+WSServer.swift: 控制与光标 WebSocket（HTTP 端口 +1）；所有连接验证真实token后一个控制者，其余观看，显式接管及 2 秒心跳租约。可靠消息队列和最新光标分离；断线仅释放控制者按键。isController 供 HTTP 输入在执行前验证。
 main.swift: 组装 HTTP、控制和画面三项服务，注入跨通道租约验证，选择端口、资源路径并维护 macOS 应用身份；同时装配 PointerExecutor 并注入 Server（鼠标注入的唯一入口）与 LiveDraft 的**目标前台判定**闭包。内置 `ServerWatchdog`：连续 3 次、彼此独立的 /api/status 健康探测失败（≈30s）才判定公共服务线程失活并重启，且重启前必须**同时**满足「InputActivity 已安静 3s 以上」——提交/图片粘贴/草稿写入这些不可重放的事务进行中一律推迟自愈，避免把用户正在输入的内容打断成半截；重启走**交接标记**：新实例先写标记、旧实例 awaitHandoff 后**不再初始化服务**，保证任何时刻只有一个进程绑端口。
 
-InputFocus.swift: AX 三态焦点能力与诊断快照，提供只读探测、带 PID 校验的焦点元素、鼠标命中可编辑元素或当前聚焦窗口同一 WebArea 的核验及首页显式聚焦；以页面矩形容忍 Chromium AX 对象重建，同时排除浏览器控件/后台窗口/其他应用，候选查找有界；只读探针不返回正文。focusedElement 两级查询都拿不到焦点时，对该 pid 写 `AXManualAccessibility=true`（Electron/Chromium 在没有辅助技术证据时不建 AX 树，聚焦元素查询返回 noValue -25212——实测 ZCode 打字正常却读不到控件，清空被"不盲删"红线挡住），随后有界轮询（6×100ms）等树异步建成。**树确认存活过（成功读到过焦点元素）的 pid 不因瞬时读抖动重写激活属性**：false→true 重写会强制 Chromium 重建整棵树、作废全部已捕获 AX 引用（实时输入在第二个字冻结、清空连败的直接元凶），活树 pid 只做 300ms 有界重试，确需重写时冷却拉长到 10s（从未见过树的 pid 仍 1s 节流可重写）；撞节流不放弃而是继续等待重读。另提供 focusedApplicationPID（系统级键盘焦点归属 = 打字落点真值，激活核验与逐键门禁用）。红线不变：激活失败仍读不到控件时，一律如实失败、不盲删。
-InputBinding.swift: 10 分钟短期输入上下文；AX 可识别时绑定输入元素并在上下文中返回当前文本，传统编辑元素不可见时仍保留聚焦 WebArea；常规写入校验同一聚焦元素，Chrome 多图锚点允许在同一 PID、聚焦窗口与当前 WebArea 内重新核验，失效后拒绝草稿写入。establish/establishRelaxed 的绑定进程**跟随键盘焦点归属**（focusedApplicationPID 优先，读不出焦点才退回窗口层序）——半激活态下按层序绑会把 A 应用的元素当靶子、键却打进了 B 应用，读回永远对不上。`establishRelaxed` 为图片直发提供应用级兜底绑定——白板/画布目标没有可编辑元素可认（AX 甚至报"不是输入框"），粘贴只要求前台应用正确，绑定 element=nil 后 validate 只核验前台进程；只允许图片提交走这条路，文字必须有可核验的编辑位置。除实时校验外还提供**只读证据**：`snapshot(forToken:)` 返回绑定身份与最后确认文本/选区边界，`recordConfirmed(_:text:)` 在每次写入落地后推进"最后确认状态"，`lastInvalidReason` 记录失效原因（人话，供回执；不参与决策）。恢复探测只读这些字段，不改绑定。
+InputFocus.swift: AX 三态焦点能力与诊断快照，提供只读探测、带 PID 校验的焦点元素、鼠标命中可编辑元素或当前聚焦窗口同一 WebArea 的核验及首页显式聚焦；以页面矩形容忍 Chromium AX 对象重建，同时排除浏览器控件/后台窗口/其他应用，候选查找有界；只读探针不返回正文。focusedElement 两级查询都拿不到焦点时，对该 pid 写 `AXManualAccessibility=true`（Electron/Chromium 在没有辅助技术证据时不建 AX 树，聚焦元素查询返回 noValue -25212——实测 ZCode 打字正常却读不到控件，清空被"不盲删"红线挡住），随后有界轮询（6×100ms）等树异步建成。**树确认存活过（成功读到过焦点元素）的 pid 不因瞬时读抖动重写激活属性**：false→true 重写会强制 Chromium 重建整棵树、作废全部已捕获 AX 引用（实时输入在第二个字冻结、清空连败的直接元凶），活树 pid 只做 300ms 有界重试，确需重写时冷却拉长到 10s（从未见过树的 pid 仍 1s 节流可重写）；撞节流不放弃而是继续等待重读。另提供共享 ApplicationOwner/focusedApplicationPID；AX 明确归属优先，实际缺值时只有唯一活动应用与 Carbon 即时进程一致、系统控件无反证才补证，派单、绑定和逐键门禁同用该事实，窗口层序不授权输入。红线不变：激活失败仍读不到控件时，一律如实失败、不盲删。
+InputBinding.swift: 10 分钟短期输入上下文；AX 可识别时绑定输入元素并在上下文中返回当前文本，传统编辑元素不可见时仍保留聚焦 WebArea；常规写入校验同一聚焦元素，Chrome 多图锚点允许在同一 PID、聚焦窗口与当前 WebArea 内重新核验，失效后拒绝草稿写入。establish/establishRelaxed 的绑定与续写进程**统一跟随共享键盘归属**（focusedApplicationPID，未知或证据冲突立即拒绝）——半激活态下按层序绑会把 A 应用的元素当靶子、键却打进了 B 应用，读回永远对不上。`establishRelaxed` 为图片直发提供应用级兜底绑定——白板/画布目标没有可编辑元素可认（AX 甚至报"不是输入框"），粘贴只要求前台应用正确，绑定 element=nil 后 validate 只核验前台进程；只允许图片提交走这条路，文字必须有可核验的编辑位置。除实时校验外还提供**只读证据**：`snapshot(forToken:)` 返回绑定身份与最后确认文本/选区边界，`recordConfirmed(_:text:)` 在每次写入落地后推进"最后确认状态"，`lastInvalidReason` 记录失效原因（人话，供回执；不参与决策）。恢复探测只读这些字段，不改绑定。
 ModelConfig.swift: 模型配置边界——APIProviderConfig 按稳定 ID 保存多家服务与各自凭证，ModelConfig 用 backend 与 activeProviderID 显式选择，baseURL/model/apiKey 兼容字段仅投影选中 API；未选中不猜首项，Codex 固定 GPT-6 Luna 且保留 API 列表与选择。旧单条只在解码时迁为 legacy-api，GET 不重写存储，首次保存写 providers 新格式且不重复顶层凭证；DeepSeek/OpenAI 只按精确同源自动命名，不覆盖已有自定义 name。model.json 写后收紧为 0600，所有条目和顶层只下发脱敏视图；同源比较按协议/主机/有效端口，路径及默认端口等价。
 ModelClient.swift: 统一推理入口——按配置选择 CodexModelClient 或 OpenAI 兼容 /chat/completions，都返回同一 ModelTurn 和带来源的用量；错误不跨后端重试，工具执行只由 AgentRunner 处理，API Key 不出请求边界。
 AgentHTTP.swift: `/api/v1` 的路由层，Server 只做一行委托，不把路由表堆在自己身上。两类端点分开：①**本机管理类**（模型配置读写 `model-config`、连通性实测 `model-test`）只允许回环；②**任务类**（`tasks` 建/查/事件/动作、`executors`、`context/page`）由 `requiresBearer` 判定，**含回环在内一律要 Bearer**——回环豁免意味着本机任何进程都能读走全部任务正文。任务按主体隔离（subject 由 token 派生），读别人的任务一律 404 而非 403，不泄露存在性。**只允许回环访问**（非回环 GET 直接 403，POST 另由既有写鉴权挡在 401）；这与将来 M1 的手机侧任务接口（`/api/v1/tasks/…`，必须带 Bearer）是两类端点，但都不允许局域网匿名调用。本机服务商操作逐条 save-provider/activate-provider/remove-provider：新建仅保存不隐式选择，activate=true 或显式启用才切 API；同 ID 编辑不切别家，移除选中 API 留未配置且不撤销 Codex。保存与测试共用条目草稿验证，Key 只从同 ID 同源沿用；providerId 空串测试是无凭证新草稿，缺省 ID 与旧 top-level POST 仍只操作当前 API，旧三空清空仅移除当前条目。activate 必须严格 JSON 布尔，数字不作启用意图；不完整/未知/跨源无新 Key 请求在写盘或联网前拒绝。实测走两步真验证：①纯文本 ②工具调用闭环（模型发起 `read_page` → 本地伪造结果回传 → 模型给出最终回答），不支持/失败一律如实报 `supported:false` 或错误原因，不粉饰成「可用」。保存与清空的失败必须回错误，**不能用 `try?` 吞掉后回成功**——写失败却说已清空是假成功。
-NetworkPeer.swift: 基于真实远端地址判断回环，控制与画面握手共用，不信任客户端自报主机名。
+NetworkPeer.swift: 保留真实远端回环判定辅助函数；地址仅说明位置，控制与画面鉴权不再消费此函数，不可据此免令牌。
 
 小精灵（M1，仅只读能力）
 
-AgentModels.swift: 任务领域模型——TaskStatus（accepted/running/needsInput/succeeded/failed/**abandoned**/verifying）、TaskMessage、PageBinding、TaskUsage、AgentTask、TaskEvent。abandoned 是刻意的命名：M1 的 runtime 不支持真正取消，用户点「放弃」只表示手机不再等待，任务仍会在 Mac 上跑完，叫「已停止」就是谎报。PageBinding 的 tabId **可选**（自有 AX 拿不到标签页 ID），漂移校验以 URL + 标题为准。用量读不到时整体 unknown，不允许拿 0 冒充。
-TaskStore.swift: 任务与事件的唯一权威存储——`tasks.json`（原子整体写）+ `events.jsonl`（append-only，逐行解析跳过半行）+ `dedupe.json`（主体 + requestId 去重）。claim 是幂等接受：同键同内容回到同一任务，同键不同内容抛 conflict（绝不派第二个）。写失败必须抛出，静默吞掉会让手机以为任务接住了。schema 不认识就弃用并留 .bak，不猜着解析。目录与三个文件路径可替换，测试指向临时目录。
-TaskService.swift: 生命周期与状态机唯一决定处——submit/supplement/abandon/能力报告/当前网页绑定，模型能力报告使用活动后端/模型/主机，不把已保存的其他服务商当作当前来源。串行一个活动任务；supplement 上限 5 轮、软超时 5 分钟（只提示）、硬超时 10 分钟；单条输入 16 KiB。abandon 不叫停止，回包里明确写「Mac 上已发出的这次调用可能仍会跑完」。
-AgentRunner.swift: 模型 ↔ 本地工具的循环，**工具执行权始终在 PocketDesk 侧**：模型发起网页、应用与飞书工具请求，本文件核验租约并本地执行后回传，模型不能直接操作电脑。工具集写死在代码里，不接受请求体自定义工具（防止模型给自己发工具）。最多 12 轮；读不到页面不判失败，把原因写进上下文让模型如实说明。
+AgentModels.swift: 任务领域模型与旧缓存兼容的可选恢复事实，JSON 按恢复事实及完整执行记录提供标题、下一步、主动作和输入文案；TaskStatus（accepted/running/needsInput/succeeded/failed/**abandoned**/verifying）、TaskMessage、PageBinding、TaskUsage、AgentTask、TaskEvent。abandoned 是刻意的命名：M1 的 runtime 不支持真正取消，用户点「放弃」只表示手机不再等待，任务仍会在 Mac 上跑完，叫「已停止」就是谎报。PageBinding 的 tabId **可选**（自有 AX 拿不到标签页 ID），漂移校验以 URL + 标题为准。用量读不到时整体 unknown，不允许拿 0 冒充。FeishuChoice 可选保存已选群、原提及姓名和已选成员，支持旧候选解码与逐人同名续接。
+TaskStore.swift: 任务与事件的唯一权威存储——`tasks.json`（原子整体写）+ `events.jsonl`（append-only，逐行解析跳过半行）+ `dedupe.json`（主体 + requestId 去重）。claim 是幂等接受：同键同内容回到同一任务，同键不同内容抛 conflict（绝不派第二个）。写失败必须抛出，静默吞掉会让手机以为任务接住了。schema 不认识就弃用并留 .bak，不猜着解析。目录与三个文件路径可替换，测试指向临时目录。飞书消息及通用写操作在锁内原子占用，save 单调合并发送证据；米家台账原子占用/完成且只增事实，旧快照与进程重载不能解除去重，任务结束后仅允许补存已占用的迟到完成回执。
+TaskService.swift: 生命周期与状态机唯一决定处——submit/supplement/abandon/能力报告/当前网页绑定；独立任务可并发、同任务防重入，supplement 沿用完整 transcript、上轮真实回执和新解释，累计补充次数不截断用户恢复；每次输入仍受大小与执行轮次限制。显式补充跳过关系分类和候选时效，显式新任务解除关联；耳机自动 send 在最近30分钟失败/待补充/接收未核实任务上先判断输入关系，已完成后的普通发送新建任务；手机未完成默认直接补充原任务，明确选择新任务才解除关联。模型未配置也持久保存原话和准备提示；软超时5分钟、硬超时10分钟，单条16KiB；abandon 只停止等待，不冒充取消实际执行。
+TaskRecovery.swift: 任务恢复语义边界；区分缺信息、前置准备、能力限制、执行失败及接收未核实，统一桌面/手机标题、下一步和主动作；完整只读历史或当前轮明确未发送才允许一键续跑，未知工具、缺失历史和持久写入证据保守走输入核对；定义 task_feedback 参数契约及显式输入意图，不解析错误文字猜能力。
+TaskContinuation.swift: 输入关系纯分类边界；最近30分钟的失败/待补充/接收未核实任务作为候选，结合原目标、结果与新一句区分继续、新任务或澄清；无工具执行权，已完成不自动续接。
+AgentRunner.swift: 模型 ↔ 本地工具的循环，飞书类型与明确名称分离，歧义称呼及已查得完整名称保留交本地原词优先查询，明确起草才禁止发送；米家接入能力说明复用MijiaGateway；初次准确单目标通过 AgentQuickOpen 免模型，未知名称仅在模型显式 completesTask 且单个打开成功时免最终回复轮次；task_feedback 无副作用记录澄清、前置条件、能力限制或执行失败，不能覆盖工具与发送事实；工具执行权始终在PocketDesk；输出默认简洁中文自然文本，不展示工具JSON/内部ID，候选只问关键决定。待办未指定计划或截止日期时省略字段，由执行器默认安排到今天，无需追问；明确日期照办，完成回复保留读回核验的计划日或截止时间。Codex/WorkBuddy/ZCode 项目打开后若仍有明确派单目标，继续工具循环直到真实派单回执，不能仅打开就报告完成；补充沿用原 transcript。工具集固定且核验租约，最多12轮；读不到页面把真实原因回传。
 PageReader.swift: BrowserAdapter 的自有实现，用 AX 读前台浏览器的 URL/标题/正文，**只做只读**——不点击、不填表、不执行脚本。节点/深度/字符三重预算，截断如实上报。M1 用它替代 tt-bridge：后者 CC BY-NC 许可与内置分发冲突且未实测；接口一致，替换实现不动 TaskService。
 RecipientOrder.swift: 小精灵与普通应用的统一接收者顺序（`recipients.json`）。小精灵**不写进 TargetStore 的应用列表**——它不是有 bundleID 的 macOS 应用，混进去会被 /api/activate 与 AX 绑定当成真应用。归一化清理未知/重复引用、补齐新增应用；小精灵缺失时只在首位插一次（迁移语义），之后用户排到哪就保持在哪，不得每次读取重新置顶。
 ScreenStream.swift: ScreenCaptureKit 持续采样目标 30fps、1280/1920 宽 JPEG；只保留最新待编码帧，捕获器确认 idle 时复用静态画面，不落盘。
-FrameServer.swift: 独立画面 WebSocket（HTTP 端口 +2），同屏同质量共享采集器；每客户端一帧在途和一帧最新待发，浏览器呈现 ACK 后续发，超时关闭，最后观看者离开时停采集。
+FrameServer.swift: 独立画面 WebSocket（HTTP 端口 +2），包括本机在内必须验证配对token，同屏同质量共享采集器；每客户端一帧在途和一帧最新待发，浏览器呈现 ACK 后续发，超时关闭，最后观看者离开时停采集。
 
 InputActivity.swift: 进程级"正在输入"活动闸（`InputActivity.shared` + `begin()/end()` + `quiet(for:)`，NSLock 计数 + 时间戳，另用 NSRecursiveLock 保证同线程 `withInputActivity` 嵌套安全）。唯一消费者是 ServerWatchdog：草稿写入、提交、图片粘贴、快捷键这些**不可重放**的事务期间置位，看门狗据此推迟自愈重启——否则"刚好在用户打最后一个字时重启"会把内容截断，且用户看到的是一次无法解释的同步中断。
 
@@ -60,25 +81,42 @@ LockScreenInput.swift: 锁屏专用一次性挑战与物理按键执行；绑定
 
 DeviceConnections.swift: 已鉴权浏览器心跳的设备描述与连接记录；45 秒超时、30 天/500 条保留、重启不恢复在线态。描述不能作为身份依据，GET /api/devices 仅回环来源可读，控制态经服务端租约校验。
 
-AppOperator.swift: 「打开本机应用」执行器（路径 B）——受信任目录白名单（/System/Applications、/Applications、/Applications/Utilities、~/Applications）内的 `.app` 才能启动，中文别名表（飞书→lark/feishu、微信→wechat…）把模型给的中文名映到包名/标识符关键字，`resolve` 按显示名/包名/包标识精确或包含匹配打分，`open` 走 `NSWorkspace.open`。与 BrowserOperator（路径 A 开网页）对称，由 AgentRunner 核验控制租约后调用。tt-bridge（CC BY-NC）只覆盖浏览器、不启动应用，故本能力为原生自研、未嵌入其代码。
+AppOperator.swift: 「打开本机应用」执行器（路径 B）——受信任目录白名单（/System/Applications、/Applications、/Applications/Utilities、~/Applications）内的 `.app` 才能启动，中文别名表（飞书→lark/feishu、微信→wechat…）把模型给的中文名映到包名/标识符关键字，`resolve` 按显示名/包名/包标识精确或包含匹配打分，`exactOnly` 供快速打开只接受配置/身份/已有别名准确命中，Server 注入同一配置；`open` 走 `NSWorkspace.open`。与 BrowserOperator（路径 A 开网页）对称，由 AgentRunner 核验控制租约后调用。tt-bridge（CC BY-NC）只覆盖浏览器、不启动应用，故本能力为原生自研、未嵌入其代码。
 BrowserOperator.swift: 「打开网页」执行器——只接受 http(s) 绝对地址，其余一律拒绝，由默认浏览器新标签页打开。与 PageReader（只读）对称，写入前由 AgentRunner 核验控制租约。
-AgentAppDispatch.swift: 新建/继续派单编排；默认 new，只有显式 current 才复用当前对话。副作用前原子占用任务并串行派单，委托 AgentTaskComposer 核验新建页面，空白框通过现有 mirror 提交；Codex 深链预填后只提交。新建失败不降级旧会话，回执只证明提交动作已发出。
+AgentAppDispatch.swift: 新建/继续派单编排；默认 new，只有显式 current 才复用当前对话。WorkBuddy 新任务优先走它自己的官方外部唤起深链（app 新建会话并预填正文，本机只读核验唯一同文撰写框与焦点；打开前先确认新任务页没有未发送草稿，等不到预填即停，不补输入、不重开链接）。WorkBuddy 激活未获得键盘归属时，仅点击唯一实例窗口里未遮挡的唯一空框，确认焦点后继续原导航；不把获取焦点与输入授权混为一事。副作用前原子占用任务并串行派单，核验新页后复用 mirror 输入与语义发送；Codex 深链预填后只提交。Cola 有可访问的语义发送入口（「发送」按钮，空正文时 disabled），不再靠回车——回车只代表按键发出，不是已接收。新建失败不降级旧会话，未知结果不重发。
 
 派单接续契约（2026-09-18）：AgentModels 的可选 handoffTargetId/name/requested 保持旧任务解码兼容，HTTP 只暴露接续事实，不暴露控制会话。AgentRunner 从 switchAfter 保存明确切换意图；AgentAppDispatch 仅 committed 后持久保存配置中的精确目标 ID/name，手机不解析模型文字猜接收者。
 
 应用解析修正：Server 将当前 TargetStore 配置注入 AgentRunner.resolveApp，AppOperator 优先匹配配置名称/ID，再以本地化显示名、包名、文件名、bundle ID 查找；忽略空格，UU/UU远程 映射 UURemote。最高分多候选时拒绝猜测。
 
-FeishuCLI.swift: 固定 argv 的本机 CLI 执行器，继承当前用户授权，显式 user 身份；超时终止、限量读取、脱敏错误，不暴露凭证或任意 shell。
-FeishuMessaging.swift: 个人/群聊纯文本发送适配，联系人查询唯一才发送，同名候选存任务并等待 supplement；发送前持久标记、稳定幂等键、回执持久化，结果不明不重试。AgentRunner 的 feishu_message 工具直接按回执结束本轮；TaskService 将候选请求落为 needsInput。
+FeishuCLI.swift: 固定 argv 的本机 CLI 执行器；npm 入口解析符号链接后直接调用同包原生二进制，避开 launchd 系统 PATH 缺 Node 的启动失败；自定义/native 入口保持优先。复用当前用户授权、显式 user 身份；能力状态仅认用户本人的 verified/available，不以机器人可用冒充本人登录。超时终止、限量读取、明确启动依赖/网络/权限/登录错误，不暴露凭证或任意 shell。
+FeishuMessaging.swift: 联系人/已加入群/机器人收件者的文字与群内真实 @ 适配，bot 仅表示收件者，发送者仍固定本人；机器人/群先查原名，仅完整空结果才去除有限平台/类型语境词补查一次，补查只允许唯一准确同名自动发送，其余候选显式选择，真实含修饰词的名称优先、联系人不改名。完整群成员列表中按姓名精确核验，同名收件者/成员存候选并等待新 supplement，选择续接冻结原正文和提及计划。结构化 post 的 at/text 节点区分正文与提及，拒绝正文中的未核验 at 标记；发送前 TaskStore 原子占用、稳定幂等键、回执持久化，未知结果不重试。AgentRunner 的 feishu_message 按真实回执收尾；TaskService 将候选请求落为 needsInput。
 
-FeishuGateway.swift: 全 CLI 业务域的能力发现与按帮助执行；读取真实授权 scopes、命令/Schema/嵌入规范，固定 user 身份及 argv 参数；写操作按参数摘要持久去重，高风险经过新一轮用户确认才附 --yes。凭证、profile、CLI 管理不暴露给模型。
+FeishuGateway.swift: 全 CLI 业务域的能力发现与按帮助执行；读取真实授权 scopes、命令/Schema/嵌入规范，固定 user 身份及 argv 参数；写操作按参数摘要由 TaskStore 原子占用并持久去重，高风险经过新一轮用户确认才附 --yes。凭证、profile、CLI 管理不暴露给模型。
 
 派单焦点恢复：AgentAppDispatch 激活后沿用 InputFocus 的 AX 聚焦；未确认时使用 TargetWindowLocator（排除搜索/下拉）定位可见输入框，再经共享 PointerExecutor 点击并延迟核验。未找到、被遮挡、用户移动鼠标、失去租约或焦点未确认均不清空/提交；不使用窗口底部猜测坐标。派单去重检查与持久标记先于清空，防止重复调用擦除草稿。Server 仅注入已有指针执行器，普通手动选应用保留原定位策略。
 
 Codex 派单身份修订：AgentAppDispatch 除配置名称外识别 com.openai.codex（可安装为 ChatGPT.app），路径的真实 bundle ID 优先于旧配置；多候选仍拒绝。Server 静态白名单新增 recipients.js。
 
-AgentAppProfile.swift: 应用身份和会话模式的纯策略；真实 bundle ID 优先于名称，兼容 Workbody/z code 别名，定义各应用空白框与新页面证据及 Codex 官方深链编码。
-AgentTaskComposer.swift: 有界 AX 新任务导航；WorkBuddy/Cola/ZCode 按唯一语义入口新建，核验应用特定页面后绑定精确撰写框。选中状态兼容数字与字符串，页面最长观察 6 秒，不重点击；失败区分窗口未就绪、缺输入框、草稿不可读/非空、候选歧义与缺页面证据。Cola 未选模型则停止并提示；Codex 深链预填正文后逐字读回，不重复输入。每次动作核验租约与焦点。
+CodexActionRequest.swift: Codex 项目/已有任务/Your dot 的固定动作协议与目标类型；打开不携正文，send_* 才接受完整任务内容，拒绝冲突目标与未知参数。
+CodexCatalog.swift: 本机项目配置与只读任务索引发现；准确ID/完整目录、准确名称、语音空格名称、目录末级、模糊名称依次匹配，准确PocketDesk不被旧voice-deck-mvp共用目录干扰；不删除旧项目配置，显式旧名称仍可查。
+CodexSelection.swift: 无桌面副作用的目标选择与撰写区证据策略；list_* 保留结构化数据供模型使用，待选择输出最多5项简短中文名称，仅同名时附必要目录/项目，不展示JSON或内部ID；完整路径严格匹配并支持展示后的~/选择。
+CodexAdapter.swift: Codex 发现、目标解析与导航/派单的编排入口；真实歧义结束本轮等待补充，发送复用派单FIFO与原子占用。
+CodexNavigator.swift: Codex 项目/旧任务/Your dot 的有界原生导航；深链回调后允许首次未知焦点只读等待最多1秒，明确其他应用、失权、锁屏或确认后失焦立即停止；记录导航应用PID和门禁事实，以撰写区项目标签、选中任务身份、空白/预填正文核验落点，不能把侧栏同名当当前目标。
+
+AgentAppProfile.swift: 应用身份和会话模式的纯策略；真实 bundle ID 优先于名称，兼容 Workbody/z code 别名，定义各应用空白框与新页面证据及 Codex、WorkBuddy 官方深链编码；Cola 1.5.0 的会话侧栏新建动作在产品侧栏叫「新建项目」、独立侧栏叫「新建会话」（同一个 onCreateSession），新页证据认空会话欢迎句。
+WorkBuddy 激活准备：InputExecutor 首轮只读取或开启目标焦点 AX 树，再走共享应用归属门禁；避免新进程在树未准备时将已在前台的 WorkBuddy 判为激活失败，不以窗口层序授予输入权限。
+AgentTaskComposer.swift: 有界 AX 导航、指定窗口快照与共享提交；快照可绑定明确 AXWindow，指定窗口时不混入其他窗口的焦点子树。标题与下拉名称从有界子文本补证，同角色同矩形的 AX 包装归一；普通与指定项目派单共用角色、物理框及空白/完整正文的焦点核验。发送前重聚焦原正文框，WorkBuddy 按真实发送按钮矩形点击一次，指针执行时再查窗口、项目、焦点与全文；AXPress 成功不代替实际发送。侧栏展开一次，初始/展开后观察3秒，新建后观察6秒；接收仍须核验窗口绑定与实际证据。
+AgentWorkBuddyNewTask.swift: WorkBuddy 保留草稿的原生新任务准备；完整窗口树与本应用 file renderer URL 证明主窗/独立窗身份，旧会话通过新建入口保留草稿，主窗新页有草稿时经右键菜单“在独立窗口中打开”创建新落点，不清空、不归档、不调用覆盖 home 的任务深链。只授权本次唯一新增且聚焦的独立空白窗，既有独立窗不参与写入；截断树、编辑器未就绪和窗口变化停止，返回精确编辑器与窗口授权供项目导航及共享提交消费。
+接收正文证据排除 TextArea 子树的草稿静态文本，前后计数只比较真正的消息区；编辑器重建时仍需本次新增正文与空框/开始信号，旧消息不冒充本次接收。
+AgentWorkspaceRequest.swift: WorkBuddy/ZCode 本地工作空间动作协议与纯匹配策略；准确名称归一化、操作项（含不使用工作空间）隔离和同名拒绝，open_project 只选中已有空间并打开空白新任务页，send_task 才派单。
+AgentWorkspaceComposer.swift: 原生新任务后的工作空间选择器导航；旧会话草稿不阻止新建，只核验新目标框空白。WorkBuddy 兼容 ComboBox/PopUpButton，按完整名称/值与编辑器下方工作空间、分支、Worktree 的局部行证据识别选择器，再由唯一真实菜单动作补证，模型/权限/分支不冒充项目。项目选择、输入与发送共用新任务窗口授权，发送前重新绑定项目控件；ZCode 重开菜单读回唯一选中项，聚焦复用共享物理框核验。
+WorkBuddy 无名称 ComboBox 由 AgentTaskComposer.controlAccessibleNames 有界读取直接子文本（最多两层/16 节点）；节点快照与输入期间的项目核验共用此语义名称，热路径不扫描全窗；选择器失败仅记录控件诊断，不记录正文。
+AgentWorkspaceAdapter.swift: agent_workspace 的编排入口；复用应用配置、派单 FIFO 与输入活动闸，列表仅返回真实菜单，打开回执来自选中/聚焦核验，发送委托既有派单事务。
+
+工作空间打开路由：明确 WorkBuddy/ZCode 指定项目的 open_app/open_target 不能仅启动应用就完成；有效 project 转 agent_workspace.open_project，遗漏参数则回灌专属工具纠正。复合“打开项目，让它执行…”保留派单目标，opened 只回传准备事实；同批/后续 send_task 的派单回执才收尾，未派单不能口头成功。通用派单不能遗漏逗号前指定的项目。WorkBuddy 的 project 指本地工作空间，不代指协作项目页。
+工作空间派单可靠性：WorkBuddy 下拉框复用 AgentTaskComposer.click 按已识别 AX 矩形及窗口可见性点击，随后读取真实菜单；输入前后只读已绑定选择器，发送前核验并刷新该引用，避免 Chromium 重建控件后误判目标失效。
+指定空间派单实机：完整“打开 WorkBench 项目，让它拉取 GitHub 更新”经 send_task 保留正文、选中 workbench、语义发送并取得 confirmed；原生界面出现该空间的新任务及本次正文。该事实只证明派单接收，目标 Agent 的 Git 执行结果由其自行报告。
 
 派单事务补充：TaskStore.reserveAppDispatch 在锁内先持久占用，save 保留已有占用证据，旧快照不能解除去重。InputExecutor.mirror 的可选 preflight 在串行队列写入前核验空白框；AgentTaskComposer.submitPrepared 核验预填正文后点击唯一可用发送按钮，观察当前撰写框清空；未确认不重试、不写成功接续。TargetWindowLocator.axWindowElement 对适配层提供窗口 AX 根，不扩大窗口检索范围。
 
@@ -91,9 +129,9 @@ AgentDesktopActions.swift: 小精灵固定桌面动作协议、运行应用与�
 
 SpriteSession.swift: 按真实控制连接隔离展示计数，按提交身份与版本接受回执；显式选择修订用于恢复面板，草稿不执行。
 
-SpriteFeedback.swift: 以 taskId/revision 合并最新问题和结果，投影交互 Phase、阶段标题/正文与原版表情 ID；提交和忙碌优先于残留草稿，同任务追问隐藏旧回答，展示修订驱动唤醒，不维护手动收起状态，不执行任务。
+SpriteFeedback.swift: 以 taskId/revision 合并最新问题、结果与恢复事实，未核实保留可继续核对的入口，已交接仍按真实回执退场；投影交互 Phase、阶段标题/正文与原版表情 ID；提交和忙碌优先于残留草稿，同任务追问隐藏旧回答，展示修订驱动唤醒，不维护手动收起状态，不执行任务。
 
-SpriteFeedbackPanel.swift: AppKit 非激活透明面板；默认只有原版动态球体，无收起按钮和占位文字；输入显示草稿，发送后用执行标题取代原话，完成展示结果；600pt 宽度按屏幕收窄，15pt 原生正文按 TextKit 实际高度展开，长回答按可用屏幕限高；滚动条自动隐藏且仅绘制细圆角滑块，不受系统始终显示槽线影响；应用隐藏与锁屏独立，保持球体底部中心锚点。
+SpriteFeedbackPanel.swift: AppKit 非激活透明面板；desktopVoiceDiagnostics只读本进程AX接收身份、当前输入上下文/来源、控件透明度与修饰键，不记录正文；首次接收异步保存真实外部焦点应用，重试保留原文与目标；明确取消抑制同代际迟到展示，收起后仅在仍活跃且无其他key窗口时异步核验并归还原应用，切应用/锁屏/新接收使旧归还失效；默认只有原版动态球体，无收起按钮和占位文字；手机提交用执行标题取代原话，本机语音经 beginDesktopExecution 冻结原字幕，通过正常窗口排序释放系统 key，连续补充直接重建同源编辑焦点；desktopTask 合并接收/执行展示，结果到达才替换正文；未完成以440pt左对齐卡片直显原目标、原因与下一步，单一主动作消费TaskRecovery契约，补充与低强调换件事发明确输入意图；点击后同一接收字段可见编辑并提供光标/发送，话题切换保留草稿，文字编辑时具体问题/候选持续可见，转语音收起前文说明与候选，仅呈现简短状态和真实字幕；普通结果600pt宽度按屏幕收窄，15pt 原生结果按 TextKit 实际高度展开，长回答按可用屏幕限高；滚动条自动隐藏且仅绘制细圆角滑块，不受系统始终显示槽线影响；应用隐藏与锁屏独立，保持球体底部中心锚点。
 
 DesktopMenuActions.swift: 常用菜单语义目录、当前应用真实菜单发现与唯一匹配执行；菜单路径不能扩大目录范围。绑定焦点/窗口/标题、执行前复核 enabled；新窗口读回新身份，其余菜单操作只报告已发出，不冒充结果完成。
 DesktopWindowLayout.swift: AX 窗口布局与纯几何；可用区域从 NSScreen 换算到 AX 全局点，支持左右/上下/四角/铺满/居中/最小化/恢复。屏幕不存在或全屏空间拒绝；布局必须读回尺寸位置，应用最小尺寸限制不报成功。
@@ -106,9 +144,11 @@ SpriteDesk.swift: 桌面展示唯一装配入口；进程级强持有协调层�
 
 桌面反馈精简：SpriteFeedback 仅恢复活动/待补充或本展示会话提交的任务，历史终态不作为默认内容。SpriteFeedbackPanel 使用透明容器与 360pt 转写浮层，短句单行、长句换行，执行中优先反馈任务；非忙碌时新草稿替换结果；默认锚点为 Dock 可用区上方 44pt，原版引擎呈现输入表情，切应用隐藏，重选开心唤醒。
 
+SpriteSubtitleView.swift: TextKit 只读字幕；正文与有效UTF-16组合范围共同驱动更新，蓝色单下划线与居中文字共用换行/滚动布局，仅标记变化不重写正文或滚动；接受组合后立即清除。
+
 SpriteOrbView.swift: 离线 WebKit 绘制适配；仅允许本地入口导航，就绪重放最新快照，隐藏停帧，Web 内容进程终止后恢复；hitTest 不拦截拖动，不接受键盘焦点。
 
-派单回执修正：预填发送后只读核验增加至 40 次观察、轮间 150ms，焦点或租约失效提前停止；发送前失败与发送后待核实分离。AgentRunner 消费结构化 AppDispatchReceipt 结束本轮、封闭同批后续工具，不再依赖模型续轮。未核实进入 submitted 终态，桌面反馈显示“已尝试发送，接收待核实”并自动退场；确认接收显示“已交给目标应用”，不会冒充目标任务完成，也不会自动重发。
+派单回执修正：预填发送后只读核验增加至 40 次观察、轮间 150ms，焦点或租约失效提前停止；发送前失败与发送后待核实分离。AgentRunner 消费结构化 AppDispatchReceipt 结束本轮、封闭同批后续工具，不再依赖模型续轮。未核实进入 submitted 终态，桌面反馈保留“接收待核实”与补充核对入口；确认接收显示“已交给目标应用”，不会冒充目标任务完成，也不会自动重发；旧未发送回执只授权一次安全重试，不解除更新轮次的占用。
 
 电脑到手机文件传输（ZCode 初版、Codex 接手返修；隔离验证见 ../docs/phone-file-transfer-delivery.md）：
 PhoneFileStore.swift: 本机文件快照与持久收件：锁外复制+锁内发布（发布前重查幂等/数量/配额）、同任务重试与并发同批次信号量接力幂等、批次 ZIP 原子发布（任一失败整批不发布）、24h 过期清扫与崩溃残留回收、单文件/批次 512MiB、总量 1GiB、32 项、10 分钟下载票据；O_NOFOLLOW+fstat 拒绝目录/FIFO/链接竞态。
@@ -140,7 +180,7 @@ UnlockWebAuthn.swift: Base64URL/CBOR 与 P256 旧协议验证底座；复用编�
 
 快捷解锁面板入口必须从 HTTP 网络队列调度回主线程；AppKit 窗口事务不能在 Server 队列执行，否则触发系统断言并中断全部网页服务。
 
-Server.swift：status 仅向 loopback 返回带授权的 workspaceURL，供控制台复制与二维码等价的连接链接。
+Server.swift：status 仅向可信同源 loopback 返回带授权的 workspaceURL（可选 Bonjour 名称入口）与 ipWorkspaceURL（当前 IP 默认入口）；控制台主二维码使用 IP，名称二维码折叠展示且需手机验证解析。Util 从 SystemConfiguration 读取真实 LocalHostName；名称保持不代表手机必能解析，也不保证数字书签有效。console-connection.js 登记静态白名单，控制台连接渲染独立于接收者刷新。
 
 ConsoleActions.swift: 本机网页常用操作适配层；回环+精确Host+同源Origin+专用JSON头限制敏感写入，独立串行队列管理密码/开关/配对核对/设备撤销，密码不回传；文件发送委托主线程系统选择器。
 ConsoleFileUpload.swift: 控制台拖放的分块上传会话；单块6MiB、会话30分钟、文件名不作路径，完成后复用PhoneFileStore的20文件/512MiB/ZIP/快照边界。
@@ -151,14 +191,21 @@ ConsoleFileUpload.swift: 控制台拖放的分块上传会话；单块6MiB、会
 
 UnlockNativeHTTP保留内存中最近一次授权/执行失败与结果的阶段、时间、错误、说明；ConsoleActions仅向本机同源控制台展示，不保存密码、签名或挑战，不自动重试。
 
-HeadsetLongPress.swift: Quark2 音量减经短租约映射到保留 F20，由事件 tap 吞掉；短按释放回放一格音量，700ms 长按仅开启小精灵、松开结束。拔插清除状态，不改左 Option 映射。
-SpriteDesktopInput.swift: 原小精灵浮层内按住说话，豆包左 Option 按下/释放、松开后非空稳定转写提交、Esc/焦点/断开取消，复用 TaskService 和结果存储；本机提交使用进程私有控制凭证，不改变手机租约或草稿。
+HeadsetLongPress.swift: 默认有线减号原始 HID 适配；短租约映射 Usage 0，空闲短按回放音量、700ms 长按开启并松开结束；已有小精灵输入时按下即交统一取消并消费整轮，重复脉冲/阈值/旧松开不再录音或回放音量，拔插清状态。
+SpriteDesktopInput.swift: 原小精灵浮层内接收语音；默认有线和自定义唤醒共同裁决再次取消；按住语音接续同一接收框，松开结束，旧有线唤醒代际退休；唤醒操作先释放快捷键、保持原焦点发送Esc取消豆包，核验语音条关闭后收起，未关闭保留提示且仅补一次、失焦不补发；普通语音单击开始/重试或结束，同源原文与任务意图保留；焦点准备与语音启动分阶段核验：共享3秒准备期内同时确认本地field editor与系统归属，确认后立即发Option；环境失效或准备超时保留文字、退休拥有者并允许明确重试。超时诊断记录归属PID、编辑器/key/active状态与AX读回耗时；发快捷键前和启动失败时补录接收框AX身份、输入上下文/来源、控件透明度与修饰键，并只读记录本进程收到的带标记修饰键，不记录正文；启动失败仅显示“语音未启动”；3秒无窗口或新文字释放按住式快捷键，未知toggle不盲发第二次点按；结束/重试同步退休默认与自定义拥有者，焦点及旧长按回调核验代际；豆包左 Option 按下/释放；聆听标题只显示“正在听”，不附加左右耳操作或倒计时提醒，松开保留标题与字幕，语音窗关闭且文字稳定后直接切到“执行中”；复用普通链路精确识别豆包主输入法，排除设置窗口，接受同一 field editor 的残留组合文字后提交；松开等待仅在门状态变化、超过450ms拍间隔或150ms面板探测时记耗时/字符数，最终回执记录观察到的分段等待，不记录正文或绕过尾字保护。Esc/焦点/断开取消，迟到提交回执核对录音代际；任务接续身份与本轮结果展示分离，重试失败不被旧任务轮询覆盖；恢复入口先清旧录音拥有者，接入同一文字框与耳机链路，显式补充绑定原任务，换件事与返回分离上下文身份和实际新任务发送，文字转语音保留已输入解释；安全重试通过TaskService显式补充同一taskId并沿用台账，路由期间拒绝重复点击；默认与自定义操作的停顿策略共享原生接收框实时文本，本机提交使用进程私有控制凭证，不改变手机租约或草稿。
 
-SpriteFeedbackPanel 的耳机输入使用透明原生转写接收框 + 最近三行字幕，隐藏边框/底色/光标；仍由原接收框接收豆包，字幕跟随当前组合文字，不修改提交判定。
+SpriteFeedbackPanel 的耳机输入使用透明原生文字接收框 + 最近三行字幕，语音接收字段整层透明以隐藏输入法原生装饰，仍持有真实field editor焦点与候选锚点；接收时仅显示“正在听”和真实字幕，空白不展示占位或前文说明；字幕逐行沿球体中线居中，文字增长时自然向两侧展开、满行自动换行，不移动接收框或窗口；由豆包输入，字幕与收尾提交共用当前 field editor，组合下划线按markedRange投影到居中文字下方；语音窗关闭并文字稳定后以 unmarkText 接受组合文字，执行期间释放编辑焦点但保留同一字幕控件、字号与68pt布局，待补充或结果到达才切结果区，空标题仍可真正移除占位。
 
 WebSearch.swift: Bing RSS 只读网站候选与搜索页地址；有限响应、超时、禁外部XML实体、非http(s)过滤。AgentRunner 在本地目标未命中后可搜索并打开网页，失败不得冒充官网已打开。
 
-HeadsetVoiceControl.swift / HeadsetCenterObserver.swift / HeadsetButtonLogic.swift：合并耳机中键只读监听、发送条件与菜单设置；原生 Option 由 Helpers/HeadsetOptionMapping 独立保活，安装迁移由 scripts/install-headset-services.py 负责。
+HeadsetVoiceControl.swift / HeadsetCenterObserver.swift / HeadsetButtonLogic.swift：合并耳机中键只读监听、发送条件与菜单设置；普通语音启动拒绝分开记录环境门禁与真实焦点PID/本进程活跃/keyWindow状态，无正文诊断区分按键未到与焦点未交还；HeadsetButtonLogic 统一彼此独立的3秒接收框焦点准备与3秒语音启动观察期限、取消探测/有界重试/确认时序与小精灵接续动作结果；焦点准备期限不是固定等待，正确归属确认即启动；普通语音允许零额外等待，但录音结束、面板关闭与最终文字稳定 0.6 秒仍是发送门禁，小精灵复用相同稳定窗口。默认有线中键在有效操作租约下先进入共享准备再发 Option，未接管仅观察原生直通；物理键盘 Option 不拦截，原生回退由 Helpers/HeadsetOptionMapping 独立保活，安装迁移由 scripts/install-headset-services.py 负责。
+HeadsetClickPreferences.swift: 按设备 ID 原子保存语音结束方式、停顿秒数和默认音量语音偏好；自定义语音共享结束设置，enabled 只控制默认音量单击，不以当前输出设备代替规则设备。
+HeadsetTextPause.swift: 无系统副作用的文字停顿策略；非空新增转写开始计时，后续变化重置，转写不可观察时暂停、恢复重算，原文/空文不结束；不表示声学静默或最终识别完成。
+HeadsetClickControl.swift: 默认音量单击录音拥有者；鼠标来源在后台有界核验，仅实际音量滑块改变系统音量才取消录音，普通点击与非音量滑块不触发唤醒冷却；核验稍迟保留候选，再按设备偏好与小精灵回执路由语音。退休拥有者不反向取消接收层，最终转写和发送交给既有链路。
+HeadsetVolumeSourceGuard.swift: 音量来源的线程安全票据边界；真实媒体键或带音量语义的 AXSlider 排除候选，普通点击和其他滑块保留原票据，持续音量拖动与迟到鼠标回执按代际隔离。只判来源，不读取正文、改音量或执行语音动作，默认单击与自定义运行时共享同一事实。
+HeadsetMappingRuntime.swift: 原始 HID 与自定义规则的语义路由；操作来源绑定唯一当前 IOHIDDevice registry，helper 沿服务真实父链核验以兼容服务不暴露序列号；健康回执必须保留规则 identity 并回读同一 registry，缺失/同身份多连接/旧连接晚回执拒绝接管，旧 helper 保持原生回退。设备租约、连接健康及接收框代际保护默认中键按住/释放，音量学习与执行等待共享鼠标来源核验，普通点击不提前丢弃耳机候选；检测只反馈识别结果，不执行动作。
+HeadsetMappingActions.swift: 自定义动作唯一录音拥有者；HeadsetKeyEmitter持有同源HID修饰键/私有普通键事件源，按下与释放使用同一状态表且保留左右Option与自有事件标记；小精灵单击/双击/长按再次操作均取消，普通单击与按住语音分别接续同一小精灵接收框并保留结束语义，等待不重复启动，接续保留规则身份与设备策略，退休不反向取消；普通/小精灵单击与双击读取同设备结束策略、复用 HeadsetTextPause，长按由松开结束；准备完成才捕获原文，结束/取消清计时与代际；小精灵自行结束录音后仅清理拥有者，保留启动失败提示，显式取消仍收起；最终发送仍走原链路。
+HeadsetSettings.swift: 按设备展示操作规则与共享结束方式的原生配置入口；普通选择自动保存，连接状态每秒只读刷新；默认音量入口开关不禁用自定义语音结束设置，独立按键同样可配置，修改策略取消正在进行的录音；等待秒数捕获编辑设备避免切设备误写，外观由 HeadsetThemeSurface 跟随产品主题。
 
 耳机设置统一放在 PocketDesk 应用菜单与 Dock 右键菜单的“耳机语音”子菜单，打开时刷新状态；不创建独立 NSStatusItem。
 
@@ -166,7 +213,7 @@ ChromeTabCleanup.swift: 小精灵 close_duplicate_chrome_tabs 固定工具；Chr
 
 Chrome 去重关闭核验：Chrome 的 close 是异步生效；固定脚本只返回 requested，主线程让出后每 100ms 发独立只读脚本获取实时标签 ID（统一按 text 比较），最多 2 秒，目标消失且保留页存在才计数。绝不重发 close；超时、失权或未知结果停止整个批次。
 
-WorkbenchContent.swift: 个人工作台四类创建适配（待办、本地日程、知识库存档、随手记）；固定回环 127.0.0.1:8787，不接受模型指定地址。创建前检查服务/租约，TaskStore 原子持久占用，返回 ID 后 GET 核验正文；未知结果不重放，旧任务快照不能抹掉回执。AgentRunner 提供当前本地日期与专用工具，默认工作台目的地，显式飞书另走飞书。
+WorkbenchContent.swift: 个人工作台四类创建适配（待办、本地日程、知识库存档、随手记）；固定回环 127.0.0.1:8787，不接受模型指定地址。创建前检查服务/租约，TaskStore 原子持久占用，返回 ID 后 GET 核验正文和日期；待办无计划/截止日期时补本地今天，提醒独立保留，明确日期不覆盖；去重身份取默认日期注入前的规范化参数，跨午夜及旧版未知结果不重放，旧任务快照不能抹掉回执。AgentRunner 提供当前本地日期与专用工具，默认工作台目的地，显式飞书另走飞书。
 
 HeadsetProfiles.swift / HeadsetPairing.swift：本机多型号耳机配置及四步原生检测向导，默认 Quark2；只有完整标准媒体键按下/松开验证后才能保存，长按可降级基础模式。原生映射守护与监听器共享 profiles.json，未知设备不接管。
 
@@ -180,7 +227,10 @@ WorkbenchLookup.swift: 六个只读工具查询个人工作台的日程、随手
 
 2026-09-29 查询修复：首版查询漏了个人工作台待办。WorkbenchLookup 现在包含 `search_workbench_tasks` / `read_workbench_task`，服务端按 `planned_date` 或 `due_at` 返回未删除待办；用户说“明天有哪些待办”必须使用该工具，不能用日程或随手记替代。
 
-耳机录制与现代设置（2026-10-08）：HeadsetOperationLearning 以独立信号状态机识别单击/双击/长按，自动与预设共用，长按待松开才确认；不同按键不混合双击。HeadsetMappingRuntime 的检测只反馈一次已识别操作，音量变化可按同设备、同方向的380ms窗口识别单击/双击，不推断左右耳或长按。HeadsetMappingWindow 用 SwiftUI 卡片式录制弹窗，识别后才出现动作，旧规则直接编辑，不重复录制；保存失败保留草稿，关闭/切预设停止检测与试用。HeadsetSettings 为同风格设置，按设备展示操作与范围，普通选择自动保存；等待秒数捕获编辑设备，避免切设备误写。HeadsetUI 为本机 Magpie 观察后的自适应灰白/深色卡片、分段选择及控件样式。原快捷键执行和规则 JSON 协议沿用。
+耳机录制与现代设置（2026-10-08）：HeadsetOperationLearning 以独立信号状态机识别单击/双击/长按，自动与预设共用，长按待松开才确认；不同按键不混合双击。HeadsetMappingRuntime 的检测只反馈一次已识别操作，音量变化可按同设备、同方向的380ms窗口识别单击/双击，不推断左右耳或长按。原快捷键执行和规则 JSON 协议沿用。
+
+HeadsetUI.swift: 耳机原生展示层；HeadsetPalette 集中镜像 Web 的经典蓝/米白语义色，HeadsetAppearance 只读既有主题文件并在主线程消费 TargetStore.themeDidChange；HeadsetThemeSurface 向两个窗口注入统一颜色并更新标题栏，保持与网页一致的浅色；卡片、按钮、选择器和提示共用令牌。
+HeadsetMappingWindow.swift: 耳机操作录制与编辑窗口；识别后才显示动作，旧规则直接编辑，失败保留草稿；关闭/切预设停止检测与试用，快捷键录制器保留原生键盘路径，外观复用 HeadsetUI。
 
 耳机菜单入口精简（2026-10-08）：应用菜单与 Dock 共用 settingsItem，直接显示“耳机设置…”并打开同一个设置窗口；不再有“耳机语音”子菜单和常驻“取消本次语音”。取消录音/等待发送、释放按键及 Esc 保护继续沿用，功能不因关闭设置窗口而关闭。
 
@@ -191,5 +241,11 @@ WorkbenchLookup.swift: 六个只读工具查询个人工作台的日程、随手
 
 
 键盘音量来源修正（2026-10-09）：HeadsetVolumeSourceGuard以线程安全的版本票据排除明确手动来源，确认窗口80ms、排除窗800ms。Runtime原始HID回调在describe的VID/PID过滤前识别键盘Collection；CG媒体键同步记录排除，自有marker/非音量事件不误伤。ClickControl执行和Runtime音量学习均先确认来源，确认前不恢复音量，键盘仅改系统音量；排除清候选/volume pending并同步基线。确认期间可排队rapid secondstep，sourcePending阻止提前首击；原始notification时间用于380ms配对，不用延迟后的main处理时间。headset-volume-source.test.swift覆盖两种通知顺序与来源分类，volume-runtime回归覆盖确认等待期及迟到通知，无真实输入副作用。
+
 CodexModelClient.swift: Codex 登录额度适配器——本机 CLI 以 ChatGPT 登录、GPT-6 Luna/low/标准速度生成隔离单轮规划；临时模型目录只关闭 Luna 原生工具包装，不改登录与模型 ID；短时登录复用按账号/程序元数据失效，原生工具误调在内部续轮前停止。分段时序只记录毫秒/字节/token，不含正文，完整回执与有效规划才成功。
+
 CodexModelProtocol.swift: 规划协议与能力隔离的纯边界——工具说明/参数完整保留但去掉重复包装，JSON 结果无损解转义后传入规划上下文；临时目录保留全部模型元数据，只移除 Luna 原生执行能力；输出按原工具白名单/schema 校验，不持有执行权或编造回执。
+
+模型计量：AgentRunner 从零调用累计，任一轮失败或缺失用量记 unknown；TaskUsage 保存可选 provider/model，旧记录不猜来源，TaskService 能力报告显示活动后端而非备用 API。
+
+AgentToolBatch.swift: 工具批次的纯时序策略；首项反馈可封闭后续动作，已执行工具后的同批预写反馈必须等真实回执再判断；准确单次打开可封闭尾部反馈，所有未执行调用都有明确历史标记，不改变执行租约与去重。

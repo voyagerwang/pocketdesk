@@ -1,4 +1,9 @@
-/** Quark2 minus: delay short-press volume until release; hold exclusively starts sprite. */
+/**
+ * [INPUT]: 依赖已配对耳机的减音量原始 HID、映射短租约、锁屏/检测状态及小精灵取消裁决。
+ * [OUTPUT]: 空闲时短按回放音量、长按启动并在松开结束；已有输入时按下立即请求统一取消，消费本次按压，后续脉冲/松开不重新录音或回放音量。
+ * [POS]: Sources 的默认有线唤醒适配器；只识别硬件时序，接收层决定取消与录音事实，不另建小精灵状态机。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 import AppKit
 import IOKit.hid
 import ApplicationServices
@@ -6,17 +11,22 @@ import ApplicationServices
 struct HeadsetHold {
     private(set) var pressed = false
     private(set) var active = false
+    private(set) var consumed = false
     mutating func press() -> Bool {
         guard !pressed else { return false }
-        pressed = true; return true
+        pressed = true; consumed = false; return true
     }
     mutating func threshold() -> Bool {
-        guard pressed, !active else { return false }
+        guard pressed, !active, !consumed else { return false }
         active = true; return true
+    }
+    mutating func consume() -> Bool {
+        guard pressed, !active else { return false }
+        consumed = true; return true
     }
     mutating func release() -> Bool {
         let wasActive = active
-        pressed = false; active = false
+        pressed = false; active = false; consumed = false
         return wasActive
     }
 }
@@ -33,6 +43,7 @@ final class HeadsetLongPress {
     var onBegin: (() -> Void)?
     var onEnd: (() -> Void)?
     var onCancel: (() -> Void)?
+    var onDismissInput: (() -> Bool)?
     func start() {
         let m = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         manager = m
@@ -121,6 +132,10 @@ final class HeadsetLongPress {
         if down {
             pendingRelease?.cancel(); pendingRelease = nil
             guard hold.press() else { return }
+            if onDismissInput?() == true {
+                _ = hold.consume()
+                return
+            }
             let work = DispatchWorkItem { [weak self] in
                 guard let self, self.hold.threshold() else { return }
                 NSLog("PocketDesk minus hold: sprite only")
@@ -142,6 +157,9 @@ final class HeadsetLongPress {
         pendingRelease = nil
         guard hold.pressed else { return }
         pending?.cancel(); pending = nil
-        if hold.release() { onEnd?() } else { lowerVolumeOnce() }
+        let consumed = hold.consumed
+        let active = hold.release()
+        if consumed { return }
+        if active { onEnd?() } else { lowerVolumeOnce() }
     }
 }

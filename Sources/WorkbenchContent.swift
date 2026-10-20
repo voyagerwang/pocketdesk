@@ -1,8 +1,8 @@
 /**
  * [INPUT]: 工作台回环 HTTP API、已授权任务和 TaskStore 的持久操作回执。
- * [OUTPUT]: 待办/本地日程/知识库存档/随手记创建，按 ID 读回核验；未知结果禁止重放。
+ * [OUTPUT]: 待办/本地日程/知识库存档/随手记创建，按 ID 读回核验；待办无计划/截止日期时默认今天，派生日期不改变操作身份，未知结果禁止重放。
  * [POS]: PocketDesk 本地业务适配；地址、路径与请求头不交给模型控制。
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import Foundation
 import CryptoKit
@@ -21,8 +21,8 @@ enum WorkbenchContent {
         var detail = ""
         if kind == "task" {
             for field in ["dueAt", "remindAt"] { properties[field] = ["type": "string", "description": "可选，电脑本地 YYYY-MM-DDTHH:mm，无此要求则省略"] }
-            properties["plannedDate"] = ["type": "string", "description": "可选，计划执行日期 YYYY-MM-DD"]
-            detail = "不支持指定项目；不把日程当待办。"
+            properties["plannedDate"] = ["type": "string", "description": "可选，计划执行日期 YYYY-MM-DD；用户未指定计划或截止日期时省略，由执行器默认安排到今天"]
+            detail = "plannedDate 和 dueAt 均未指定时默认安排到电脑本地今天；明确指定的计划日期、截止时间和提醒时间原样保留，提醒时间不代替计划日期。不支持指定项目；不把日程当待办。"
         } else if kind == "event" {
             for field in ["startAt", "endAt"] { properties[field] = ["type": "string", "description": "电脑本地 YYYY-MM-DDTHH:mm；必须从用户明确时间解析，缺少则先询问"] }
             properties["allDay"] = ["type": "boolean", "description": "可选；全天日程从当天零点到结束日次日零点"]
@@ -40,7 +40,7 @@ enum WorkbenchContent {
         ]]
     }
     struct Failure: Error { let message: String }
-    struct Spec { let kind: String; let label: String; let path: String; let body: [String: Any]; let expected: [String: Any] }
+    struct Spec { let kind: String; let label: String; let path: String; let body: [String: Any]; let expected: [String: Any]; let operationBody: [String: Any] }
     private static let queue = DispatchQueue(label: "PocketDesk.workbench.content")
     // 可注入传输用于隔离测试；生产固定回环，无 cookies、代理或重定向。
     static var request: (String, String, [String: Any]?) -> Result<[String: Any], Failure> = http
@@ -51,7 +51,7 @@ enum WorkbenchContent {
         guard let date = format.date(from: value) else { return false }
         return format.string(from: date) == value
     }
-    static func parse(_ arguments: String) throws -> Spec {
+    static func parse(_ arguments: String, now: Date = Date()) throws -> Spec {
         guard let data = arguments.data(using: .utf8), data.count <= 550_000,
               var value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let kind = value["kind"] as? String, let rawTitle = value["title"] as? String,
@@ -100,7 +100,15 @@ enum WorkbenchContent {
         default: throw Failure(message: "请选择待办、日程、知识库或随手记。")
         }
         guard Set(value.keys).isSubset(of: extra.union(["kind", "title", "content"])) else { throw Failure(message: "包含该内容类型不支持的字段，未创建。") }
-        return Spec(kind: kind, label: label, path: path, body: body, expected: expected)
+        // 操作身份只取显式参数，兼容旧回执并防止跨午夜重试因默认日期变化而重复创建。
+        let operationBody = body
+        if kind == "task", body["plannedDate"] == nil, body["dueAt"] == nil {
+            let format = DateFormatter(); format.locale = Locale(identifier: "en_US_POSIX")
+            format.dateFormat = "yyyy-MM-dd"
+            let today = format.string(from: now)
+            body["plannedDate"] = today; expected["planned_date"] = today
+        }
+        return Spec(kind: kind, label: label, path: path, body: body, expected: expected, operationBody: operationBody)
     }
     static func execute(toolName: String, arguments: String, taskId: String, authorized: @escaping () -> Bool,
                         completion: @escaping (AgentRunner.ToolOutcome) -> Void) {
@@ -119,11 +127,11 @@ enum WorkbenchContent {
                         completion: @escaping (AgentRunner.ToolOutcome) -> Void) {
         queue.async { completion(perform(arguments: arguments, taskId: taskId, authorized: authorized)) }
     }
-    static func perform(arguments: String, taskId: String, authorized: () -> Bool) -> AgentRunner.ToolOutcome {
+    static func perform(arguments: String, taskId: String, authorized: () -> Bool, now: Date = Date()) -> AgentRunner.ToolOutcome {
         let spec: Spec
-        do { spec = try parse(arguments) } catch { return .needsInput((error as? Failure)?.message ?? "内容参数无效。") }
+        do { spec = try parse(arguments, now: now) } catch { return .needsInput((error as? Failure)?.message ?? "内容参数无效。") }
         guard authorized(), TaskStore.task(id: taskId)?.status == .running else { return .failed("未执行：控制权已失效或任务已结束。") }
-        let data = try! JSONSerialization.data(withJSONObject: ["kind": spec.kind, "body": spec.body], options: [.sortedKeys])
+        let data = try! JSONSerialization.data(withJSONObject: ["kind": spec.kind, "body": spec.operationBody], options: [.sortedKeys])
         let key = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         if let previous = TaskStore.task(id: taskId)?.workbenchOperations?[key] {
             return previous == "pending" ? .failed("结果待核对：此前创建可能已保存，不会重复创建，请查看个人工作台。") : .sent(previous)
@@ -154,10 +162,17 @@ enum WorkbenchContent {
                   guard let actual = saved[key] else { return false }
                   return NSDictionary(dictionary: ["v": value]).isEqual(to: ["v": actual])
               }) else { return .failed("创建结果待核对：工作台已返回 ID \(id)，但读回内容未通过核验，不会重复创建。") }
-        let receipt = "已在个人工作台创建\(spec.label)「\(spec.body["title"] as! String)」（ID：\(id)）。"
+        let receipt = "已在个人工作台创建\(spec.label)「\(spec.body["title"] as! String)」（ID：\(id)）。" + taskScheduleSummary(spec)
         do { _ = try TaskStore.workbenchOperation(id: taskId, key: key, receipt: receipt) }
         catch { return .failed("内容已在个人工作台保存（ID：\(id)），但本机回执保存失败，请勿重复创建。") }
         return .sent(receipt)
+    }
+    private static func taskScheduleSummary(_ spec: Spec) -> String {
+        guard spec.kind == "task" else { return "" }
+        var dates: [String] = []
+        if let plannedDate = spec.body["plannedDate"] as? String { dates.append("计划日期：" + plannedDate) }
+        if let dueAt = spec.body["dueAt"] as? String { dates.append("截止：" + dueAt.replacingOccurrences(of: "T", with: " ")) }
+        return dates.isEmpty ? "未排期，可在今日页的未排期清单查看。" : dates.joined(separator: "；") + "。"
     }
     static func http(_ method: String, _ path: String, _ body: [String: Any]?) -> Result<[String: Any], Failure> {
         let config = URLSessionConfiguration.ephemeral
