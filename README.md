@@ -63,8 +63,8 @@ Windows helper 未来只需实现同一个命令和目标解析层（例如 `Set
 
 ### 直接下载安装（普通用户，Apple Silicon）
 
-1. 打开 [Releases](https://github.com/voyagerwang/pocketdesk/releases/latest)，下载 `PocketDesk-macOS-arm64.zip`；
-2. 解压得到 `PocketDesk.app`，拖入「应用程序」文件夹；
+1. 打开 [Releases](https://github.com/voyagerwang/pocketdesk/releases/latest)，下载 `PocketDesk-<版本>-macOS-arm64.dmg`（或内容相同的 `PocketDesk-macOS-arm64.zip`）；
+2. 双击挂载 DMG（或解压 ZIP），把 `PocketDesk.app` 拖入「应用程序」文件夹；
 3. 首次打开：**右键点击应用 → 打开 → 再点「打开」**（应用未经过 Apple 公证，直接双击会被 Gatekeeper 拦截），之后可正常启动；
 4. 启动后按电脑端控制台引导：授予辅助功能权限 → 手机扫码 → 选择目标应用。
 

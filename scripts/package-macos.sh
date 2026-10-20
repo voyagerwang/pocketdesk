@@ -66,7 +66,7 @@ hdiutil create -volname "PocketDesk ${VERSION}" -srcfolder "$STAGE_DIR" -fs HFS+
 
 # ZIP：沿用 README 中既有下载文件名，方便老链接与自动化继续使用。
 rm -f "$DIST_DIR/$ZIP_NAME"
-ditto -c -k --sequesterRsrc --keepParent "$BUILD_APP" "$DIST_DIR/$ZIP_NAME"
+ditto -c -k --keepParent "$BUILD_APP" "$DIST_DIR/$ZIP_NAME"
 
 (cd "$DIST_DIR" && shasum -a 256 "$DMG_NAME" "$ZIP_NAME" > SHA256SUMS)
 
