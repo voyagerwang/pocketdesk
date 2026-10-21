@@ -1,20 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- [INPUT]: 由 install-app.sh 复制进 App bundle。 [OUTPUT]: 声明 PocketDesk 的独立应用身份与访达与 Chrome 自动化用途（发送所选文件、清理重复标签页）。 [POS]: Resources 的 macOS bundle 元数据。 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
-  <key>CFBundleExecutable</key><string>VoiceDeck</string>
-  <key>CFBundleIdentifier</key><string>dev.voicedeck.app</string>
-  <key>CFBundleName</key><string>PocketDesk</string>
-  <key>CFBundleDisplayName</key><string>PocketDesk</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.3.1</string>
-  <key>CFBundleVersion</key><string>4</string>
-  <key>CFBundleIconFile</key><string>AppIcon</string>
-  <!-- ScreenCaptureKit 的 TCC 强制要求：缺失本键时 CGRequestScreenCaptureAccess() 会直接终止进程，而不是弹窗。 -->
-  <key>NSScreenCaptureUsageDescription</key><string>PocketDesk 需要屏幕录制权限，用于在手机端查看这台 Mac 的画面。</string>
-  <!-- 文件发送和标签页清理分别需要访达、Google Chrome 的自动化授权。 -->
-  <key>NSAppleEventsUsageDescription</key><string>PocketDesk 需要按你的指令读取访达所选文件，或读取并关闭 Google Chrome 中的重复标签页。</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>PocketDesk</string>
+	<key>CFBundleExecutable</key>
+	<string>VoiceDeck</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.voicedeck.app</string>
+	<key>CFBundleName</key>
+	<string>PocketDesk</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.3.2</string>
+	<key>CFBundleVersion</key>
+	<string>5</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>PocketDesk 需要按你的指令读取访达所选文件，或读取并关闭 Google Chrome 中的重复标签页。</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>PocketDesk 需要屏幕录制权限，用于在手机端查看这台 Mac 的画面。</string>
 </dict>
 </plist>
