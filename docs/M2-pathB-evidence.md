@@ -161,7 +161,7 @@ WorkBuddy 的会话数据在云端、本地无副本，AX 又读不到界面文�
 
 ### 服务端自己的记录：那 3 分 40 秒是真的断
 
-`Application Support/VoiceDeck/device-connections.json` 里手机（V2309A / Android / Chrome）的访问段：
+`Application Support/VoiceDeck/device-connections.json` 里手机（<安卓机型> / Android / Chrome）的访问段：
 
 ```
 09-18 00:50:47 → 00:59:17   通话 510s
@@ -177,10 +177,10 @@ WorkBuddy 的会话数据在云端、本地无副本，AX 又读不到界面文�
 `netstat` 连续采样抓到手机侧连接：
 
 ```
-tcp4 192.168.0.20.46488  ←  192.168.1.3.44120   ESTABLISHED
+tcp4 192.168.31.x.46488  ←  192.168.31.x.44120   ESTABLISHED
 ```
 
-同网段（Mac `192.168.0.20`）+ WSS 控制会话在线，说明网络路径本身没问题，属**间歇性**中断
+同网段（Mac `192.168.31.x`）+ WSS 控制会话在线，说明网络路径本身没问题，属**间歇性**中断
 （手机侧 Wi-Fi 休眠/唤醒、页面被系统冻结后恢复的最初几秒都是常见来源）。
 
 ### 改法：把四种原因分开说，并让恢复更快
