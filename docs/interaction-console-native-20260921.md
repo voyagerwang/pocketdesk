@@ -13,9 +13,9 @@ Android 0.3.0 / versionCode 5 新增原生文件、设备页及底部导航。�
 - Swift 解锁原生流程 15 项、网页管理隔离测试 13 项通过。
 - 网页管理流程、快捷键删除、全局声明与连接恢复回归通过；密码和配对测试使用隔离假数据。
 - Android assembleDebug、24 项单元测试及 lintDebug 通过；页面截图来自 Robolectric Android 35，并非真机。
-- 已重建安装 /Users/yz/Applications/PocketDesk.app，签名验证通过；运行实例的控制台 HTML、JS、CSS 与源码一致。
+- 已重建安装 /Users/<user>/Applications/PocketDesk.app，签名验证通过；运行实例的控制台 HTML、JS、CSS 与源码一致。
 - 使用真实网页的选择文件发送入口，将 PocketDesk-0.3.0.apk 加入待收列表，2371473 字节，尚未收到手机确认。
-- APK、SHA256 与预览位于 /Users/yz/Downloads/PocketDesk-0.3.0-native/。无 adb 设备连接，未安装到手机；实体手机下载及暗屏解锁仍待验收。
+- APK、SHA256 与预览位于 /Users/<user>/Downloads/PocketDesk-0.3.0-native/。无 adb 设备连接，未安装到手机；实体手机下载及暗屏解锁仍待验收。
 
 现有工作台功能保留；此记录不代表全部功能完成真机回归，尤其翻腕传感器能力与实际亮屏不能由构建测试代替。
 

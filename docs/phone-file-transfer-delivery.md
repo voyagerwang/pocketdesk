@@ -1,7 +1,7 @@
 # 电脑向安卓手机多文件传输交付
 
 2026-09-20。ZCode 完成初版后，返修因额度耗尽停止；Codex 按用户要求接手完成代码返修与隔离验证。
-执行目录：`/Users/yz/.codex/worktrees/phone-file-transfer/PocketDesk`。
+执行目录：`/Users/<user>/.codex/worktrees/phone-file-transfer/PocketDesk`。
 
 ## 当前交付状态
 
@@ -80,7 +80,7 @@ GEB 根地图、Sources/Web/tests/docs地图与变更头部同步；旧ZCode自�
 ## 用户授权安装后的检查
 
 2026-09-20T22:43:55.447338+08:00：当前工作目录集成后完整构建退出码0，安装脚本退出码0。新进程监听46387；phone-files.js/css服务字节与源码一致；未鉴权收件请求401，已配对请求200。已准备无隐私的 PocketDesk-发送测试.txt，真实应用收件列表确认待接收，未代替用户点击接收。
-旧应用和集成前源码备份：`/Users/yz/.codex/deployments/phone-files-20260920-224233`。手机保存结果及Finder拖放仍待用户实测。
+旧应用和集成前源码备份：`/Users/<user>/.codex/deployments/phone-files-20260920-224233`。手机保存结果及Finder拖放仍待用户实测。
 
 ## Via HTTPS 与发送入口反馈修正
 

@@ -26,7 +26,7 @@
 
 ## 本机交付
 
-已更新 `/Users/cm/Applications/PocketDesk.app`。安装前确认无执行中任务、无未提交手机草稿；93条任务快照、耳机规则/按设备设置/旧设备档案均逐字保留。现有页面和 helper 保留，安装版 helper 的自测通过。签名、签名后构建与安装执行文件一致、LaunchAgent运行和HTTP 200已核验，见[交付验证](evidence/headset-magpie-20261008/installation-verification.json)。旧应用保存在独立工作树的 `build/headset-magpie-20261008/rollback/PocketDesk.app`。
+已更新 `/Users/<user>/Applications/PocketDesk.app`。安装前确认无执行中任务、无未提交手机草稿；93条任务快照、耳机规则/按设备设置/旧设备档案均逐字保留。现有页面和 helper 保留，安装版 helper 的自测通过。签名、签名后构建与安装执行文件一致、LaunchAgent运行和HTTP 200已核验，见[交付验证](evidence/headset-magpie-20261008/installation-verification.json)。旧应用保存在独立工作树的 `build/headset-magpie-20261008/rollback/PocketDesk.app`。
 
 2026-10-08 交付时 Mac 锁定，未实点安装后的窗口；当轮未进行真实耳机按键、语音录音或外部派单。原生渲染和注入事件的状态机检查不替代真机验收。
 

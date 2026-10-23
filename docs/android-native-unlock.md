@@ -60,7 +60,7 @@
 - `tests/run-unlock-tests.sh` 退出 0：既有授权/WebAuthn/relay 联调回归，以及新增 14 项原生授权检查和 10 项原生路由检查通过，真实锁屏与输入为替身。
 - 网页 phone-settings/web-globals/live-recovery 回归通过，`git diff --check` 通过。
 - APK 用 apksigner 验证签名通过；aapt 检查最终 Manifest 仅有 INTERNET、CAMERA、USE_BIOMETRIC 三项权限。
-- Java 17、SDK 与 Gradle 安装在开发机缓存目录 `/Users/yz/.cache/pocketdesk-android`。首次下载 Gradle 使用镜像，并与官方发行 SHA256 核验一致；Wrapper 也固定此摘要。未改变系统 Java 默认路径。
+- Java 17、SDK 与 Gradle 安装在开发机缓存目录 `/Users/<user>/.cache/pocketdesk-android`。首次下载 Gradle 使用镜像，并与官方发行 SHA256 核验一致；Wrapper 也固定此摘要。未改变系统 Java 默认路径。
 - 诊断日志在 `/tmp/pd-android-final-build.log`、`/tmp/pd-final-unlock-tests.log`、`/tmp/pd-native-host-package.log`，未记录真实密码。
 
 ## 必须继续做的真机验收

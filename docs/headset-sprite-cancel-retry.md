@@ -34,13 +34,13 @@ SpriteDesktopInput 裁决接续与取消，默认音量和自定义映射只接�
 
 验证覆盖自定义动作路由、启动去重、超时释放、原文保留、焦点失败重试、取消后的迟到焦点、空白尾字等待、开关式快捷键未知状态，以及旧拥有者退休。测试使用内存按键替身，不启动真实录音或提交任务；实际 D95 与豆包收音效果仍需佩戴耳机确认。
 
-2026-10-11 验证：headset-voice-pause、headset-volume-runtime 与真实原生接收框 sprite-voice-interaction 均通过。安装包使用已通过构建的完整源码基线叠加本次六个耳机/小精灵源文件，未纳入同一工作区正在进行的模型后端改造。完整应用构建及签名核验通过，已安装并启动 `/Users/yz/Applications/PocketDesk.app`；本机状态接口 HTTP 200、辅助功能可用，安装二进制匹配验证产物，14 个配置/任务相关文件哈希未改变。旧应用备份位于 `/tmp/pocketdesk-sprite-voice/rollback/PocketDesk.app`。
+2026-10-11 验证：headset-voice-pause、headset-volume-runtime 与真实原生接收框 sprite-voice-interaction 均通过。安装包使用已通过构建的完整源码基线叠加本次六个耳机/小精灵源文件，未纳入同一工作区正在进行的模型后端改造。完整应用构建及签名核验通过，已安装并启动 `/Users/<user>/Applications/PocketDesk.app`；本机状态接口 HTTP 200、辅助功能可用，安装二进制匹配验证产物，14 个配置/任务相关文件哈希未改变。旧应用备份位于 `/tmp/pocketdesk-sprite-voice/rollback/PocketDesk.app`。
 
 2026-10-11 后续修复：用户实测小精灵收起但豆包条残留；取消原先仅发送快捷键释放、随即撤掉宿主焦点，没有取消请求和关闭确认。现改为同源 Option 释放、异步系统 PID 与本地接收框双重核验后发送 Esc、保留焦点直到语音条消失；本轮首次和补发取消均受代际/取消轮次保护，自有 Esc 不递归触发新取消。完整构建与签名、左右 Option/普通 Esc 事件源回归、解锁后的真实原生接收框取消状态回归均通过。原生回归的豆包可见状态与按键投递使用替身，实际豆包关闭效果继续由耳机实测确认。修复已安装，HTTP 200、辅助功能可用、安装二进制匹配验证包；配置文件哈希不变，运行中的 tasks.json/dedupe.json 有更新，未声明任务文件完全不变。旧应用备份为 `/tmp/pocketdesk-dictation-cancel/rollback/PocketDesk.app`。
 
 2026-10-12 右耳间歇失效诊断：北京时间 09:02:37、09:02:39、09:02:42、09:03:00、09:03:35 已记录音量单击，随后停在“请先切到要输入的应用，再唤醒语音”，没有进入输入框准备；同一时段左耳两次成功唤醒并明确取消。代码此前只用 orderOut 释放小精灵 keyWindow，没有交回被 NSApp.activate 取得的应用焦点，普通右耳因此可能面对本进程或空焦点而被拒绝。补齐明确取消后的安全归还，并给启动拒绝分别记录环境门禁、真实焦点 PID、本进程活跃/keyWindow 状态；不记录语音正文。
 
-2026-10-12 验证与安装：sprite-panel 的真实 AppKit 接收框与模拟焦点/激活回归、sprite-voice-interaction 的同源按键替身取消回归、headset-voice-pause 的合成语音结束回归均通过；首次异步借焦点期间新打开设置窗口不会抢回，唤醒时原有设置窗口仍允许明确接收。完整应用编译、签名及本次文件 diff 检查通过。基于已安装版本的源码快照仅替换 SpriteFeedbackPanel 与 HeadsetVoiceControl，现有 Web 资源与耳机 helper 逐文件相同；安装到 `/Users/yz/Applications/PocketDesk.app` 后二进制匹配验证包、辅助功能可用、HTTP 状态可读、应用与耳机 helper 均运行，六份配置/配对文件哈希不变。旧应用保存在 `/tmp/pocketdesk-right-voice/rollback/PocketDesk.app`。合成回归不证明真实 D95 的整段识别与提交成功；此次仅覆盖明确取消后的应用焦点归还，不扩展任务执行阶段的焦点策略。
+2026-10-12 验证与安装：sprite-panel 的真实 AppKit 接收框与模拟焦点/激活回归、sprite-voice-interaction 的同源按键替身取消回归、headset-voice-pause 的合成语音结束回归均通过；首次异步借焦点期间新打开设置窗口不会抢回，唤醒时原有设置窗口仍允许明确接收。完整应用编译、签名及本次文件 diff 检查通过。基于已安装版本的源码快照仅替换 SpriteFeedbackPanel 与 HeadsetVoiceControl，现有 Web 资源与耳机 helper 逐文件相同；安装到 `/Users/<user>/Applications/PocketDesk.app` 后二进制匹配验证包、辅助功能可用、HTTP 状态可读、应用与耳机 helper 均运行，六份配置/配对文件哈希不变。旧应用保存在 `/tmp/pocketdesk-right-voice/rollback/PocketDesk.app`。合成回归不证明真实 D95 的整段识别与提交成功；此次仅覆盖明确取消后的应用焦点归还，不扩展任务执行阶段的焦点策略。
 
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 
@@ -60,7 +60,7 @@ SpriteDesktopInput 裁决接续与取消，默认音量和自定义映射只接�
 
 验证：完整应用编译通过；81 项真实定位状态机的合成用例、native-route 的健康/来源/按住/释放/双击接收框回归、voice-pause 的普通/小精灵长按取消接续回归，以及默认减号消费取消的纯状态检查通过。未注入真实按键、未录音或提交任务。原生 sprite-voice-interaction 已编译，但当前系统明确 locked 且辅助功能有效，未运行需要真实 keyWindow 的新增原生窗口回归，也未冒称真实耳机已验收。
 
-发布证据：工作区另一并发任务已于 09:54 安装了包含本次全部耳机代码的版本；经安装二进制 SHA256 与其签名包及 source-manifest 核验，重新基于该已安装源快照构建和运行回归，121 个生产源文件逐个相同，保留其中已经部署的其他修复，没有覆盖回旧版本。当前安装路径 `/Users/yz/Applications/PocketDesk.app`，二进制 SHA256 `e879fa37b23cb5f54d7d9084a985431b783669f799ccb7e51ba660039395006e`，签名核验通过、状态 HTTP 200、辅助功能可用；验证快照和日志位于 `/tmp/pocketdesk-unified-headset/rebased`。解锁后验收：先把焦点放在当前应用正文而非输入框，再用普通语音；有线中键按住/松开，并检查唤醒小精灵后再次短按唤醒键取消，旧松开不再次录音。
+发布证据：工作区另一并发任务已于 09:54 安装了包含本次全部耳机代码的版本；经安装二进制 SHA256 与其签名包及 source-manifest 核验，重新基于该已安装源快照构建和运行回归，121 个生产源文件逐个相同，保留其中已经部署的其他修复，没有覆盖回旧版本。当前安装路径 `/Users/<user>/Applications/PocketDesk.app`，二进制 SHA256 `e879fa37b23cb5f54d7d9084a985431b783669f799ccb7e51ba660039395006e`，签名核验通过、状态 HTTP 200、辅助功能可用；验证快照和日志位于 `/tmp/pocketdesk-unified-headset/rebased`。解锁后验收：先把焦点放在当前应用正文而非输入框，再用普通语音；有线中键按住/松开，并检查唤醒小精灵后再次短按唤醒键取消，旧松开不再次录音。
 
 
 ## 2026-10-15 小精灵出现但语音未启动

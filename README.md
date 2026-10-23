@@ -232,7 +232,7 @@ MOONDROP Quark2 音量减（－）按住超过 0.7 秒，在原来的桌面小�
 也支持“打开 WorkBuddy 的 WorkBench 项目，让它去 GitHub 上拉取更新，看看有没有更新”这样的组合指令：选中指定空间后继续提交完整任务，以派单接收回执收尾；打开页面只作为准备步骤。项目参数遗漏时先纠正，避免投到默认空间。
 
 2026-10-09 本机 WorkBuddy 5.6.2 已验证 PocketDesk 打开及切换到 workbench，任务回执与原生选择器一致。
-指定空间派单进一步实机通过：PocketDesk 任务 `6034121B-1FFC-4AC8-B895-4D34466BFFBD` 收到 `confirmed` 回执，WorkBuddy 在 workbench 下新建“检查 GitHub 上的更新”，完整正文可见，并开始在 `/Users/yz/Documents/workbench` 检查远端更新；回执证明任务接收，不代表 Git 更新已经完成。
+指定空间派单进一步实机通过：PocketDesk 任务 `6034121B-1FFC-4AC8-B895-4D34466BFFBD` 收到 `confirmed` 回执，WorkBuddy 在 workbench 下新建“检查 GitHub 上的更新”，完整正文可见，并开始在 `/Users/<user>/Documents/workbench` 检查远端更新；回执证明任务接收，不代表 Git 更新已经完成。
 
 ### 耳机控制已整合到 PocketDesk
 

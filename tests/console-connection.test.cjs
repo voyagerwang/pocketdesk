@@ -74,7 +74,7 @@ assert.deepEqual(Object.keys(context.window), ['PocketDeskConsoleConnection'],
 
 const stableURL = 'http://pocketdesk-fixture.local:46387/?token=fixture-connection-token';
 const ipA = 'http://192.168.31.100:46387/?token=fixture-connection-token';
-const ipB = 'http://192.168.31.196:46387/?token=fixture-connection-token';
+const ipB = 'http://192.168.31.x:46387/?token=fixture-connection-token';
 const stateFor = ipWorkspaceURL => ({ workspaceURL: stableURL, ipWorkspaceURL });
 const qrType = id => new URL(nodes[id].src, 'http://127.0.0.1:46387').searchParams.get('type');
 function assertCleared(entries = [['qr-ip', 'ipUrl'], ['qr-host', 'hostUrl']]) {

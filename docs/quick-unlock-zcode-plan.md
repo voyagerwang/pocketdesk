@@ -1,9 +1,9 @@
 # PocketDesk 免手装证书快捷解锁 · ZCode 实施工单
 
 > 日期：2026-09-20。状态：用户已授权制定方案并交 ZCode 实现；本文不是已实现或已验收声明。
-> 执行目录：/Users/yz/.codex/worktrees/quick-unlock/PocketDesk
+> 执行目录：/Users/<user>/.codex/worktrees/quick-unlock/PocketDesk
 > 分支：codex/quick-unlock；基线：62344055e713910552a8ba144243a166573fd1e7。
-> 原仓库：/Users/yz/Documents/PocketDesk。原仓库存在其他未提交改动，本 worktree 从已提交 HEAD 建立，未复制文件传输等未完成初稿。交付时说明与原工作区的集成接缝，不覆盖其改动。
+> 原仓库：/Users/<user>/Documents/PocketDesk。原仓库存在其他未提交改动，本 worktree 从已提交 HEAD 建立，未复制文件传输等未完成初稿。交付时说明与原工作区的集成接缝，不覆盖其改动。
 
 ## 1. 目标与不可变边界
 

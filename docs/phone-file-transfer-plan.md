@@ -2,8 +2,8 @@
 
 > 目标交付时间：2026-09-20 09:00（Asia/Shanghai）。这是目标，不允许以截止时间为由省略鉴权与验收。
 > 实现负责人：ZCode。Codex 本轮负责方案与交接，已有代码仅为未完成初稿。
-> 执行目录：`/Users/yz/.codex/worktrees/phone-file-transfer/PocketDesk`。
-> 原仓库：`/Users/yz/Documents/PocketDesk`。不得覆盖原仓库其他未提交工作。
+> 执行目录：`/Users/<user>/.codex/worktrees/phone-file-transfer/PocketDesk`。
+> 原仓库：`/Users/<user>/Documents/PocketDesk`。不得覆盖原仓库其他未提交工作。
 
 ## 1. 用户确认的范围
 

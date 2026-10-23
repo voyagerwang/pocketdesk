@@ -119,7 +119,7 @@ Workbench / 微信 / 飞书 ──┴→ 同一个 Workbench 助手入口与现�
 - [Skill 自动安装](../../workbench/server/src/services/skill-capture.ts)、[用量聚合](../../workbench/server/src/services/agent-task-usage.ts)。
 - [PocketDesk 任务服务](../Sources/TaskService.swift)、[持久占用](../Sources/TaskStore.swift)、[配对鉴权](../Sources/Auth.swift)。
 
-本轮执行命令：工作目录 `/Users/yz/Documents/workbench`，统一前缀 `./node_modules/.bin/tsx server/`，以下七项均 exit 0：
+本轮执行命令：工作目录 `/Users/<user>/Documents/workbench`，统一前缀 `./node_modules/.bin/tsx server/`，以下七项均 exit 0：
 
 | 脚本 | 验证范围 |
 |---|---|
@@ -152,12 +152,12 @@ Workbench / 微信 / 飞书 ──┴→ 同一个 Workbench 助手入口与现�
 
 PocketDesk 的书签检索/打开、自然名称解析、甩送复用普通发送、GUI 新任务/明确续接、桌面反馈只读投影已纳入 [接入与切流门禁](integration-gates-and-rollout.md)。桌面面板不是独立业务输入来源。HEAD 不包含全部当前修改，实施基线需同时保存 git status/diff 与被测文件摘要。
 
-A/B 实现保存在隔离 worktree，未合并、未部署；第二轮验收：A 原缺陷反例通过、19/19 测试与 66 个样例的标准校验对照通过，可冻结首批契约供 C 对齐；B 11 组测试通过，但多观测先成功后失败仍误报 verified，暂不验收。C 的 Swift 纯协议包已由 Codex 接手补完并验收：111 项断言、共享 66 个样例全部通过，冻结包摘要未变；交付位于隔离 C worktree，未合并或部署。G0 整体仍未完成，B 与部署事实门禁尚待验收。详见 [C 验收记录](/Users/yz/.codex/zcode-night-20260919/REVIEW-C-20260919.md)。
+A/B 实现保存在隔离 worktree，未合并、未部署；第二轮验收：A 原缺陷反例通过、19/19 测试与 66 个样例的标准校验对照通过，可冻结首批契约供 C 对齐；B 11 组测试通过，但多观测先成功后失败仍误报 verified，暂不验收。C 的 Swift 纯协议包已由 Codex 接手补完并验收：111 项断言、共享 66 个样例全部通过，冻结包摘要未变；交付位于隔离 C worktree，未合并或部署。G0 整体仍未完成，B 与部署事实门禁尚待验收。详见 [C 验收记录](/Users/<user>/.codex/zcode-night-20260919/REVIEW-C-20260919.md)。
 
 新增产品解释见 [一套小精灵如何连接多个入口和执行能力](assistant-product-and-routing.md)：查用量工具、GUI 观察反馈及跨入口记忆均按目标设计与现有实现分开，新增能力不暗改冻结 14-ID 契约。
 
 ## 9. 2026-09-19 后续交付校准
 
-B 已补修并验收：当前唯一观测契约、时间/范围/证据/环境校验，冲突或多条不选成功。A/B/C 均仅隔离包验收通过，部署拓扑与跨端 Bridge 尚未完成，G0 总门禁不自动通过。见 [B 最终验收](/Users/yz/.codex/zcode-night-20260919/REVIEW-B-FINAL-20260919.md)。
+B 已补修并验收：当前唯一观测契约、时间/范围/证据/环境校验，冲突或多条不选成功。A/B/C 均仅隔离包验收通过，部署拓扑与跨端 Bridge 尚未完成，G0 总门禁不自动通过。见 [B 最终验收](/Users/<user>/.codex/zcode-night-20260919/REVIEW-B-FINAL-20260919.md)。
 
-分层记忆管理首版在 D-memory 隔离 worktree：长期条目搜索/分类/编辑/停用/删除、现有 global 执行规则编辑/撤销、当前会话上下文说明；事务内版本冲突保护。没有跨 PocketDesk 共享、自动候选或打开目标规则，未合并/部署。见 [交付记录](/Users/yz/.codex/zcode-night-20260919/worktrees/D-memory/docs/memory-management-delivery-20260919.md)。
+分层记忆管理首版在 D-memory 隔离 worktree：长期条目搜索/分类/编辑/停用/删除、现有 global 执行规则编辑/撤销、当前会话上下文说明；事务内版本冲突保护。没有跨 PocketDesk 共享、自动候选或打开目标规则，未合并/部署。见 [交付记录](/Users/<user>/.codex/zcode-night-20260919/worktrees/D-memory/docs/memory-management-delivery-20260919.md)。

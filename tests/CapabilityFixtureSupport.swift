@@ -13,7 +13,8 @@ enum CapabilityProtocolPaths {
     static let environmentOverrideKey = "PD_UNIFIED_ASSISTANT_PROTOCOL_DIR"
     /// 本工单指定冻结包（SHA256SUMS.json 已核验）；只读，不写冻结包。
     static let frozenPackageProtocolDirectory =
-        "/Users/yz/.codex/zcode-night-20260919/frozen/A-protocol-v1-r2/protocols/unified-assistant/v1"
+        (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".codex/zcode-night-20260919/frozen/A-protocol-v1-r2/protocols/unified-assistant/v1")
 
     static func defaultProtocolDirectory() -> URL {
         if let raw = ProcessInfo.processInfo.environment[environmentOverrideKey], !raw.isEmpty {
@@ -98,7 +99,8 @@ enum FixtureRunner {
 // 冻结文件逐个核对，字段表守卫只作额外诊断，不声称覆盖 schema 的全部语义。
 extension FixtureRunner {
     static func verifyFrozenFiles(protocolDir: URL) throws -> [String] {
-        let root = URL(fileURLWithPath: "/Users/yz/.codex/zcode-night-20260919/frozen/A-protocol-v1-r2")
+        let root = URL(fileURLWithPath: (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".codex/zcode-night-20260919/frozen/A-protocol-v1-r2"))
         let hashes = try JSONDecoder().decode([String: String].self,
             from: Data(contentsOf: root.appendingPathComponent("SHA256SUMS.json")))
         let prefix = "protocols/unified-assistant/v1/"

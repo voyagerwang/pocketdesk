@@ -47,7 +47,7 @@ Mac 已登录、PocketDesk 仍运行时，用户在手机上完成密码输入�
 
 后续权限请求根因：点击应用自身两项授权按钮仍未弹出提示。tccd 日志明确出现 `failed to find an Application URL` 及 `kLSApplicationNotFoundErr`，说明直接由 LaunchAgent 启动临时 bundle 前未完成 Launch Services 注册。不能只归因于用户授权了其他应用。已对当前 bundle 执行 `lsregister -f`，并在构建产物 RUN.txt 中补齐注册步骤；未重置或编辑 TCC 数据库。重试前电脑被手动锁定，界面工具报告无法操作；实际弹窗与授权结果仍待解锁后核对。
 
-后续实机核对：临时目录注册后，辅助功能列表仍未显示测试程序，因此不能视为授权问题已解决。已将同一签名应用安装到 `/Users/cm/Applications/PocketDeskSessionProbe.app`，重新注册，并将临时 agent.plist 的可执行路径切到该固定位置后重启。系统添加窗口现已实际选中 PocketDeskSessionProbe，等待用户点击“打开”确认添加；此时尚未声称权限生效。清理时除临时报告目录外，还需在停止 agent、移除隐私授权后删除此独立测试 App。
+后续实机核对：临时目录注册后，辅助功能列表仍未显示测试程序，因此不能视为授权问题已解决。已将同一签名应用安装到 `/Users/<user>/Applications/PocketDeskSessionProbe.app`，重新注册，并将临时 agent.plist 的可执行路径切到该固定位置后重启。系统添加窗口现已实际选中 PocketDeskSessionProbe，等待用户点击“打开”确认添加；此时尚未声称权限生效。清理时除临时报告目录外，还需在停止 agent、移除隐私授权后删除此独立测试 App。
 
 录屏按钮反馈修复：系统界面已确认 PocketDeskSessionProbe 的辅助功能开关为 on，录屏开关为 off，应用已出现在两份权限列表中。requestScreen 原先丢弃请求返回值，仅重复状态；现在未获准时记录 screen_permission_pending 并跳转录屏设置，已获准时记录 granted。已重新编译、严格验证签名并更新固定安装路径；录屏开关仍需用户确认开启，不能把打开设置等同于授权完成。
 

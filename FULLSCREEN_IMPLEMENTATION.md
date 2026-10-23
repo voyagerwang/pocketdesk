@@ -41,7 +41,7 @@
 
 ## 启用与真机验收
 
-已按用户要求安装并重启 `/Users/cm/Applications/PocketDesk.app`，签名校验通过。旧版本保留在 `/Users/cm/Applications/.PocketDesk-backup-20260909-125507.app`。服务端已返回 3.0.0 页面，手机刷新原页面即可使用新版。后续可通过项目既有 `./scripts/install-app.sh` 更新。仅刷新网页不会升级旧 Mac helper；只启动第二个副本也可能因端口占用继续连接到旧实例。
+已按用户要求安装并重启 `/Users/<user>/Applications/PocketDesk.app`，签名校验通过。旧版本保留在 `/Users/<user>/Applications/.PocketDesk-backup-20260909-125507.app`。服务端已返回 3.0.0 页面，手机刷新原页面即可使用新版。后续可通过项目既有 `./scripts/install-app.sh` 更新。仅刷新网页不会升级旧 Mac helper；只启动第二个副本也可能因端口占用继续连接到旧实例。
 
 1. iPhone Safari / Android Chrome 各验证一次：竖横切换、浏览器地址栏变化、软键盘升降、中文候选与听写、连续发送 10 次、清空后再输入、失败草稿恢复。
 2. Retina / 缩放分辨率 / 竖向副屏上点击四角和细小目标，双击、拖动窗口、滚动长文；拖动中切后台、切屏和断网，确认无粘键。

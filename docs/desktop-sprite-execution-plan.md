@@ -1,7 +1,7 @@
 # 桌面小精灵对话球：首版实施交接
 
 > 2026-09-18；用户已确认交互方向，交由 WorkBuddy Hy4 preview 实施。
-> 项目：/Users/yz/Documents/PocketDesk。本文是本次实施范围的权威；desktop-feedback-tts-plan.md 提供调研背景。
+> 项目：/Users/<user>/Documents/PocketDesk。本文是本次实施范围的权威；desktop-feedback-tts-plan.md 提供调研背景。
 > [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 
 ## 1. 本次交付

@@ -400,7 +400,7 @@ P0／P1 可以先交付使用；**达到“边看边拖也跟手”的完整目�
 ### 5.5 交给执行模型的指令
 
 ```text
-请在 /Users/cm/Documents/pocketdesk 执行全屏改造。
+请在 /Users/<user>/Documents/pocketdesk 执行全屏改造。
 
 先读 AGENTS.md、CLAUDE.md、DESIGN.md、Web/CLAUDE.md、Sources/CLAUDE.md，
 再读 FULLSCREEN_WORKSPACE_PLAN.md。它是本轮主方案，旧 FULLSCREEN_POINTER_PROPOSAL.md

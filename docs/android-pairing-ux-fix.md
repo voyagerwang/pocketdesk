@@ -39,7 +39,7 @@ ZXing 4.3.0 官方构建声明 core 1.6.0 / fragment 1.3.6，但发布 POM 只�
 - 电脑控制台配对卡已由 Playwright 在全接口替身下渲染；未请求真实控制服务。
 - Android lint：0 errors / 5 warnings（含既有自定义固定证书校验提醒与中文字符串本地化提醒）；未隐藏 lint 错误。
 - Mac 配套应用全量构建退出 0，签名核验通过；APK v2 签名核验通过。`git diff --check` 通过。
-- 交付目录：`/Users/yz/Downloads/PocketDesk-0.1.1-pairing-fix/`，含 APK、Mac 配套 ZIP、说明与三张界面截图。尚未替换正在运行的 Mac 版本，尚未安装到用户手机。
+- 交付目录：`/Users/<user>/Downloads/PocketDesk-0.1.1-pairing-fix/`，含 APK、Mac 配套 ZIP、说明与三张界面截图。尚未替换正在运行的 Mac 版本，尚未安装到用户手机。
 - 本轮代码仍位于 quick-unlock worktree，没有将该分支其他未交付改动合入主仓库。
 
 ## 完整版本集成与实际安装
@@ -48,4 +48,4 @@ ZXing 4.3.0 官方构建声明 core 1.6.0 / fragment 1.3.6，但发布 POM 只�
 
 Mac 0.3.1（build 4）全量构建及安装退出 0，新 VoiceDeck 已运行；原生配对状态接口 native-lan / configured=true，功能默认仍关闭。文件收件匿名请求 401、已配对只读请求 200，所有安装 Web 字节与当前完整源码一致，应用签名核验通过。文件 HTTP 联测与真实浏览器下载字节核验、原生配对/路由测试、甩送/画面重连/网页门禁回归通过。
 
-旧应用和集成前源码备份：`/Users/yz/.codex/deployments/pairing-full-20260920-232729`。下载目录中的 Mac 配套 ZIP 也替换为此次完整安装版；安卓仍为已验证的 0.1.1。adb 未发现手机，不声称手机安装完成。未保存电脑密码或执行实际锁屏/解锁。
+旧应用和集成前源码备份：`/Users/<user>/.codex/deployments/pairing-full-20260920-232729`。下载目录中的 Mac 配套 ZIP 也替换为此次完整安装版；安卓仍为已验证的 0.1.1。adb 未发现手机，不声称手机安装完成。未保存电脑密码或执行实际锁屏/解锁。

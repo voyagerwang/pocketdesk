@@ -28,4 +28,4 @@ PocketDesk 部署验收（2026-10-12）：固定源码快照完整应用构建�
 
 2026-10-13 默认今天规则验收：固定源码快照的工作台隔离回归、AgentRunner 回归、完整 Swift 应用构建及签名核验通过。覆盖遗漏/null/空日期、仅提醒、明确未来计划/截止、实际 POST 字段与日期读回不符；跨午夜成功/未知结果和旧版无日期键均不重复写入。测试未写入真实工作台业务数据。
 
-2026-10-13 部署验收：新规则已安装到 `/Users/yz/Applications/PocketDesk.app` 并启动，保留旧安装供恢复。安装二进制与通过回归的构建哈希一致，包含新提示和工具规则；PocketDesk `/api/status` 与 Workbench `/api/health` 均返回 HTTP 200。沿用已安装资源和助手，未批量纳入网页等并行修改；L3/L2 已同步，L1 核对后无模块结构变更。
+2026-10-13 部署验收：新规则已安装到 `/Users/<user>/Applications/PocketDesk.app` 并启动，保留旧安装供恢复。安装二进制与通过回归的构建哈希一致，包含新提示和工具规则；PocketDesk `/api/status` 与 Workbench `/api/health` 均返回 HTTP 200。沿用已安装资源和助手，未批量纳入网页等并行修改；L3/L2 已同步，L1 核对后无模块结构变更。
