@@ -16,8 +16,8 @@ with sync_playwright() as p:
             if '/api/v1/phone-files/download/' in route.request.url:
                 return route.fulfill(body=b'fixture',headers={'Content-Type':'application/octet-stream','Content-Disposition':'attachment; filename="fixture.txt"'})
             route.fulfill(body='<meta name="viewport" content="width=device-width,initial-scale=1"><section class="phone-files" id="phone-files"><p id="phone-files-notice"></p><div id="phone-files-list"></div></section>', content_type='text/html')
-        page.route('https://192.168.31.x:46487/**', serve)
-        page.goto('https://192.168.31.x:46487/')
+        page.route('https://192.168.0.20:46487/**', serve)
+        page.goto('https://192.168.0.20:46487/')
         page.add_style_tag(path=str(ROOT/'Web/style.css'))
         page.add_style_tag(content=':root{--screen-hit:44px;--accent:blue;--accent-ink:white}*{box-sizing:border-box}body{margin:8px}')
         page.add_style_tag(path=str(ROOT/'Web/phone-files.css'))
