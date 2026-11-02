@@ -23,6 +23,35 @@ Computer Use 实际观察并点击了 WorkBuddy、Cola、ZCode 的新建入口�
 
 隔离测试覆盖模式、别名、旧页面拒绝、深链编码、并发和重载去重。版本升级造成页面证据变化时，应更新适配器与证据测试，不能改成猜坐标或退回旧会话。
 
+
+## 2026-11-02 Cola 1.5.3「新建子聊天」与 WorkBuddy 5.9.3 空辅助功能树
+
+用户报告"PocketDesk 又不能给 Cola 发指令"，并要求同时支持 WorkBuddy。两个应用都在 10 月底升级（Cola 1.5.3、WorkBuddy 5.9.3），先只读采两边的真实 AX 树再改：
+
+- **Cola 的编码侧栏整体改名了。** 1.5.3 把「会话/项目」侧栏改称「子聊天 / Side chats」，新建入口从「新建项目/新建会话」变成 `AXButton desc=[新建子聊天]`（`aria-label` 走 `codingCola.agentSidebar.newChat`，英文 `New side chat`）；空会话欢迎句也从「告诉 Cola，你想在这个项目里做点什么」简化成「告诉 Cola，你想做点什么」，侧栏没有会话时显示启动页「开始新聊天 / Start a new chat」。原实现只认旧三个标签，因此在 1.5.3 上永远找不到新建入口。本次三个版本标签并列，新页证据加新欢迎句与启动页标题，旧文案继续兼容。发送仍是语义「发送」按钮，撰写框空态 AXValue 仍是单个换行（`clean` 后为空），这条不用改。
+- **WorkBuddy 5.9.3 冷启动不构建 DOM 辅助功能树。** 窗口存在、`AXWindows` 只有一个，但整棵树只剩 `AXGroup` 空壳，没有 `AXWebArea`、没有欢迎页、没有撰写框——依赖树的新建入口与输入一律无从核验。这是 Chromium/Electron 的懒构建：没检测到辅助功能客户端就不建树。本次在第一次读树前对目标进程请求一次「手动辅助功能」（`AXManualAccessibility`，先写 false 再写 true，应用若记着上次的 true 时重复写 true 属于"无变化"不会重建），只改辅助功能开关，不激活、不改窗口、不碰草稿。开启后 5.9.3 的页面证据与 5.8.2 一致：`AXRadioButton「新建任务」`选中、欢迎标题「WorkBuddy, 我帮你」、占位「今天帮你做些什么？@ 添加上下文，/调用技能与指令」、`AXPopUpButton「选择工作空间」`、空正文时「发送」disabled。
+
+顺带补了三处可复核诊断（只记状态与布尔，不含正文）：新建页焦点核验把"按下成功 / 应用归属 / 输入焦点"分开记；提交前五道门（valid/window/target/focus/text）逐项记；`InputExecutor` 的草稿停止原因附上 `InputBinding` 的失效原因（"控制租约失效"与"绑定失效：<原因>"分开）。上一版这些地方都只回一句笼统失败，排障只能靠猜。
+
+**实机验收（真实派单，非模拟）**：`agent-runner` 与 `agent-workspace` 隔离回归通过，全源编译通过。用真实 `AgentAppDispatch.send` 对运行中的应用各跑一次，正文「PocketDesk派单自检，可忽略」：
+
+- Cola：`confirmed / visible=true`，日志 `请求辅助功能树 → 输入框 AX 聚焦 → 派单 delivered`；应用侧出现新的子聊天「PocketDesk派单自检可忽略」，正文完整，Cola 也回了话。
+- WorkBuddy：第一次因探针自己把草稿留在 composer 而停在写作前（该草稿是探针早前用 AX 直接改 `AXValue` 写坏的，页面 AX 值随后变成空串但 DOM 里堆了三份正文——**教训：不要用 AX 改 WorkBuddy 撰写框的值来"清空"，Electron 会读到陈旧值**；用键盘 Cmd+A + Delete）。清干净后重跑：`confirmed / visible=true`，任务数 16→17，新任务正文完整。
+
+### 5.9.3 反复复跑暴露的三处"读空即判失败"
+
+首次跑通后连跑多次，WorkBuddy 隔一次就失败，日志把三处都指出来了——都属于同一个根因：Electron 重建 AX 包装后，旧引用读不到东西，代码把"读不到"当成了"条件不成立"。
+
+1. **撰写框首字落入后重建。** 写入开始后 `liveAuthorization`（绑定 + 派单有效性）会拿旧 AX 引用去比当前焦点，`CFEqual` 失败即中止同步，正文只写了一半。现在有效性核验除原引用外，补认"同一矩形 + 角色仍是 AXTextArea + 应用归属仍是目标进程"；换到别的框（不同矩形）照样拒绝。同一处理也用在读撰写框正文（`editorValue`）：原引用读不到时才对同矩形框取值。
+2. **窗口 AX 包装同样会重建。** `AgentWorkBuddyNewTask.isFocused` 与 `windows(pid)` 的成员判断原来只比 `CFEqual`，窗口引用一换就判"主窗失去焦点"，整条派单在导航阶段就断。现在引用不同时用"位置 + 尺寸完全一致"补证同一物理窗口（`sameWindow`）。
+3. **AX 读会偶发返回空/超时**（系统级 `AXFocusedApplication` 实测出现过 `-25204` 并且应用级 `-25200`）。归属、窗口、聚焦三处只读门禁改用 `AgentTaskComposer.retrying` 短重试（3 次 × 25ms）：每次仍要求同一条件真的成立，不把"读不到"当成"成立"。
+
+另外补了两个等待：`AgentWorkBuddyNewTask.prepare` 在激活后先有界（2 秒）等窗口列表与页面内容可读，不再一次读空就报"窗口或控制权未核实"；派单的 `navigate` 一拿到 pid 就先请求辅助功能树，让冷树在后续任何一次读之前开始构建。
+
+复跑结果（真实派单，正文「PocketDesk 稳定性复跑N，可忽略」）：WorkBuddy 连续 3 次、Cola 连续 2 次都是 `confirmed / visible=true`。
+
+遗留边界：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；排查与复跑在两个应用里留下了若干条测试消息（Cola 几条子聊天、WorkBuddy 几条任务），没有删。
+
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 
 ## 2026-10-13 WorkBuddy 折叠侧栏与草稿阻拦
@@ -151,5 +180,34 @@ CUA导航验证（未派单）：在既有会话输入测试草稿→新建→�
 本轮132份Swift源码冻结后，全量应用编译、`agent-new-task-draft`、`agent-workspace`、`agent-runner`回归全部通过。新回归包含窗口宿主身份、截断快照、旧/新窗口歧义，以及注入事件接收器下左右键成对释放，未向桌面发送测试鼠标事件。已安装二进制SHA256为`8640e13394a734c6904db2df125088fdc28849b945a89df9cab659217fffad94`，签名、HTTP200、辅助功能与六份受保护配置核验通过，网页和耳机助手资源保持一致，前版完整备份。已请用户保留首页草稿，通过耳机在workbench新建只回复测试；在获得同条耳机日志、目标接收和原草稿回读前，这一组合仍标记待验收。
 
 Cola既有普通耳机新建验收仍成立。本轮只读核查另发现：Cola 1.5.0原生新建可能复用空历史会话，未发送文字保存在renderer的会话草稿中，主进程复用判断不读取它。因此“空历史会话已有草稿”的组合尚不能承诺独立新建；当前继续保留草稿并如实停止，未用会复制历史的Fork替代新任务，也未修改Cola数据或调用隐藏IPC。
+
+
+## 2026-11-02 Cola 1.5.3「新建子聊天」与 WorkBuddy 5.9.3 空辅助功能树
+
+用户报告"PocketDesk 又不能给 Cola 发指令"，并要求同时支持 WorkBuddy。两个应用都在 10 月底升级（Cola 1.5.3、WorkBuddy 5.9.3），先只读采两边的真实 AX 树再改：
+
+- **Cola 的编码侧栏整体改名了。** 1.5.3 把「会话/项目」侧栏改称「子聊天 / Side chats」，新建入口从「新建项目/新建会话」变成 `AXButton desc=[新建子聊天]`（`aria-label` 走 `codingCola.agentSidebar.newChat`，英文 `New side chat`）；空会话欢迎句也从「告诉 Cola，你想在这个项目里做点什么」简化成「告诉 Cola，你想做点什么」，侧栏没有会话时显示启动页「开始新聊天 / Start a new chat」。原实现只认旧三个标签，因此在 1.5.3 上永远找不到新建入口。本次三个版本标签并列，新页证据加新欢迎句与启动页标题，旧文案继续兼容。发送仍是语义「发送」按钮，撰写框空态 AXValue 仍是单个换行（`clean` 后为空），这条不用改。
+- **WorkBuddy 5.9.3 冷启动不构建 DOM 辅助功能树。** 窗口存在、`AXWindows` 只有一个，但整棵树只剩 `AXGroup` 空壳，没有 `AXWebArea`、没有欢迎页、没有撰写框——依赖树的新建入口与输入一律无从核验。这是 Chromium/Electron 的懒构建：没检测到辅助功能客户端就不建树。本次在第一次读树前对目标进程请求一次「手动辅助功能」（`AXManualAccessibility`，先写 false 再写 true，应用若记着上次的 true 时重复写 true 属于"无变化"不会重建），只改辅助功能开关，不激活、不改窗口、不碰草稿。开启后 5.9.3 的页面证据与 5.8.2 一致：`AXRadioButton「新建任务」`选中、欢迎标题「WorkBuddy, 我帮你」、占位「今天帮你做些什么？@ 添加上下文，/调用技能与指令」、`AXPopUpButton「选择工作空间」`、空正文时「发送」disabled。
+
+顺带补了三处可复核诊断（只记状态与布尔，不含正文）：新建页焦点核验把"按下成功 / 应用归属 / 输入焦点"分开记；提交前五道门（valid/window/target/focus/text）逐项记；`InputExecutor` 的草稿停止原因附上 `InputBinding` 的失效原因（"控制租约失效"与"绑定失效：<原因>"分开）。上一版这些地方都只回一句笼统失败，排障只能靠猜。
+
+**实机验收（真实派单，非模拟）**：`agent-runner` 与 `agent-workspace` 隔离回归通过，全源编译通过。用真实 `AgentAppDispatch.send` 对运行中的应用各跑一次，正文「PocketDesk派单自检，可忽略」：
+
+- Cola：`confirmed / visible=true`，日志 `请求辅助功能树 → 输入框 AX 聚焦 → 派单 delivered`；应用侧出现新的子聊天「PocketDesk派单自检可忽略」，正文完整，Cola 也回了话。
+- WorkBuddy：第一次因探针自己把草稿留在 composer 而停在写作前（该草稿是探针早前用 AX 直接改 `AXValue` 写坏的，页面 AX 值随后变成空串但 DOM 里堆了三份正文——**教训：不要用 AX 改 WorkBuddy 撰写框的值来"清空"，Electron 会读到陈旧值**；用键盘 Cmd+A + Delete）。清干净后重跑：`confirmed / visible=true`，任务数 16→17，新任务正文完整。
+
+### 5.9.3 反复复跑暴露的三处"读空即判失败"
+
+首次跑通后连跑多次，WorkBuddy 隔一次就失败，日志把三处都指出来了——都属于同一个根因：Electron 重建 AX 包装后，旧引用读不到东西，代码把"读不到"当成了"条件不成立"。
+
+1. **撰写框首字落入后重建。** 写入开始后 `liveAuthorization`（绑定 + 派单有效性）会拿旧 AX 引用去比当前焦点，`CFEqual` 失败即中止同步，正文只写了一半。现在有效性核验除原引用外，补认"同一矩形 + 角色仍是 AXTextArea + 应用归属仍是目标进程"；换到别的框（不同矩形）照样拒绝。同一处理也用在读撰写框正文（`editorValue`）：原引用读不到时才对同矩形框取值。
+2. **窗口 AX 包装同样会重建。** `AgentWorkBuddyNewTask.isFocused` 与 `windows(pid)` 的成员判断原来只比 `CFEqual`，窗口引用一换就判"主窗失去焦点"，整条派单在导航阶段就断。现在引用不同时用"位置 + 尺寸完全一致"补证同一物理窗口（`sameWindow`）。
+3. **AX 读会偶发返回空/超时**（系统级 `AXFocusedApplication` 实测出现过 `-25204` 并且应用级 `-25200`）。归属、窗口、聚焦三处只读门禁改用 `AgentTaskComposer.retrying` 短重试（3 次 × 25ms）：每次仍要求同一条件真的成立，不把"读不到"当成"成立"。
+
+另外补了两个等待：`AgentWorkBuddyNewTask.prepare` 在激活后先有界（2 秒）等窗口列表与页面内容可读，不再一次读空就报"窗口或控制权未核实"；派单的 `navigate` 一拿到 pid 就先请求辅助功能树，让冷树在后续任何一次读之前开始构建。
+
+复跑结果（真实派单，正文「PocketDesk 稳定性复跑N，可忽略」）：WorkBuddy 连续 3 次、Cola 连续 2 次都是 `confirmed / visible=true`。
+
+遗留边界：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；排查与复跑在两个应用里留下了若干条测试消息（Cola 几条子聊天、WorkBuddy 几条任务），没有删。
 
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md

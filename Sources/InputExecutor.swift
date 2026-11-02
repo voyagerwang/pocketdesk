@@ -285,10 +285,22 @@ final class InputExecutor {
         return postDeleteKey()                                  // 只带 keycode，避免被当成向前删
     }
 
+    /// 最近一次绑定校验失败的原因（不含正文）：只给日志用，区分「控制租约失效」和绑定层给出的具体原因。
+    private var bindingFailure = ""
+
     /// 建写入器：门禁（控制租约 + 绑定）与三个原语只此一份，"开新轮次"与"清空后重捕获"共用。
     private func makeLiveWriter(pid: pid_t, context: String) -> KeyboardDraftWriter {
         KeyboardDraftWriter(pid: pid,
-            valid: { [weak self] in self?.liveAuthorization() == true && InputBinding.shared.validate(context) },
+            valid: { [weak self] in
+                guard let self else { return false }
+                guard self.liveAuthorization() else { self.bindingFailure = "控制租约失效"; return false }
+                guard InputBinding.shared.validate(context) else {
+                    self.bindingFailure = "绑定失效：" + InputBinding.shared.lastInvalidReason
+                    return false
+                }
+                self.bindingFailure = ""
+                return true
+            },
             key: { [weak self] code, flags in
                 guard let self else { return false }
                 // 删除键（51）不携带字符：Backspace 由 keycode 驱动；通用 postKey 会为 51 强制写入
@@ -436,7 +448,7 @@ final class InputExecutor {
                     let updated = writer.update(from: old, to: new)
                     if !updated {
                         ExecutionLog.shared.append(kind: "live-diagnostic", label: "草稿停止原因", outcome: .failed,
-                            detail: writer.diagnostic, frontApp: front.localizedName)
+                            detail: writer.diagnostic + (self?.bindingFailure.isEmpty == false ? "；" + (self?.bindingFailure ?? "") : ""), frontApp: front.localizedName)
                     }
                     return updated
                 },

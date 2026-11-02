@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 消费 TargetConfig 的应用身份与 Foundation 的包元数据。
- * [OUTPUT]: Cue 身份与原生任务语义；提供项目路径预填与已有任务 ID 的官方 Codex 深链；提供 AgentConversationMode、AgentAppProfile、新任务页面证据与 WorkBuddy 侧栏展开语义；WorkBuddy 可见欢迎页和工作空间选择器允许空框直接输入，侧栏选中证据兼容旧版；兼容 5.7.6–5.8.2 完整空框提示，非占位草稿仍拒绝；Cola 1.5.0 的新建入口在两种侧栏下分别叫“新建项目”与“新建会话”，新页证据改用空会话欢迎句。
+ * [OUTPUT]: Cue 身份与原生任务语义；提供项目路径预填与已有任务 ID 的官方 Codex 深链；提供 AgentConversationMode、AgentAppProfile、新任务页面证据与 WorkBuddy 侧栏展开语义；WorkBuddy 可见欢迎页和工作空间选择器允许空框直接输入，侧栏选中证据兼容旧版；兼容 5.7.6–5.8.2 完整空框提示，非占位草稿仍拒绝；Cola 1.5.3 的编码侧栏改称“子聊天”，新建入口是“新建子聊天”，新页证据认“告诉 Cola，你想做点什么”与启动页“开始新聊天”，并继续兼容 1.5.0 的“新建项目/新建会话”。
  * [POS]: 派单的纯策略层；应用名称只作别名，真实 bundle ID 决定适配器，界面动作由 AgentTaskComposer 执行。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -35,14 +35,14 @@ enum AgentAppProfile: String {
     }
 
     /**
-     * Cola 1.5.0 的会话侧栏只有一个新建入口，两种呈现共用同一个“新建会话”动作：
-     * 产品侧栏（pane 工作区）把它标成“新建项目/New project”，独立侧栏标成“新建会话/New session”（源码里同一 onClick=onCreateSession，实测两者都会新建并选中一个草稿会话）。
-     * 因此两个标签都要认，靠新页面证据判断按下去到底发生了什么。
+     * Cola 的编码侧栏只有一个新建入口，三个版本的标签都认，靠新页面证据判断按下去到底发生了什么：
+     * 1.5.0 产品侧栏叫“新建项目/New project”、独立侧栏叫“新建会话/New session”；
+     * 1.5.3 起该侧栏改称“子聊天/Side chats”，入口变成“新建子聊天/New side chat”（源码 aria-label 编码 codingCola.agentSidebar.newChat）。
      */
     var newButtonNames: Set<String> {
         switch self {
         case .workbuddy, .zcode: return ["新建任务", "New task"]
-        case .cola: return ["新建会话", "New session", "新建项目", "New project"]
+        case .cola: return ["新建子聊天", "New side chat", "新建会话", "New session", "新建项目", "New project"]
         case .cue: return ["Create group chat"]
         case .codex, .chatgpt: return ["新建任务", "新聊天", "New chat", "New task", "New thread"]
         }
@@ -85,10 +85,15 @@ enum AgentAppProfile: String {
         case .zcode:
             return placeholder.hasPrefix("向 ZCode 提问") && labels.contains("选择项目")
         case .cola:
-            // 1.5.0 的草稿会话名叫“新建会话”，与侧栏新建按钮同名，标签集合分不出真假：
-            // 改认空会话聊天区独有的欢迎句（codingCola.chat.empty），它只在会话没有任何消息时出现。
-            // 旧版本的“新建会话 草稿”名称规则继续兼容。
-            let welcome = ["告诉 Cola，你想在这个项目里做点什么",
+            // 空会话的欢迎句（codingCola.chat.empty）只在会话没有任何消息时出现，是唯一的干净证据。
+            // 1.5.3 去掉了“在这个项目里”，改成“告诉 Cola，你想做点什么”；空侧栏的启动页
+            // （codingCola.launcher.title）另有一句“开始新聊天”。旧版本文案继续兼容。
+            let welcome = ["告诉 Cola，你想做点什么",
+                           "告訴 Cola，你想做點什麼",
+                           "Tell Cola what you’d like to do",
+                           "Tell Cola what you'd like to do",
+                           "开始新聊天", "開始新聊天", "Start a new chat",
+                           "告诉 Cola，你想在这个项目里做点什么",
                            "告訴 Cola，你想在這個項目裡做點什麼",
                            "Tell Cola what you'd like to do in this project"]
             if welcome.contains(where: { labels.contains($0) }) { return true }

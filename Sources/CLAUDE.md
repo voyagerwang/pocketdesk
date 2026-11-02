@@ -87,7 +87,7 @@ DeviceConnections.swift: 已鉴权浏览器心跳的设备描述与连接记录�
 
 AppOperator.swift: 「打开本机应用」执行器（路径 B）——受信任目录白名单（/System/Applications、/Applications、/Applications/Utilities、~/Applications）内的 `.app` 才能启动，中文别名表（飞书→lark/feishu、微信→wechat…）把模型给的中文名映到包名/标识符关键字，`resolve` 按显示名/包名/包标识精确或包含匹配打分，`exactOnly` 供快速打开只接受配置/身份/已有别名准确命中，Server 注入同一配置；`open` 走 `NSWorkspace.open`。与 BrowserOperator（路径 A 开网页）对称，由 AgentRunner 核验控制租约后调用。tt-bridge（CC BY-NC）只覆盖浏览器、不启动应用，故本能力为原生自研、未嵌入其代码。
 BrowserOperator.swift: 「打开网页」执行器——只接受 http(s) 绝对地址，其余一律拒绝，由默认浏览器新标签页打开。与 PageReader（只读）对称，写入前由 AgentRunner 核验控制租约。
-AgentAppDispatch.swift: 新建/继续派单编排；默认 new，只有显式 current 才复用当前对话。WorkBuddy 新任务优先走它自己的官方外部唤起深链（app 新建会话并预填正文，本机只读核验唯一同文撰写框与焦点；打开前先确认新任务页没有未发送草稿，等不到预填即停，不补输入、不重开链接）。WorkBuddy 激活未获得键盘归属时，仅点击唯一实例窗口里未遮挡的唯一空框，确认焦点后继续原导航；不把获取焦点与输入授权混为一事。副作用前原子占用任务并串行派单，核验新页后复用 mirror 输入与语义发送；Codex 深链预填后只提交。Cola 有可访问的语义发送入口（「发送」按钮，空正文时 disabled），不再靠回车——回车只代表按键发出，不是已接收。新建失败不降级旧会话，未知结果不重发。
+AgentAppDispatch.swift: 新建/继续派单编排；默认 new，只有显式 current 才复用当前对话。WorkBuddy 新任务优先走它自己的官方外部唤起深链（app 新建会话并预填正文，本机只读核验唯一同文撰写框与焦点；打开前先确认新任务页没有未发送草稿，等不到预填即停，不补输入、不重开链接）。WorkBuddy 激活未获得键盘归属时，仅点击唯一实例窗口里未遮挡的唯一空框，确认焦点后继续原导航；不把获取焦点与输入授权混为一事。副作用前原子占用任务并串行派单，核验新页后复用 mirror 输入与语义发送；Codex 深链预填后只提交。Cola 有可访问的语义发送入口（「发送」按钮，空正文时 disabled），不再靠回车——回车只代表按键发出，不是已接收。新建失败不降级旧会话，未知结果不重发。撰写框与窗口的 AX 包装会被 Electron 重建：有效性核验除原引用外只补认「同矩形 + 可编辑」与「同位置同尺寸的窗口」，换框或换窗仍拒绝；关键节点把 `写入前门禁`/`提交前门禁`/`提交有效性核验` 写进日志，逐项记是哪一道门没过。
 
 派单接续契约（2026-09-18）：AgentModels 的可选 handoffTargetId/name/requested 保持旧任务解码兼容，HTTP 只暴露接续事实，不暴露控制会话。AgentRunner 从 switchAfter 保存明确切换意图；AgentAppDispatch 仅 committed 后持久保存配置中的精确目标 ID/name，手机不解析模型文字猜接收者。
 
@@ -108,9 +108,9 @@ CodexSelection.swift: 无桌面副作用的目标选择与撰写区证据策略�
 CodexAdapter.swift: Codex 发现、目标解析与导航/派单的编排入口；真实歧义结束本轮等待补充，发送复用派单FIFO与原子占用。
 CodexNavigator.swift: Codex 项目/旧任务/Your dot 的有界原生导航；深链回调后允许首次未知焦点只读等待最多1秒，明确其他应用、失权、锁屏或确认后失焦立即停止；记录导航应用PID和门禁事实，以撰写区项目标签、选中任务身份、空白/预填正文核验落点，不能把侧栏同名当当前目标。
 
-AgentAppProfile.swift: 应用身份和会话模式的纯策略；真实 bundle ID 优先于名称，兼容 Workbody/z code 别名，定义各应用空白框与新页面证据及 Codex、WorkBuddy 官方深链编码；Cola 1.5.0 的会话侧栏新建动作在产品侧栏叫「新建项目」、独立侧栏叫「新建会话」（同一个 onCreateSession），新页证据认空会话欢迎句。
+AgentAppProfile.swift: 应用身份和会话模式的纯策略；真实 bundle ID 优先于名称，兼容 Workbody/z code 别名，定义各应用空白框与新页面证据及 Codex、WorkBuddy 官方深链编码；Cola 的编码侧栏新建动作历次改名为「新建项目」→「新建会话」→1.5.3 的「新建子聊天」（侧栏本身也改称「子聊天/Side chats」），三者都认；新页证据认空会话欢迎句，1.5.3 已从「告诉 Cola，你想在这个项目里做点什么」简化为「告诉 Cola，你想做点什么」，空侧栏启动页另认「开始新聊天」。
 WorkBuddy 激活准备：InputExecutor 首轮只读取或开启目标焦点 AX 树，再走共享应用归属门禁；避免新进程在树未准备时将已在前台的 WorkBuddy 判为激活失败，不以窗口层序授予输入权限。
-AgentTaskComposer.swift: 有界 AX 导航、指定窗口快照与共享提交；快照可绑定明确 AXWindow，指定窗口时不混入其他窗口的焦点子树。标题与下拉名称从有界子文本补证，同角色同矩形的 AX 包装归一；普通与指定项目派单共用角色、物理框及空白/完整正文的焦点核验。发送前重聚焦原正文框，WorkBuddy 按真实发送按钮矩形点击一次，指针执行时再查窗口、项目、焦点与全文；AXPress 成功不代替实际发送。侧栏展开一次，初始/展开后观察3秒，新建后观察6秒；接收仍须核验窗口绑定与实际证据。
+AgentTaskComposer.swift: 有界 AX 导航、指定窗口快照与共享提交；首次读树前为每个进程请求一次 Electron 的手动辅助功能树（先 false 再 true；WorkBuddy 5.9.3 冷启动后整棵树只剩空 AXGroup，新建入口与撰写框一律读不到）；快照可绑定明确 AXWindow，指定窗口时不混入其他窗口的焦点子树。标题与下拉名称从有界子文本补证，同角色同矩形的 AX 包装归一；普通与指定项目派单共用角色、物理框及空白/完整正文的焦点核验。发送前重聚焦原正文框，WorkBuddy 按真实发送按钮矩形点击一次，指针执行时再查窗口、项目、焦点与全文；AXPress 成功不代替实际发送。侧栏展开一次，初始/展开后观察3秒，新建后观察6秒；接收仍须核验窗口绑定与实际证据。
 AgentWorkBuddyNewTask.swift: WorkBuddy 保留草稿的原生新任务准备；完整窗口树与本应用 file renderer URL 证明主窗/独立窗身份，旧会话通过新建入口保留草稿，主窗新页有草稿时经右键菜单“在独立窗口中打开”创建新落点，不清空、不归档、不调用覆盖 home 的任务深链。只授权本次唯一新增且聚焦的独立空白窗，既有独立窗不参与写入；截断树、编辑器未就绪和窗口变化停止，返回精确编辑器与窗口授权供项目导航及共享提交消费。
 接收正文证据排除 TextArea 子树的草稿静态文本，前后计数只比较真正的消息区；编辑器重建时仍需本次新增正文与空框/开始信号，旧消息不冒充本次接收。
 AgentWorkspaceRequest.swift: WorkBuddy/ZCode 本地工作空间动作协议与纯匹配策略；准确名称归一化、操作项（含不使用工作空间）隔离和同名拒绝，open_project 只选中已有空间并打开空白新任务页，send_task 才派单。

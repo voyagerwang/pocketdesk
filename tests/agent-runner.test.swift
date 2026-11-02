@@ -570,6 +570,16 @@ import Foundation
         assert(AgentAppProfile.cola.hasNewPageEvidence(labels: colaEmptyChat, selectedNewTab: false, placeholder: "", beforeLabels: ["新建会话", "新建项目"]))
         assert(AgentAppProfile.cola.hasNewPageEvidence(labels: ["Tell Cola what you'd like to do in this project"], selectedNewTab: false, placeholder: "", beforeLabels: []))
         assert(!AgentAppProfile.cola.hasNewPageEvidence(labels: ["新建项目", "新建会话"], selectedNewTab: false, placeholder: "", beforeLabels: ["新建项目", "新建会话"]))
+        // Cola 1.5.3：编码侧栏改称“子聊天”，新建入口是“新建子聊天”；空会话欢迎句去掉了“在这个项目里”，
+        // 没有会话时显示启动页“开始新聊天”。三套文案都要认，但不拿项目/会话名当新页证据。
+        assert(AgentAppProfile.cola.newButtonNames.contains("新建子聊天"))
+        let colaSideChat: Set<String> = ["收起侧栏", "主聊天", "子聊天", "新建子聊天", "告诉 Cola，你想做点什么"]
+        assert(AgentAppProfile.cola.hasNewPageEvidence(labels: colaSideChat, selectedNewTab: false, placeholder: "", beforeLabels: ["收起侧栏", "子聊天", "新建子聊天"]))
+        assert(AgentAppProfile.cola.hasNewPageEvidence(labels: ["开始新聊天"], selectedNewTab: false, placeholder: "", beforeLabels: []))
+        assert(AgentAppProfile.cola.hasNewPageEvidence(labels: ["Tell Cola what you’d like to do"], selectedNewTab: false, placeholder: "", beforeLabels: []))
+        assert(!AgentAppProfile.cola.hasNewPageEvidence(labels: ["新建子聊天", "子聊天", "主聊天"], selectedNewTab: false, placeholder: "", beforeLabels: ["新建子聊天"]))
+        // 带正文的会话侧栏不能因为入口同名被当成空会话。
+        assert(!AgentAppProfile.cola.hasNewPageEvidence(labels: ["新建子聊天", "修复PokectDesk指令并支持WorkBuddy", "停止"], selectedNewTab: false, placeholder: "", beforeLabels: ["新建子聊天", "停止"]))
         let prompt = "用 Computer Use 查看飞书群聊\n中文 & # ? + % 😀"
         let url = AgentAppProfile.codexURL(text: prompt)!
         assert(url.scheme == "codex" && url.host == "threads" && url.path == "/new")

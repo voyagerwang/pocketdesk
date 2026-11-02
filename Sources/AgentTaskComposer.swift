@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖应用页面语义、AppKit AX、TargetWindowLocator 与 PointerExecutor；租约和焦点约束每次导航、输入与发送。
- * [OUTPUT]: 提供指定窗口的有界AX快照、唯一新建入口与新页空框核验、物理编辑器焦点绑定及发送前全文核验；共享真实矩形左右键点击，语义提交一次后核验实际接收，未知结果不重发。
+ * [OUTPUT]: 提供指定窗口的有界AX快照（首次自动请求 Electron 的手动辅助功能树）、唯一新建入口与新页空框核验、物理编辑器焦点绑定及发送前全文核验；共享真实矩形左右键点击，语义提交一次后核验实际接收，未知结果不重发。
  * [POS]: 应用新建适配的共享机制；WorkBuddy草稿隔离由AgentWorkBuddyNewTask决定，项目选择由AgentWorkspaceComposer决定；此层只允许向已核验的新空框写入，Codex仍使用官方预填深链。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -348,11 +348,26 @@ enum AgentTaskComposer {
         queue.async {
             let prioritizeEditor = prepared.prefilled || profile == .codex || profile.map(AgentWorkspaceComposer.supported) == true
             let inputBounds = frame(prepared.element)
+            // 撰写框在首字后可能被重建：读值先认原引用，再认同矩形的可编辑框，避免拿陈旧元素读出空串。
+            let editorValue: () -> String? = {
+                if let focus = InputFocus.focusedElement(pid: pid) {
+                    if CFEqual(focus, prepared.element) { return string(prepared.element, kAXValueAttribute) }
+                    if let inputBounds, frame(focus) == inputBounds,
+                       string(focus, kAXRoleAttribute) == "AXTextArea" { return string(focus, kAXValueAttribute) }
+                }
+                return string(prepared.element, kAXValueAttribute)
+            }
             var button: Node?
             for _ in 0..<12 {
-                guard valid(pid, authorized), prepared.validateWindow?() != false, prepared.validateTarget?() != false,
-                      (profile == .workbuddy || InputFocus.focusedElement(pid: pid).map { CFEqual($0, prepared.element) } == true),
-                      preparedTextMatches(value: string(prepared.element, kAXValueAttribute), text: text, profile: profile) else {
+                let stillValid = valid(pid, authorized)
+                let windowOK = prepared.validateWindow?() != false
+                let targetOK = prepared.validateTarget?() != false
+                let focusOK = profile == .workbuddy || InputFocus.focusedElement(pid: pid).map { CFEqual($0, prepared.element) } == true
+                let textOK = preparedTextMatches(value: editorValue(), text: text, profile: profile)
+                guard stillValid, windowOK, targetOK, focusOK, textOK else {
+                    // 提交前一共有五道门：把失败的哪一道写进日志，否则排障只能靠猜。
+                    ExecutionLog.shared.append(kind: "focus", label: "提交前门禁", outcome: .blocked,
+                        detail: "profile=\(profile?.rawValue ?? "-"); valid=\(stillValid); window=\(windowOK); target=\(targetOK); focus=\(focusOK); text=\(textOK); expectedPID=\(pid); ownerPID=\(InputFocus.focusedApplicationPID().map(String.init) ?? "unknown")")
                     completion(.failure(.init(message: "提交前正文或焦点已变化，保留草稿。"))); return
                 }
                 let snapshot = nodes(pid: pid, prioritizeEditor: prioritizeEditor)
@@ -539,6 +554,9 @@ enum AgentTaskComposer {
                             ? workBuddyFocusedComposer(pid: pid, expected: composer.element, text: nil, authorized: authorized)
                             : InputFocus.focusedElement(pid: pid).flatMap { CFEqual($0, composer.element) ? $0 : nil }
                         guard success, valid(pid, authorized), let focused else {
+                            // 三个条件分开记：按下成功、应用归属和输入焦点是三种完全不同的失败。
+                            ExecutionLog.shared.append(kind: "focus", label: "新建页焦点核验", outcome: .blocked,
+                                detail: "profile=\(profile.rawValue); pressed=\(success); valid=\(valid(pid, authorized)); expectedPID=\(pid); ownerPID=\(InputFocus.focusedApplicationPID().map(String.init) ?? "unknown"); focusResolved=\(focused != nil)")
                             completion(.failure(.init(message: "新建任务页已打开，但未确认撰写框焦点；未提交。"))); return
                         }
                         completion(.success(.init(element: focused, prefilled: profile == .codex)))
@@ -600,6 +618,16 @@ enum AgentTaskComposer {
 
     static func nodes(pid: pid_t, window: AXUIElement? = nil, prioritizeEditor: Bool = false,
                       onScan: ((Int, Bool) -> Void)? = nil) -> [Node] {
+        requestDOMAccessibility(pid: pid)
+        let first = scan(pid: pid, window: window, prioritizeEditor: prioritizeEditor, onScan: onScan)
+        // 树如果不是没建好而是一直空壳，再强制重建一次：不拿“读不到”冒充“页面上没有”。
+        guard !first.contains(where: { $0.role == "AXWebArea" || $0.role == "AXTextArea" }),
+              rebuildAccessibility(pid: pid) else { return first }
+        return scan(pid: pid, window: window, prioritizeEditor: prioritizeEditor, onScan: onScan)
+    }
+
+    private static func scan(pid: pid_t, window: AXUIElement?, prioritizeEditor: Bool,
+                             onScan: ((Int, Bool) -> Void)?) -> [Node] {
         guard let root = window ?? TargetWindowLocator.axWindowElement(pid: pid) else { onScan?(0, true); return [] }
         let windowFrame = frame(root)
         var result: [Node] = [], remaining = 6000
@@ -667,6 +695,63 @@ enum AgentTaskComposer {
         walk(root, depth: 0)
         onScan?(result.count, truncated)
         return result
+    }
+
+    private static let accessibilityLock = NSLock()
+    private static var manualAccessibilityRequested: Set<pid_t> = []
+    private static var accessibilityRebuilt: Set<pid_t> = []
+
+    /**
+     * Electron/Chromium 只在检测到辅助功能客户端时才构建 DOM 辅助功能树；
+     * WorkBuddy 5.9.3 冷启动后整棵树只剩空 AXGroup，新建入口、欢迎页和撰写框一律读不到。
+     * 首次只写 true（幂等，不拆已有树）；每个进程只请求一次。
+     * 只改辅助功能开关，不激活、不改窗口、不碰草稿。
+     */
+    static func requestDOMAccessibility(pid: pid_t) {
+        accessibilityLock.lock()
+        let known = manualAccessibilityRequested.contains(pid)
+        accessibilityLock.unlock()
+        guard !known else { return }
+        let app = AXUIElementCreateApplication(pid)
+        let manual = AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        accessibilityLock.lock(); manualAccessibilityRequested.insert(pid); accessibilityLock.unlock()
+        ExecutionLog.shared.append(kind: "focus", label: "请求辅助功能树",
+            outcome: manual == .success ? .sent : .blocked, detail: "pid=\(pid); manual=\(manual.rawValue)")
+    }
+
+    /**
+     * 树已开着但仍读不到页面时，才走重建：先写 false 再写 true。
+     * 应用若还记着上次的 true，重复写 true 属“无变化”不会重建树（InputFocus 在语音路径实测过）。
+     * 每个进程最多重建一次，避免把“一次读取抖动”放大成反复重建。
+     */
+    static func rebuildAccessibility(pid: pid_t) -> Bool {
+        accessibilityLock.lock()
+        let known = accessibilityRebuilt.contains(pid)
+        if !known { accessibilityRebuilt.insert(pid) }
+        accessibilityLock.unlock()
+        guard !known else { return false }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanFalse)
+        AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanFalse)
+        usleep(20_000)
+        let manual = AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        ExecutionLog.shared.append(kind: "focus", label: "重建辅助功能树",
+            outcome: manual == .success ? .sent : .blocked, detail: "pid=\(pid); manual=\(manual.rawValue)")
+        return true
+    }
+
+    /**
+     * AX 读取会偶发失败（Electron 重建树、大树遍历撞上超时），一次读空不等于条件不成立。
+     * 只读核验允许短重试：每次都必须同一条件真的成立才返回 true，绝不把“读不到”当成“成立”。
+     */
+    static func retrying(_ attempts: Int = 3, spacing: useconds_t = 25_000, _ condition: () -> Bool) -> Bool {
+        for attempt in 0..<attempts {
+            if condition() { return true }
+            if attempt < attempts - 1 { usleep(spacing) }
+        }
+        return false
     }
 
     static func valid(_ pid: pid_t, _ authorized: () -> Bool) -> Bool {

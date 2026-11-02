@@ -72,13 +72,25 @@ enum AgentWorkBuddyNewTask {
     static func prepare(pid: pid_t, pointer: PointerExecutor?, authorized: @escaping () -> Bool,
                         completion: @escaping (Reply) -> Void) {
         AgentTaskComposer.queue.async {
-            guard AgentTaskComposer.valid(pid, authorized), let bundlePath = applicationBundlePath(pid),
-                  let initial = windows(pid), initial.count <= maximumWindows else {
+            guard AgentTaskComposer.valid(pid, authorized), let bundlePath = applicationBundlePath(pid) else {
                 fail("WorkBuddy 窗口或控制权未核实，未输入正文。", completion); return
             }
-            let snapshots = initial.map { window in (window, readWindow(window, pid: pid)) }
-            guard snapshots.allSatisfy({ $0.1.complete }) else { fail("WorkBuddy 窗口内容尚未完整可读，已有草稿已保留。", completion); return }
-            let primary = snapshots.filter { windowKind($0.1.nodes, bundlePath: bundlePath, complete: $0.1.complete) == .primary }.map(\.0)
+            // 激活后（或冷启动时辅助功能树刚被请求）窗口列表与页面内容未必一拍就可读。
+            // 这里只读等待，不点击、不激活、不写正文；等不到就如实停下。
+            let readyDeadline = ProcessInfo.processInfo.systemUptime + 2
+            var snapshots: [(window: AXUIElement, read: (nodes: [Node], complete: Bool))] = []
+            while ProcessInfo.processInfo.systemUptime < readyDeadline {
+                guard AgentTaskComposer.valid(pid, authorized) else { break }
+                if let list = windows(pid), list.count <= maximumWindows {
+                    let reads: [(window: AXUIElement, read: (nodes: [Node], complete: Bool))] = list.map { window in (window, readWindow(window, pid: pid)) }
+                    if reads.allSatisfy({ $0.read.complete }) { snapshots = reads; break }
+                }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            guard !snapshots.isEmpty else {
+                fail("WorkBuddy 窗口或控制权未核实，未输入正文。", completion); return
+            }
+            let primary = snapshots.filter { windowKind($0.read.nodes, bundlePath: bundlePath, complete: $0.read.complete) == .primary }.map(\.window)
             guard primary.count == 1, let window = primary.first else {
                 fail("未找到唯一 WorkBuddy 主窗口，已有窗口与草稿均已保留。", completion); return
             }
@@ -190,7 +202,7 @@ enum AgentWorkBuddyNewTask {
             guard AgentTaskComposer.valid(pid, authorized), let current = windows(pid) else {
                 fail("独立窗口打开期间焦点或控制权已变化，未输入正文。", completion); return
             }
-            guard current.contains(where: { CFEqual($0, primary) }) else {
+            guard current.contains(where: { sameWindow($0, primary) }) else {
                 fail("原主窗口已变化，未向新增窗口输入正文。", completion); return
             }
             let added = uniqueWindows(current).filter { window in !before.contains { CFEqual($0, window) } }
@@ -231,8 +243,18 @@ enum AgentWorkBuddyNewTask {
     }
 
     private static func windowAuthorization(_ window: AXUIElement, pid: pid_t, authorized: @escaping () -> Bool) -> () -> Bool {
-        { AgentTaskComposer.valid(pid, authorized) && isFocused(window, pid: pid)
-            && windows(pid)?.contains(where: { CFEqual($0, window) }) == true }
+        // 窗口归属是后续每一步的门禁，允许短重试吃掉 AX 的偶发读空。
+        { AgentTaskComposer.retrying {
+            AgentTaskComposer.valid(pid, authorized) && isFocused(window, pid: pid)
+                && windows(pid)?.contains(where: { sameWindow($0, window) }) == true
+        } }
+    }
+
+    /// 窗口的 AX 包装会被重建（同一块物理窗口、新的 AX 引用）；引用不同时用位置与尺寸补证。
+    static func sameWindow(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
+        if CFEqual(lhs, rhs) { return true }
+        guard let a = AgentTaskComposer.frame(lhs), let b = AgentTaskComposer.frame(rhs) else { return false }
+        return a == b
     }
     private static func readWindow(_ window: AXUIElement, pid: pid_t) -> (nodes: [Node], complete: Bool) {
         var limited = true
@@ -243,7 +265,7 @@ enum AgentWorkBuddyNewTask {
         NSWorkspace.shared.runningApplications.first { $0.processIdentifier == pid && !$0.isTerminated }?.bundleURL?.path
     }
     private static func isFocused(_ window: AXUIElement, pid: pid_t) -> Bool {
-        focusedWindow(pid).map { CFEqual($0, window) } == true
+        focusedWindow(pid).map { sameWindow($0, window) } == true
     }
     private static func focusedWindow(_ pid: pid_t) -> AXUIElement? {
         var value: CFTypeRef?

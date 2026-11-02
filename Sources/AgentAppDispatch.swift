@@ -72,6 +72,8 @@ enum AgentAppDispatch {
                 }
             } catch { finish(.init(state: .failed, detail: "无法保存派单记录，未操作目标应用。")); return }
             let navigate: (pid_t) -> Void = { pid in
+                // Electron 应用可能是冷树：先请求辅助功能树，再走任何窗口/页面核验。
+                AgentTaskComposer.requestDOMAccessibility(pid: pid)
                 let prepared: (Result<AgentTaskComposer.Prepared, AgentComposerFailure>) -> Void = { result in
                     switch result {
                     case .failure(let error): finish(.init(state: .needsInput, detail: error.message))
@@ -126,10 +128,31 @@ enum AgentAppDispatch {
                                executor: InputExecutor, pointer: PointerExecutor?, authorized: @escaping () -> Bool,
                                completion: @escaping (AppDispatchReceipt) -> Void) {
         let profile = AgentAppProfile.resolve(target)
+        // Electron 撰写框在首字落入后会重建 AX 包装：引用变了、物理位置没变。
+        // 只认“原引用或原矩形”，角色仍须是可编辑框；换到另一个框（不同矩形）一律拒绝。
+        let originalBounds = AgentTaskComposer.frame(composer.element)
+        let sameBox: (AXUIElement) -> Bool = { current in
+            if CFEqual(current, composer.element) { return true }
+            guard let originalBounds, let bounds = AgentTaskComposer.frame(current) else { return false }
+            return bounds == originalBounds && AgentTaskComposer.string(current, kAXRoleAttribute) == "AXTextArea"
+        }
+        let focusedBox: () -> AXUIElement? = {
+            guard authorized(), InputFocus.focusedApplicationPID() == pid,
+                  let current = InputFocus.focusedElement(pid: pid), sameBox(current) else { return nil }
+            return current
+        }
+        var loggedValidity = false
         let stillValid: () -> Bool = {
-            guard authorized(), composer.validateWindow?() != false, composer.validateTarget?() != false, InputFocus.focusedApplicationPID() == pid,
-                  let current = InputFocus.focusedElement(pid: pid) else { return false }
-            return CFEqual(current, composer.element)
+            guard authorized(), composer.validateWindow?() != false, composer.validateTarget?() != false,
+                  focusedBox() != nil else {
+                if !loggedValidity {
+                    loggedValidity = true
+                    ExecutionLog.shared.append(kind: "focus", label: "提交有效性核验", outcome: .blocked,
+                        detail: validityDetail(pid: pid, composer: composer, authorized: authorized))
+                }
+                return false
+            }
+            return true
         }
         guard stillValid() else { completion(.init(state: .failed, detail: "提交前焦点或控制权已变化。")); return }
         let committed: (Bool) -> Void = { executionVisible in
@@ -161,7 +184,9 @@ enum AgentAppDispatch {
             executor.mirror(command, authorized: stillValid, preflight: {
                 stillValid() && AgentTaskComposer.string(composer.element, kAXValueAttribute).map { AgentAppProfile.clean($0).isEmpty } == true
             }) { result in
-                guard case .success = result, stillValid(), AgentTaskComposer.string(composer.element, kAXValueAttribute) == text else {
+                guard case .success = result, stillValid(), let element = focusedBox(),
+                      AgentTaskComposer.preparedTextMatches(value: AgentTaskComposer.string(element, kAXValueAttribute),
+                                                            text: text, profile: profile) else {
                     completion(.init(state: .needsInput, detail: "正文未能准确填入目标输入框，未发送。")); return
                 }
                 AgentTaskComposer.submitPrepared(pid: pid, prepared: composer, text: text, pointer: pointer, authorized: authorized) { result in
@@ -186,10 +211,15 @@ enum AgentAppDispatch {
             completion(.init(state: .failed, detail: "指令格式无效。")); return
         }
         executor.mirror(command, authorized: stillValid, preflight: {
-            guard stillValid() else { return false }
+            guard stillValid() else {
+                // 只重核验、不写入：把是哪一道门失败写进日志，否则“写入前已变化”无法区分陈旧元素与真换焦点。
+                ExecutionLog.shared.append(kind: "focus", label: "写入前门禁", outcome: .blocked,
+                    detail: validityDetail(pid: pid, composer: composer, authorized: authorized))
+                return false
+            }
             guard mode == .newTask else { return true }
-            guard let profile = AgentAppProfile.resolve(target) else { return false }
-            return profile.isEmptyComposer(value: AgentTaskComposer.string(composer.element, kAXValueAttribute), placeholder: nil)
+            guard let profile = AgentAppProfile.resolve(target), let element = focusedBox() else { return false }
+            return profile.isEmptyComposer(value: AgentTaskComposer.string(element, kAXValueAttribute), placeholder: nil)
         }) { result in
             switch result {
             case .success(let receipt):
@@ -211,6 +241,17 @@ enum AgentAppDispatch {
         }
     }
 
+
+    private static func validityDetail(pid: pid_t, composer: AgentTaskComposer.Prepared,
+                                      authorized: @escaping () -> Bool) -> String {
+        let owner = InputFocus.focusedApplicationPID()
+        let current = InputFocus.focusedElement(pid: pid)
+        let same = current.map { CFEqual($0, composer.element) } ?? false
+        let role = current.flatMap { AgentTaskComposer.string($0, kAXRoleAttribute) } ?? "-"
+        let expectedFrame = AgentTaskComposer.frame(composer.element).map(String.init(describing:)) ?? "unknown"
+        let currentFrame = current.flatMap { AgentTaskComposer.frame($0) }.map(String.init(describing:)) ?? "unknown"
+        return "authorized=\(authorized()); window=\(composer.validateWindow?() != false); target=\(composer.validateTarget?() != false); expectedPID=\(pid); ownerPID=\(owner.map(String.init) ?? "unknown"); sameElement=\(same); currentRole=\(role); expectedFrame=\(expectedFrame); currentFrame=\(currentFrame)"
+    }
 
     /// 优先沿用已有焦点；AX 设置无效时才真实点击已识别且可见的输入框，不猜窗口底部坐标。
     private static func prepareInputFocus(pid: pid_t, pointer: PointerExecutor?,
