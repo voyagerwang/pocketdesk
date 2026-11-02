@@ -61,11 +61,11 @@ for test in tests/*.test.swift; do
     wrapped="$BUILD/src/$name.swift"
     { echo "@testable import PocketDeskCore"; cat "$test"; } > "$wrapped"
     swiftc "${FLAGS[@]}" -I "$BUILD" -L "$BUILD" -lPocketDeskCore "${FRAMEWORKS[@]}" \
-      "$wrapped" "${extra[@]}" -o "$binary" > "$log" 2>&1
+      "$wrapped" ${extra[@]+"${extra[@]}"} -o "$binary" > "$log" 2>&1
   else
     subset=()
     for file in ${mode#SUBSET}; do subset+=("Sources/$file"); done
-    swiftc "${FLAGS[@]}" "${FRAMEWORKS[@]}" "${subset[@]}" "$test" "${extra[@]}" -o "$binary" > "$log" 2>&1
+    swiftc "${FLAGS[@]}" "${FRAMEWORKS[@]}" "${subset[@]}" "$test" ${extra[@]+"${extra[@]}"} -o "$binary" > "$log" 2>&1
   fi
   status=$?
   if [[ $status -eq 0 ]]; then
