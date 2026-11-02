@@ -271,3 +271,7 @@ easyinput-capabilities.test.swift: 真实音频适配器的纯状态过滤回归
 desktop-voice-speech.test.swift: 真实发声器异步合成不阻塞、取消后迟到数据不播放、缓存命中及逐项淘汰；合成/播放替身，无网络或扬声器副作用。
 
 公开发布检查：web-globals.test.cjs 按现有 connectionJSON 有界事务核验网络错误标记；语音与飞书夹具仅使用示例家庭、工作台和日程。
+
+model-stream.test.swift: 替身 URLProtocol 驱动真实 ModelClient：SSE 半行跨块、增量拼出 content 与分块工具参数、末块用量与缓存命中、口播行写完只通知一次、服务端拒收流式参数时退回整段一次、请求体键排序逐字节稳定；SpokenSummary 拆分边界；AgentRunner 系统提示词逐字静态、事实在独立消息、口播拆出与缓存命中累计。不联网、不调真实模型。
+自动测试（2026-11-02）：.github/workflows/tests.yml 每次推送运行；scripts/run-script-tests.sh 在 Linux 跑全部 Node 回归与不依赖浏览器/SDK 的 Python 回归，scripts/run-swift-tests.sh 在 macOS 先整包编译，再把 Sources 编成可测试静态库供不自带替身的测试 @testable 链接，自带替身的测试由 scripts/swift-test-deps.py 现算依赖闭包单独编译；需要图形会话/辅助功能/冻结协议包的测试列为非阻塞。Playwright 浏览器回归与需要 miservice SDK 的小爱测试暂不在 CI。
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md

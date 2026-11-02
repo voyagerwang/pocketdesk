@@ -37,3 +37,8 @@ setup-secure-channel.sh: 生成本机 HTTPS 身份与手机信任用 CA 证书�
 
 pull-rebuild.sh: 仅快进当前分支上游后重装；拒绝脏工作区、分叉、游离HEAD及未完成Git操作，保留正常SSH校验。
 rebuild-safe.sh: 构建并签名Mac应用，停止旧实例后将旧安装移到废纸篓并启动新版本；不同步Git分支。
+
+run-swift-tests.sh: Swift 回归统一入口（CI 与本机共用）；只编一次可测试静态库 PocketDeskCore，不自带替身的测试 @testable 链接它，自带替身的按依赖闭包单独编译；逐个限时运行并汇总，非阻塞清单只报警告。可传名称过滤。
+swift-test-deps.py: 按测试里真实引用的类型（去掉注释与字符串）算出编译方式：FULL 或 SUBSET 加源文件闭包，排除声明了被替身类型的文件；每次现算，不维护手写清单。
+run-script-tests.sh: Linux 可跑的 Node 全部回归与不依赖浏览器/SDK 的 Python 回归汇总入口。
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md

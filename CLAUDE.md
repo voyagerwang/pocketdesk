@@ -3,13 +3,13 @@ Swift + Network + SystemConfiguration + Quartz Event Services + WebKit（桌面�
 
 <directory>
 Android/ - 安卓 Web 工作台配合原生文件、设备与快捷解锁页面、统一扫码（Gradle + Java，详见 Android/CLAUDE.md）
-Sources/ - HTTP、控制/光标与持续画面三通道；应用配置、焦点/输入上下文、草稿快照、图片批次、输入活动闸、指针几何与窗口定位及系统输入执行，Codex 登录额度/多服务商 API 推理配置与协议客户端、Agent 路由，以及小精灵的任务模型/存储/服务/执行/快速打开/网页读取/接收者顺序与 Agent 新任务/本地工作空间/桌面动作/米家适配与控制台扫码连接（142 个 Swift 文件）
+Sources/ - HTTP、控制/光标与持续画面三通道；应用配置、焦点/输入上下文、草稿快照、图片批次、输入活动闸、指针几何与窗口定位及系统输入执行，Codex 登录额度/多服务商 API 推理配置与协议客户端、Agent 路由，以及小精灵的任务模型/存储/服务/执行/快速打开/网页读取/接收者顺序与 Agent 新任务/本地工作空间/桌面动作/米家适配与控制台扫码连接；回答口播总括拆分（150 个 Swift 文件）
 Web/ - 手机首页、全屏工作台与电脑控制台，零依赖经典脚本按职责拆分；含当前 IP 扫码与可选电脑名称入口、小精灵的任务客户端、恢复卡与输入归属样式（42 个静态文件）
 Resources/ - 独立 macOS App 的 bundle 元数据与应用图标 (plist + icns + iconset)
 Helpers/ - 独立 HID 映射保活与应用短租约失效恢复（1 个子目录: HeadsetOptionMapping）
-scripts/ - 应用安装与耳机服务交接、图标生成/素材契约校验、焦点与锁屏通道探针，以及米家可选依赖安装、JSON 桥接与公开规格缓存（16 个脚本）
+scripts/ - 应用安装与耳机服务交接、图标生成/素材契约校验、焦点与锁屏通道探针，以及米家可选依赖安装、JSON 桥接与公开规格缓存，以及 Swift/脚本回归统一入口（CI 共用）
 SessionProbe/ - 独立用户级会话验证应用，比较预登录标记下的锁屏帧状态与显式测试按键；不是生产解锁服务
-tests/ - 无桌面副作用的几何/手势/提交队列测试与模拟浏览器回归
+tests/ - 无桌面副作用的几何/手势/提交队列测试与模拟浏览器回归；每次推送由 .github/workflows/tests.yml 自动运行（Linux 跑 Node/Python，macOS 整包编译并跑 Swift）
 docs/ - 已确认交互方案的短规格与实现前决策记录
 PocketDesk-统一小精灵技术方案-2026-09-18/ - 小精灵统一方案与现状基线；承接 Workbench 既有规划，区分源码/专项/部署证据，冻结增量接入边界（成员见目录 CLAUDE.md）
 </directory>
