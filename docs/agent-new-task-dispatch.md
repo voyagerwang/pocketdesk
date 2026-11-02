@@ -191,4 +191,21 @@ Cola既有普通耳机新建验收仍成立。本轮只读核查另发现：Cola
 
 本轮边界要说清楚：探针是 19:49 从工作树快照编译的，已安装的 `~/Applications/PocketDesk.app` 二进制是 18:34 编译的，工作树在其后仍有改动（`AgentAppDispatch` 19:13、`AgentTaskComposer` / `AgentWorkBuddyNewTask` 19:25）。所以本次复跑验证的是**当时工作树的源码**，不是已安装包；已安装包要重装后才与源码等价。该批改动随后由 `16082bf` 提交，本次复跑与该提交内容一致。
 
+### 稳定性复跑2（2026-11-02 20:07）
+
+按同一套办法复跑第 2 轮，正文「PocketDesk 稳定性复跑2，可忽略」。复跑1 之后未再改动 `Sources/`，探针沿用 19:48 编译的 `/tmp/pd-stability-probe`（其等价于全量编译 149 个源文件）：
+
+- **WorkBuddy**：`confirmed / visible=true`，4.95s，pid=24128。日志：唤醒 WorkBuddy → 请求辅助功能树（manual=0）→ 输入框 AX 聚焦 → 焦点引用核验 `sameReference=true / matched=true` → 输入框 AX 聚焦（第二轮）→ 焦点引用核验再次 `matched=true` → 派单 delivered。
+- **Cola**：`confirmed / visible=true`，4.63s，pid=16114。日志：唤醒 Cola → 请求辅助功能树 → 输入框 AX 聚焦 → 派单 delivered。
+- **应用侧第二来源**：只读 AX 扫描探针（只读 AX 树，不写不改；WorkBuddy 423 节点 / Cola 417 节点），两边都读到新任务或子聊天标题「PocketDesk 稳定性复跑2」与正文「PocketDesk 稳定性复跑2，可忽略」——不只依赖回执自称送达。
+- **回归**：全量 Sources 编译通过；`agent-runner` 隔离回归通过（direct execution / lease / dispatch / failure / target isolation）；`agent-workspace` 隔离回归通过（WorkBuddy/ZCode workspace navigation policies）。
+
+本轮与复跑1 的差异要说清楚：
+
+- **验证对象更强。** 复跑1 的已安装二进制是 18:34 编译的，早于 19:13/19:25 的三处改动，只能验证工作树源码。本轮 `~/Applications/PocketDesk.app` 的 `VoiceDeck` 是 19:47 重装的，晚于最后一次源码改动（19:25），所以本轮派单跑的就是**已安装包**，工作树与已安装包在这一轮是等价的。
+- **耗时下降不是性能改进。** WorkBuddy 13.05s → 4.95s、Cola 9.24s → 4.63s，来自复跑1 之后两个应用的辅助功能树已被构建、热状态复用（`manual=0` 表示未再触发冷树构建），不是逻辑改动带来的提速。
+- **`manual=0` 说明冷树路径本轮未被覆盖。** 复跑1 同样记录 `manual=0`，两轮都在树的已构建状态下验收；「冷启动不构建 DOM 辅助功能树」那条修复的验证仍在复跑1 之前的首次跑通记录里，本轮未重复触发冷启动条件。
+
+遗留边界沿用前一轮：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；两轮复跑在两个应用里留下了若干条测试消息（Cola 几条子聊天、WorkBuddy 几条任务），没有删。
+
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
