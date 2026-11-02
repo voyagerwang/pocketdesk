@@ -293,4 +293,70 @@ Cola既有普通耳机新建验收仍成立。本轮只读核查另发现：Cola
 
 遗留边界沿用前几轮：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；本轮在 Cola 侧留下两条「PocketDesk稳定性复跑4-2100」子聊天（两次成功派单各一条），在 WorkBuddy 侧未写入任何正文。
 
+### 稳定性复跑5（2026-11-02 20:35–21:48）：AX 树深度上限真因、并发死锁与系统级 AX 焦点故障
+
+正文「PocketDesk 稳定性复跑5，可忽略」。**编号 5 在本轮开始前已被并行会话占用**（只读 AX 扫描：WorkBuddy 侧已有「PocketDesk 稳定性复跑5」、Cola 侧已有「PocketDesk 稳定性复跑5（可忽略）」），撞号实锤；按既有先例照跑并如实记录。本轮由两个会话并行占用同一对应用，因此本节既记录复跑结果，也记录把失败原因逐层拆到底的过程。
+
+**结果概览**：Cola `confirmed / visible=true`；WorkBuddy 三次尝试均 `needsInput / visible=false / attempted=false`（**未写入任何正文**），失败点在正文写入，与应用自身派单逻辑无关。
+
+#### WorkBuddy：门禁逐层排查，最终钉在「正文写入」而非任何一道派单门禁
+
+用**修复后的生产读取路径**（提交 `cf5dfdc`）从 21:46 起复跑 3 次，回执稳定一致：
+
+```
+PROBE_RESULT app=WorkBuddy state=needsInput visible=false attempted=false elapsed=4.81s
+PROBE_DETAIL 输入位置或替换结果无法确认，已停止同步；请核对电脑内容。
+LOG [live-diagnostic] 草稿停止原因 -> 失败 | 落键后读回：textEqual=false，utf16=0/21，selection=0:0/21:0
+```
+
+逐层证据（都是只读探针实测，不含正文）：
+
+1. **窗口核验通过**。真实源码探针复刻 `AgentWorkBuddyNewTask.prepare` 的就绪循环，两个窗口均 `complete=true`：`win[0]` 1021 节点 `kind=primary`，`win[1]` 60 节点 `kind=independent`。深度放宽到 48 之后不再截断。
+2. **页面证据通过**。主窗读到欢迎标题「WorkBuddy, 我帮你」、占位「今天帮你做些什么？@ 添加上下文，/调用技能与指令」、唯一空撰写框、「新建任务」入口。
+3. **焦点与矩形核验通过**。日志 `WorkBuddy 输入焦点引用核验 -> 已生效 | sameReference=true; expectedRole=AXTextArea; focusedRole=AXTextArea; expectedFrame=Optional((347.0, 357.0, 751.0, 74.0)); focusedFrame=Optional((347.0, 357.0, 751.0, 74.0)); matched=true`——引用、角色、矩形三者全对。
+4. **卡在写入**。正文 21 个 UTF-16 单元落不下去，读回 `0/21`。
+
+#### 根因：系统级 AX 焦点服务故障 + WorkBuddy 5.9.3 撰写框不接收合成键盘事件
+
+三路注入对照实验（同一台机、同一进程、带真实事件源 `CGEventSource(.combinedSessionState)`，逐路测试后立即复原）：
+
+| 注入方式 | WorkBuddy 撰写框 | 备注 |
+| --- | --- | --- |
+| `keyboardSetUnicodeString`（unicode 注入） | ❌ 无效 | 读回长度 0 |
+| 合成按键码（真实字符，如 `z`） | ✅ 有效 | 读回 `z` |
+| 剪贴板 + `Cmd+V` | ❌ 无效 | 读回长度 0 |
+
+对照 Cola：同样用合成按键码，打字后长度 0→1（**有反应**），且 Cola 本轮派单成功。说明事件投递权限与事件源都没问题（`AXIsProcessTrusted=true`，事件 `post` 返回成功）。
+
+**系统级读数**：`AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute)` 与 `kAXFocusedUIElementAttribute` 均返回 **`-25202`（cannotComplete）**，无任何应用报告焦点元素。与上一节记录的 `-25204` 属同一类系统级 AX 焦点服务异常。
+
+两者叠加的后果是明确的：**WorkBuddy 走「系统键盘焦点注入正文」这条通道，撰写框又不接受 `Cmd+V`/unicode 注入，21 字正文必然写不进去**；**Cola 走「AX 设值 + 语义发送按钮」，不依赖系统键盘焦点，因此不受影响**。派单在这种情况下如实停下、`attempted=false`、一个正文都没写入——这正是协议要求的保护行为，不是回归。
+
+**副作用要一起记**：因为 `Cmd+A`/`退格`这类带修饰键或依赖选区的操作在 WorkBuddy 撰写框同样无效，多轮失败后主窗撰写框里堆出了**同一段正文重复 3 份**的残留（`zPocketDesk 稳定性复跑6，可忽略PocketDesk 稳定性复跑6，可忽略…`，实测长度 172）。这是「Electron 读到陈旧值 → 重复输入」的老问题在合成按键失效时的变体。
+
+#### 并发死锁：两个会话共用同一对应用时的活锁与误伤
+
+本轮最花时间的一段，实测记录：
+
+- 并行会话在 20:39 起反复 `WAIT … reason=并发探针`，其日志累计 **96 次 `needsInput` + 4 次 `confirmed`**，在 WorkBuddy 上完全空转。
+- 它每轮往主窗撰写框写入第 6 轮正文「PocketDesk 稳定性复跑6，可忽略」，写完失败、失败后不清理；主窗因此长期是 `homeState=draft`。
+- 主窗有草稿 → 派单走「保留草稿 → 另开独立窗」路径 → 但「新建任务」在 5.9.3 是 **AXRadioButton**，没有右键菜单，「在独立窗口中打开」入口取不到（`有草稿的新页未找到唯一独立窗口入口`）→ 双方都被挡在这条路径上。
+- 双方互抢焦点，我在等待窗口期点火仍得到「独立窗口打开期间焦点或控制权已变化」；同时我的一次 AX 直写空值清理与对方的写入叠加，造成正文重复堆叠。
+- 诊断结论：**这不是应用缺陷，是两个会话共用同一实例的必然结果**。清理动作必须先确认那份草稿的归属与是否送达——本轮确认对方日志里「复跑6」正文**成功发送 0 次**，是纯残留，才动手清；清的过程中又发现该框对退格/Cmd+A 免疫，最终是 AX 直写空值清干净的。
+
+#### 独立第二来源（不依赖回执自称送达）
+
+- **只读 AX 扫描**：Cola 445 节点命中 `AXStaticText value=PocketDesk 稳定性复跑5，可忽略`——完整正文真实落地；WorkBuddy 439 节点 `hits=0`——一个正文都没落地，与 `attempted=false` 一致。
+- **Cola 子聊天**：侧栏出现「PocketDesk稳定性复跑5」；同编号出现**两条**（本轮一条 + 并行会话一条），再次坐实编号无跨会话协调。
+
+#### 本轮新增的可复用结论
+
+1. **正文写入长度决定走哪条通道**：≤20 个 UTF-16 单元且无换行走 unicode 注入，更长走**剪贴板 + `Cmd+V`**。目标应用若不认 `Cmd+V`（本例 WorkBuddy 5.9.3），长正文必然失败——**这条长度分界此前没有写进文档，是本轮的实质发现**。
+2. **合成键盘事件的三种通道要分开验证**（unicode / 按键码 / 剪贴板粘贴），不能只测一种就下结论；无源 `CGEvent` 与带 `CGEventSource(.combinedSessionState)` 的事件行为不同，测键盘类应用必须带事件源。
+3. **系统级 AX 焦点故障要先查再怪应用代码**：读 `kAXFocusedApplicationAttribute` / `kAXFocusedUIElementAttribute` 的返回码（`-25202`/`-25204`）。此时依赖键盘注入的目标必然失败，依赖 AX 设值+语义按钮的目标不受影响。
+4. **AX 树深度会随侧栏会话堆积增长**（本例主窗达 37 层，56 个 AXTextArea 埋在 depth 28、15 个在 depth 35 的 AXRow>AXCell 里）。深度上限与时间预算必须按**真实树的深度与耗时**留余量，否则「读不全」会被一票否决成整轮失败。已在 `cf5dfdc` 修掉（32→48、2s→3s、就绪等待 2s→5s）。
+5. **复跑应避免与其它会话并发占用同一目标应用**；必须并发时，先用只读 AX 扫描确认目标应用里的最新编号与残留草稿归属，再决定正文与清理动作。
+
+遗留边界沿用前几轮：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；本轮在 Cola 侧留下一条「PocketDesk稳定性复跑5」子聊天，WorkBuddy 侧未写入任何正文；并行会话第 6 轮正文从未送达（`confirmed` 0 次），其残留草稿已清。
+
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
