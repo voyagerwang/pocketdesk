@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 真实DesktopVoice草稿提交/私有存储与任务/锁屏替身；临时只读目录制造清理失败。
- * [OUTPUT]: 验证字幕修订不重唤醒、新呼叫保留旧半句而不提交、播报可打断、旧输入队列及故障去重；固定口令仍单次提交；豆包接管时正文不用、转交给它，它没接上就回落到本地并行听到的那份。
+ * [OUTPUT]: 验证字幕修订不重唤醒、新呼叫保留旧半句而不提交、播报可打断、旧输入队列及故障去重；固定口令仍单次提交；豆包接管时正文不用、转交给它，它没接上就回落到本地并行听到的那份且剥掉唤醒名，它出字也剥。
  * [POS]: 自动语音接收与草稿持久化故障回归；不启动蓝牙、识别或实际用户任务。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -69,8 +69,9 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         // 本组回归守的是纯本机模式：键盘麦克风 + 本地识别。
         var local = DesktopVoiceSettings(); local.dictationEnabled = false
         try local.save(); try DesktopVoiceSettings.saveDraft("帮我保留这条指令")
-        var ledger:[String:AgentTask] = [:]; var writes = 0
+        var ledger:[String:AgentTask] = [:]; var writes = 0; var submitted:[String]=[]
         let submit:(String,String)throws->AgentTask = { text,id in
+            submitted.append(text)
             if let known = ledger[id] { return known }
             writes += 1
             let task=AgentTask(id:UUID().uuidString,requestId:id,controlSession:"native")
@@ -272,6 +273,18 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         handoff.testAdvance(to: 310)
         handoff.testAdvance(to: 313)
         precondition(writes == before + 1, "豆包没接上就用本地并行听到的那份派单")
+
+        // 名字那一声先唤醒，同一段的最终修订又把名字带了回来：进正文前得剥掉，
+        // 否则“小E开灯”认不出是固定设备短口令，开灯只能退回模型跑四轮（实测 16 秒）。
+        let named = DesktopVoice(); named.submitUnlocked = submit
+        named.dictationAvailable = { true }
+        named.dictationBegin = { true }
+        before = writes
+        named.testReceive("小E", at: 600)
+        named.testReceive("小E开灯", at: 601)
+        named.finishDictation(nil)
+        named.testAdvance(to: 610); named.testAdvance(to: 613)
+        precondition(writes == before + 1 && submitted.last == "开灯", "本地兜底剥掉唤醒名后仍按原话派单")
 
         let dictatedAgain = DesktopVoice(); dictatedAgain.submitUnlocked = submit
         dictatedAgain.dictationAvailable = { true }

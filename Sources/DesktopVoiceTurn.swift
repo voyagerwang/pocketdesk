@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 配置唤醒词、单轮转写、单调时间和声学活动；不访问设备或任务。
- * [OUTPUT]: 唤醒分段/同段重复识别去重、自适应停顿、麦克风兜底时机与文案策略；仅新唤醒片段可重开输入，不把转写修订当作再次呼叫。
+ * [OUTPUT]: 唤醒分段/同段重复识别去重、转写入口的唤醒名剥离、自适应停顿、麦克风兜底时机与文案策略；仅新唤醒片段可重开输入，不把转写修订当作再次呼叫。
  * [POS]: 自动语音的纯判定层；麦克风只供样本、识别只供转写，发声、提交与锁屏授权由 DesktopVoice 管理。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -45,6 +45,12 @@ enum DesktopVoiceTurn {
     static func normalize(_ text: String, wake: String) -> String {
         guard wake.lowercased() == "小e" else { return text }
         return text.replacingOccurrences(of: "小\\s*[eEｅ艺易伊]", with: wake, options: .regularExpression)
+    }
+    /// 豆包与本地兜底这两条转入正文的入口不经过唤醒分段：名字落在句首就当场剥掉。
+    /// 名字留在正文里，“小E开灯”就认不出是固定设备短口令，固定快路径落空只能退回模型跑多轮。
+    static func dictated(_ text: String, wake: String) -> String {
+        let normalized = normalize(text, wake: wake)
+        return body(normalized, wake: wake) ?? normalized
     }
     static func body(_ text: String, wake: String) -> String? {
         // 识别引擎几乎每次都把“小E”写成“小艺”，这几种写法都得算唤醒名，否则正文里会留着名字，指令就对不上了。

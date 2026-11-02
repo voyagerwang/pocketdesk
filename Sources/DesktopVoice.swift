@@ -475,13 +475,16 @@ final class DesktopVoice: NSObject {
         dictationActive = false
         // 收尾成功时那边已经结束了；失败也一律叫停，不能让它继续往接收框里打字。
         dictationCancel()
-        let dictated = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // 豆包从按下那一声就开始收，名字可能还在它或本地那份里；进正文前统一剥掉。
+        let dictated = DesktopVoiceTurn.dictated(text ?? "", wake: settings.wakeWord)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if !dictated.isEmpty {
             body = dictated; prefix = dictated; partial = ""; bodyAt = now; lastVoice = now
             status = "正在听"
             commitFinal(); return
         }
-        let fallback = fallbackText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = DesktopVoiceTurn.dictated(fallbackText, wake: settings.wakeWord)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         fallbackText = ""; fallbackPrefix = ""
         guard capturing, !fallback.isEmpty else { returnToWake(); return }
         // 豆包没接上：换成本地这份，让既有的停顿规则收尾，不把人后半句裁掉。
