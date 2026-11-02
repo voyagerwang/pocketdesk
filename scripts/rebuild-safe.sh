@@ -22,7 +22,11 @@ if [[ -e "$TLS_DIR/server.p12" && ( ! -e "$TLS_DIR/server-key.der" || ! -e "$TLS
 fi
 
 mkdir -p "$BUILD_APP/Contents/MacOS" "$BUILD_APP/Contents/Resources" "$INSTALL_DIR"
-swiftc "$ROOT_DIR"/Sources/*.swift -o "$BUILD_APP/Contents/MacOS/VoiceDeck" -framework AppKit -framework WebKit -framework Network -framework CoreImage -framework Carbon -Xlinker -sectcreate -Xlinker __CGPreLoginApp -Xlinker __cgpreloginapp -Xlinker /dev/null
+# 从快照编译：本机有别的进程会在编译途中重写 Sources，直接指向源目录会让 swiftc 报
+# “input file was modified during the build”并整轮失败。
+mkdir -p "$TEMP_DIR/Sources"
+cp "$ROOT_DIR"/Sources/*.swift "$TEMP_DIR/Sources/"
+swiftc "$TEMP_DIR"/Sources/*.swift -o "$BUILD_APP/Contents/MacOS/VoiceDeck" -framework AppKit -framework WebKit -framework Network -framework CoreImage -framework Carbon -Xlinker -sectcreate -Xlinker __CGPreLoginApp -Xlinker __cgpreloginapp -Xlinker /dev/null
 cp "$ROOT_DIR/Resources/Info.plist" "$BUILD_APP/Contents/Info.plist"
 cp "$ROOT_DIR/Resources/AppIcon.icns" "$BUILD_APP/Contents/Resources/AppIcon.icns"
 copy_tree() {
@@ -38,6 +42,15 @@ cp "$ROOT_DIR/scripts/mijia-network.py" "$BUILD_APP/Contents/Resources/Mijia/mij
 cp "$ROOT_DIR/scripts/mijia-policy.py" "$BUILD_APP/Contents/Resources/Mijia/mijia-policy.py"
 cp "$ROOT_DIR/scripts/mijia-sensor.py" "$BUILD_APP/Contents/Resources/Mijia/mijia-sensor.py"
 cp "$ROOT_DIR/scripts/setup-mijia.sh" "$BUILD_APP/Contents/Resources/Mijia/setup-mijia.sh"
+mkdir -p "$BUILD_APP/Contents/Resources/TTS"
+cp "$ROOT_DIR/scripts/tts-say.py" "$BUILD_APP/Contents/Resources/TTS/tts-say.py"
+# 声纹桥随包走：脚本在，运行时环境与模型在 ~/Library/Application Support/VoiceDeck/voiceprint（scripts/setup-voiceprint.sh 一次装好）。
+if [ -f "$ROOT_DIR/scripts/voiceprint.py" ]; then
+  mkdir -p "$BUILD_APP/Contents/Resources/Voiceprint"
+  cp "$ROOT_DIR/scripts/voiceprint.py" "$BUILD_APP/Contents/Resources/Voiceprint/voiceprint.py"
+fi
+# 打包自检：缺一个随包脚本就是一次“功能静默降级”（音色退回系统音色、声纹桥起不来），必须当场失败。
+[ -f "$BUILD_APP/Contents/Resources/TTS/tts-say.py" ] || { echo "打包缺少 TTS 脚本，音色会退回系统音色" >&2; exit 1; }
 mkdir -p "$BUILD_APP/Contents/Helpers"
 xcrun clang -fobjc-arc -Wall -Wextra -framework Foundation -framework IOKit "$ROOT_DIR/Helpers/HeadsetOptionMapping/main.m" -o "$BUILD_APP/Contents/Helpers/HeadsetOptionMapping"
 "$BUILD_APP/Contents/Helpers/HeadsetOptionMapping" --self-test
@@ -64,6 +77,14 @@ copy_tree "$BUILD_APP" "$INSTALL_APP"
 if [ -e "$INSTALL_DIR/Voice Deck.app" ]; then mv "$INSTALL_DIR/Voice Deck.app" "$HOME/.Trash/Voice Deck-$(date +%s).app" 2>/dev/null || true; fi
 if [ -e "$INSTALL_DIR/Pocket Deck.app" ]; then mv "$INSTALL_DIR/Pocket Deck.app" "$HOME/.Trash/Pocket Deck-$(date +%s).app" 2>/dev/null || true; fi
 
-python3 "$ROOT_DIR/scripts/install-headset-services.py"
+# 耳机辅助服务与 App 服务一起在这步注册；这一步失败过（launchctl 已存在 exit 5）会把 App 一起留在停机状态，
+# 所以失败不再是致命的：耳机辅助服务允许缺失，App 必须起来。
+if ! python3 "$ROOT_DIR/scripts/install-headset-services.py"; then
+  echo "耳机辅助服务注册失败，继续启动 App" >&2
+fi
+DOMAIN="gui/$(id -u)"
+if ! launchctl print "$DOMAIN/dev.voicedeck.app" >/dev/null 2>&1; then
+  launchctl bootstrap "$DOMAIN" "$HOME/Library/LaunchAgents/dev.voicedeck.app.plist" 2>/dev/null || true
+fi
 # launchd starts the app; do not race it with a second LaunchServices launch.
 echo "Installed and started: $INSTALL_APP"

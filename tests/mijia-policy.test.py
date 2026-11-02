@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 [INPUT]: 米家真实桥接与纯策略，既有内存 SDK/API 替身和合成的官方格式 MIOT 规格。
-[OUTPUT]: 验证敏感设备隐藏、URN 正向授权、动作/场景硬拒绝和温湿度只读/单位/数值边界，不读取凭据或联网。
+[OUTPUT]: 验证敏感设备隐藏、标准插座仅开关、URN 正向授权、动作/场景硬拒绝和温湿度只读/单位/数值边界，不读取凭据或联网。
 [POS]: 米家安全边界回归；直接 ID、prepare 和执行路径分别验证，避免只保护模型工具说明。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -42,6 +42,21 @@ class SecurityPolicyTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assert_no_device_io()
         return result
+
+    def test_standard_outlet_only_exposes_boolean_power(self):
+        urn = "urn:miot-spec-v2:device:outlet:0000A002:test:1"
+        self.api.devices[0]["spec_type"] = urn
+        self.raw["type"] = urn
+        self.raw["services"][0]["type"] = "urn:miot-spec-v2:service:switch:0000780C:test:1"
+        indicator = copy.deepcopy(self.raw["services"][0])
+        indicator["iid"] = 4
+        indicator["type"] = "urn:miot-spec-v2:service:indicator-light:00007803:test:1"
+        self.raw["services"].append(indicator)
+        info = self.call({"operation": "device_info", "device": "d1", "home_id": "h1"})
+        self.assertTrue(info["ok"], info)
+        props = info["data"]["properties"]
+        self.assertEqual([(p["id"], p["type"]) for p in props], [("2.1", "bool")])
+        self.assert_blocked({"operation": "set_property", "device": "d1", "home_id": "h1", "property": "2.2", "value": 50})
 
     def test_sensitive_and_unknown_devices_hidden_even_when_named_light(self):
         for kind, code in (("camera", "0000A01C"), ("lock", "0000A038"), ("speaker", "0000A015"),

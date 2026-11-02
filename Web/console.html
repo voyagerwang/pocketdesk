@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   [INPUT]: 依赖 console-main.js 管理状态、设备、接收者、应用与快捷键事务，委托 console-connection.js 渲染当前 IP 主入口与可选电脑名称入口，console-mijia.js 管理米家扫码与连接核验，console-mijia-scope.js 独立读取家庭并保存设备控制范围，页面说明灯/开关与只读温湿度最小能力与模型数据边界；主题在样式前预应用，真实值由主脚本读取 /api/status 校正；小精灵图标为原版 orb 引擎导出的固定左视 SVG（归属见 docs/orb-attribution.md）。
-  [OUTPUT]: 电脑端控制台：授权引导、IP 扫码连接（App 与浏览器共用，内嵌 token；明确 IP 会变化，电脑名称连接仅按需展开并说明手机兼容性，服务失败立即清除旧地址和二维码）、应用管理（搜索/添加/拖拽排序/删除/自定义图标）、网页文件发送与完整快捷解锁管理；快捷键管理（录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"；主键只认 event.code 物理键位不回退 IME 可污染的 event.key，拦截 isComposing 与纯修饰键；键位标签用 .keycap 样式、label 与键位重复时只显示一个；支持重录/拖拽排序/单击删除，保存失败恢复原项；预设动作由 /api/status.actions 下发，点选即添加、不进录制流程，已添加的置灰判重，预设项不可重录）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
+  [OUTPUT]: 增加EasyInput小E语音配置与草稿处理；电脑端控制台：授权引导、IP 扫码连接（App 与浏览器共用，内嵌 token；明确 IP 会变化，电脑名称连接仅按需展开并说明手机兼容性，服务失败立即清除旧地址和二维码）、应用管理（搜索/添加/拖拽排序/删除/自定义图标）、网页文件发送与完整快捷解锁管理；快捷键管理（录制产出语义串 hotkey 如 "Cmd+Shift+Z"/"Return"；主键只认 event.code 物理键位不回退 IME 可污染的 event.key，拦截 isComposing 与纯修饰键；键位标签用 .keycap 样式、label 与键位重复时只显示一个；支持重录/拖拽排序/单击删除，保存失败恢复原项；预设动作由 /api/status.actions 下发，点选即添加、不进录制流程，已添加的置灰判重，预设项不可重录）；默认经典蓝主题，:root[data-theme="muji"] 按需切换米白克制风；头部"经典蓝/米白"分段开关 POST /api/theme 写 Mac 本机，手机页自动跟随。
   小精灵模型配置：每家服务商独立保存名称、模型、地址与密钥，列表提供显式启用与脱敏摘要；添加/编辑表单按需展开，支持仅保存和保存并使用；Codex 登录额度保留试验入口，测试只调用模拟工具。
   米家连接：电脑本机生成二维码、按服务端期限显示、扫码确认后核验连接；过期/取消/失败移除旧码，重新连接取消时保留原授权。连接后需显式保存允许查询与控制的单个家庭，不默认选择，不提供所有家庭；换账号重新读取并选择，场景暂停执行。
   THESIS: 已保存服务商列表是主体，显式启用决定下一次任务的模型来源。
@@ -368,6 +368,34 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
     </section>
   </section>
 
+  <section class="card" id="voice-card" aria-labelledby="voiceHeading">
+    <h2 id="voiceHeading">小精灵 · 语音唤醒</h2>
+    <p class="sub"><span id="voiceSource">EasyInput AI · 蓝牙麦克风</span> · <span id="voiceBinding">读取中…</span></p>
+    <p class="hint" id="voiceDevice">读取中…</p>
+    <form id="voiceForm">
+      <label class="field"><span>唤醒词</span><input id="voiceWake" value="小E" maxlength="8" autocomplete="off" style="max-width:240px"></label>
+      <label class="field"><span>唤醒应答</span><input id="voiceAckPhrase" value="嗯，我在|在呢|哎，听着呢|嗯？你说" maxlength="120" autocomplete="off" style="max-width:420px"></label>
+      <p class="hint">多句用竖线「|」隔开，每次唤醒轮换一句，不会每次都同一句。</p>
+      <p><label><input id="voiceAck" type="checkbox" checked> 听到唤醒词先回一句再收音</label></p>
+      <label class="field"><span>音色</span><select id="voiceTone" style="max-width:320px"></select></label>
+      <p id="voiceToneHint" class="hint">读取中…</p>
+      <label class="field"><span>语速</span><input id="voiceRate" type="range" min="-20" max="20" step="2" value="4" style="max-width:240px"><span id="voiceRateLabel" class="hint">正常</span></label>
+      <p><label><input id="voiceEnabled" type="checkbox"> 启用语音唤醒</label></p>
+      <p><label><input id="voiceLocked" type="checkbox"> 锁屏时继续监听</label></p>
+      <p class="hint">说“小E，开灯”即可发起指令。收音中再说一次“小E”可以直接重新开一轮。锁屏时可控制已绑定的灯和插座；其他请求保留到解锁后发送。电脑睡眠期间暂停。</p>
+      <div class="model-actions"><button class="btn primary" type="submit">保存并应用</button><button class="btn" id="voiceRetry" type="button">重连设备</button><button class="btn" id="voicePreview" type="button">试听音色</button></div>
+    </form>
+    <p id="voiceStatus" class="hint" role="status" aria-live="polite">读取中…</p>
+    <div id="voiceDraftBox" hidden>
+      <label class="field"><span>未发送的输入</span><textarea id="voiceDraft" readonly rows="3" style="width:100%;font:inherit"></textarea></label>
+      <div class="model-actions"><button class="btn" id="voiceSendDraft" type="button">发送这条输入</button><button class="btn" id="voiceDiscardDraft" type="button">丢弃</button></div>
+    </div>
+    <div id="voiceParkedBox" hidden>
+      <label class="field"><span id="voiceParkedTitle">较早未发送的输入</span><textarea id="voiceParked" readonly rows="3" style="width:100%;font:inherit"></textarea></label>
+      <div class="model-actions"><button class="btn" id="voiceSendParked" type="button">发送这一条</button><button class="btn" id="voiceDiscardParked" type="button">丢弃</button></div>
+    </div>
+  </section>
+
   <section class="card" id="modelSettings" aria-labelledby="modelHeading">
     <h2 class="model-heading" id="modelHeading"><span class="step">6</span>小精灵 · 模型服务<span id="agentState" class="pill">检查中…</span></h2>
     <p class="sub">每家服务商的配置独立保存在这台 Mac。点击「使用」切换，下一次任务生效。</p>
@@ -453,6 +481,7 @@ themeSwitch.addEventListener('click',async event=>{
 <!-- 模型配置与本机管理事务在控制台主业务入口之后加载。 -->
 <script src="/console-agent.js?v=2"></script>
 <script src="/console-actions.js?v=2"></script>
+<script src="/console-voice.js?v=4"></script>
 <script src="/console-mijia-scope.js?v=1"></script>
 <script src="/console-mijia.js?v=1"></script>
 </body>

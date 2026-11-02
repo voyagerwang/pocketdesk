@@ -19,8 +19,13 @@ enum MijiaSensorQuery {
     }
     struct Receipt {
         let text: String
+        /// 本次是否设备直读——只有它才能说“当前/实时”。
         let current: Bool
+        /// 云端刚上报（默认 5 分钟内）：不是实时，但足够当作答案收尾，不该报“这次没完成”。
+        let fresh: Bool
     }
+    /// 云端上报多久之内还值得当成答案回答。
+    static let freshWindow: TimeInterval = 300
 
     static func request(for task: AgentTask) -> Request? {
         guard task.attempt == 1, task.supplementCount == 0, task.context == nil,
@@ -32,7 +37,7 @@ enum MijiaSensorQuery {
     static func request(in text: String) -> Request? {
         let input = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard input.count <= 80, !input.contains("\n"), !input.contains("\r") else { return nil }
-        let pattern = "^(?:(?:请你?|帮我|麻烦你?)\\s*)?(?:(?:查询|查看|查|看)(?:一下)?|看看|查查)?\\s*(?:现在|当前|实时)?\\s*(米家)?\\s*(客厅|卧室|主卧|次卧|书房|厨房|阳台|卫生间|儿童房|房间|家里|室内)?(?:里|里面)?的?(?:现在|当前|实时)?的?(湿度|温度)(?:是|有)?(?:多少|几度)?(?:呢|啊|呀)?[？?。！!]*$"
+        let pattern = "^(?:(?:小e|小艺|小易|小伊)\\s*[，,。！!：:]?\\s*)?(?:(?:请你?|帮我|麻烦你?)\\s*)?(?:(?:查询|查看|查|看)(?:一下)?|看看|查查)?\\s*(?:现在|当前|实时)?\\s*(米家)?\\s*(客厅|卧室|主卧|次卧|书房|厨房|阳台|卫生间|儿童房|房间|家里|室内)?(?:里|里面)?的?(?:现在|当前|实时)?的?(湿度|温度)(?:是|有)?(?:多少|几度)?(?:呢|啊|呀)?[？?。！!]*$"
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(in: input, range: NSRange(input.startIndex..., in: input)) else { return nil }
         func group(_ index: Int) -> String? {
@@ -63,7 +68,7 @@ enum MijiaSensorQuery {
         formatter.numberStyle = .decimal; formatter.usesGroupingSeparator = false; formatter.maximumFractionDigits = 2
         guard let digits = formatter.string(from: number) else { return nil }
         let reading = digits + (metric == "humidity" ? "%" : "℃")
-        if source == "device" { return Receipt(text: "\(label) \(reading)。", current: true) }
+        if source == "device" { return Receipt(text: "\(label) \(reading)。", current: true, fresh: true) }
         var stamp = "更新时间未知"
         if let timestamp = result["updated_at"] as? NSNumber,
            CFGetTypeID(timestamp) != CFBooleanGetTypeID(), timestamp.doubleValue.isFinite,
@@ -71,11 +76,22 @@ enum MijiaSensorQuery {
             let date = Date(timeIntervalSince1970: timestamp.doubleValue)
             var calendar = Calendar(identifier: .gregorian); calendar.timeZone = timeZone
             let dateFormatter = DateFormatter(); dateFormatter.locale = Locale(identifier: "zh_CN"); dateFormatter.timeZone = timeZone
-            dateFormatter.dateFormat = calendar.isDate(date, inSameDayAs: now) ? "今天HH:mm" :
-                (calendar.component(.year, from: date) == calendar.component(.year, from: now) ? "M月d日" : "yyyy年M月d日")
+            let yesterday = calendar.date(byAdding: .day, value: -1, to: now).map { calendar.isDate(date, inSameDayAs: $0) } ?? false
+            dateFormatter.dateFormat = calendar.isDate(date, inSameDayAs: now) ? "今天HH:mm"
+                : (yesterday ? "昨天HH:mm"
+                   : (calendar.component(.year, from: date) == calendar.component(.year, from: now) ? "M月d日 HH:mm" : "yyyy年M月d日"))
             stamp = dateFormatter.string(from: date)
         }
-        return Receipt(text: "\(label)当前值暂时读不到；最近记录 \(reading)（\(stamp)）。", current: false)
+        // 云端值不冒充实时，但刚上报过就说清楚“多久以前”，不要报成读不到。
+        if let timestamp = result["updated_at"] as? NSNumber,
+           CFGetTypeID(timestamp) != CFBooleanGetTypeID(), timestamp.doubleValue.isFinite {
+            let age = now.timeIntervalSince1970 - timestamp.doubleValue
+            if age >= 0, age <= freshWindow {
+                let ago = age < 60 ? "刚刚上报" : "\(Int(age / 60)) 分钟前上报"
+                return Receipt(text: "\(label) \(reading)，\(ago)。", current: false, fresh: true)
+            }
+        }
+        return Receipt(text: "\(label)现在读不到实时值，最近一次是 \(reading)（\(stamp)）。", current: false, fresh: false)
     }
 }
 
@@ -98,6 +114,7 @@ extension AgentRunner {
                 raw = payload
                 if let receipt = MijiaSensorQuery.receipt(payload, metric: request.metric) {
                     content = receipt.text; needsInput = !receipt.current
+                    // 旧值不以成功终态收尾（不冒充当前读数），但语音会直接念出这个值。
                     if !receipt.current { recovery = .init(kind: .executionFailure) }
                 } else { error = "温湿度读数无法核对，请稍后再试。"; recovery = .init(kind: .executionFailure) }
             case .needsInput(let message):

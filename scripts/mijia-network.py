@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 [INPUT]: requests 会话、固定 MIOT 公开规格端点和可选私有缓存目录；不接收或保存米家账号凭据。
-[OUTPUT]: 分阶段限时请求、每次调用的规格成功/失败复用、完整 URN 的七天公开规格缓存与脱敏错误。
+[OUTPUT]: 米家SDK独立会话直连（不继承系统代理、不改系统设置、不自动切路重发）、分阶段限时请求、每次调用的规格成功/失败复用、完整 URN 的七天公开规格缓存与脱敏错误。
 [POS]: 米家桥接的传输边界；仅缓存公开规格与单次家庭 owner 查询，设备归属和实际控制始终走实时接口。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -152,6 +152,14 @@ class SpecCache:
                     temporary.unlink(missing_ok=True)
                 except OSError:
                     pass
+
+
+def direct_cloud(api):
+    """仅固定SDK云端会话直连；保留TLS验证，其他请求与系统代理不变。"""
+    session = getattr(api, "session", None)
+    if getattr(api, "api_base_url", None) == "https://api.mijia.tech/app" and session is not None:
+        session.trust_env = False
+        session.proxies.clear()
 
 
 @contextlib.contextmanager

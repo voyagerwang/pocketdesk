@@ -171,11 +171,14 @@ phone-files.css: 收件区局部样式，沿用 style.css 令牌与44px按钮；
 Android 0.2.1 容器布局：settings.js 根据 PocketDeskAndroid UA 在既有齿轮面板显示连接管理链接，MainActivity 仅接受同源主框架的用户点按；style.css 缩减原生容器顶距并采用48px命中区，普通浏览器不显示原生入口。
 控制台删除修复：console-agent.js 使用 IIFE 隔离内部 save/clear/render，避免覆盖应用配置保存。console.html 快捷键单击删除，保存失败回滚，配置写入期间阻止重复编辑与过期轮询覆盖；应用移除仍二次确认且确认文字不再裁切。
 
-console-actions.js: IIFE 隔离的文件发送和解锁设置控制器，密码提交即清空，配对状态轮询不覆盖正在编辑的表单，确认精确绑定当前邀请，设备授权原地管理。
+console-actions.js: 对console-voice共享pocketdeskConsoleRequest本机JSON事务； IIFE 隔离的文件发送和解锁设置控制器，密码提交即清空，配对状态轮询不覆盖正在编辑的表单，确认精确绑定当前邀请，设备授权原地管理。
 console-actions.css: 文件状态行、密码折叠区、桌面双列/手机单列的配对二维码与核对布局。
 console.html 把文件发送与网页解锁配置放在连接后、应用与模型设置前，常用操作有页内直达；不再需要跳到原生窗口配对。settings.js 对0.3+ App隐藏重复网页收件区，由原生文件页承接；旧App仍保留网页入口。
 
 Android 0.4任务优先：settings.js只读轮询screen/state，locked显示首页解锁入口，unknown或离线不给执行入口，解锁后隐藏；仅用户点按的受限深链进入原生验证。style.css复用既有targets顶部吸附应用栏；文件仅有收件时显示，管理入口在设置；普通浏览器与旧App保持兼容。console-actions显示本机最近一次解锁阶段、错误码和原因。
 
 恢复交互（2026-10-12）：TaskRecovery依据持久事实决定“再试一次/补充信息/调整要求/核对结果”，换件事保持低强调。首页和全屏输入旁明确原目标与新话题，切换保留草稿；未知提交不换票据，核对上次提交不消费新草稿；显式补充沿用原任务，普通耳机输入保留语义关系判断。详见docs/sprite-recovery-interaction.md。
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+
+console-voice.js: 旧输入按队列逐条处理并显示剩余条数； 复用console-actions的pocketdeskConsoleRequest管理小E配置、唤醒应答轮换池、神经/本机音色分组清单、语速档位与试听、EasyInput收音状态与当前输入源、键盘自报能力（扬声器能力只转述不上线）、当前与较早未发送输入；音色下拉按来源分组，定时状态不覆盖配置草稿，发送/丢弃均显式点击。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md

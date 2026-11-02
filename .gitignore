@@ -23,3 +23,19 @@ Android/local.properties
 
 # 分发打包产物（DMG/ZIP），随 GitHub Release 发布，不入库
 dist/
+
+# 私有凭据、环境变量和 Python 缓存不进入公开仓库
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+*.pem
+*.p12
+*.key
+auth.json
+mina-auth.json
+scope-lock.json
+home-scope.json
+quick-light.json
+quick-ac.json

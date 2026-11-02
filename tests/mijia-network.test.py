@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 [INPUT]: mijia-network.py 的有界 HTTP 上下文、requests 替身与唯一临时公开规格缓存目录。
-[OUTPUT]: 验证同规格请求成功/失败去重、账号/设备请求不缓存，以及公开规格缓存的隔离、过期和损坏恢复。
+[OUTPUT]: 验证仅固定云端会话直连且TLS不降级、同规格请求成功/失败去重、账号/设备请求不缓存，以及公开规格缓存的隔离、过期和损坏恢复。
 [POS]: tests 的米家网络延迟回归；不联网、不读写正式授权或缓存，JSON 响应均为合成规格。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -131,6 +131,20 @@ class NetworkTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(first.json()["type"], URN)
         self.assertEqual(second.json()["type"], OTHER_URN)
+
+    def test_cloud_direct_transport_does_not_change_global_sessions_or_tls(self):
+        session = SimpleNamespace(trust_env=True, proxies={"https": "http://isolated-proxy"}, verify=True)
+        other = SimpleNamespace(trust_env=True, proxies={"https": "http://other-proxy"}, verify=True)
+        api = SimpleNamespace(api_base_url="https://api.mijia.tech/app", session=session)
+        self.network.direct_cloud(api)
+        self.assertFalse(session.trust_env)
+        self.assertEqual(session.proxies, {})
+        self.assertTrue(session.verify)
+        for host in ("https://unrelated.example/app", "https://api.mijia.tech.attacker.example/app"):
+            self.network.direct_cloud(SimpleNamespace(api_base_url=host, session=other))
+            self.assertTrue(other.trust_env)
+            self.assertEqual(other.proxies, {"https": "http://other-proxy"})
+            self.assertTrue(other.verify)
 
     def test_account_and_device_posts_are_never_cached(self):
         with self.network.bounded_http(cache_dir=self.cache):

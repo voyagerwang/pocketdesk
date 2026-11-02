@@ -1,5 +1,5 @@
 /**
- * [INPUT]: ServerHTTPTransport承接HTTP分帧与响应，HTTPRequestSecurity统一校验Host/Origin与本机豁免，ConsoleActions 提供严格本机同源管理接口，MijiaHTTP 在同一边界内承接扫码连接；依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 PhoneFileHTTP 的独立文件路由、LiveInputReceipt 的草稿模式回执、InputBinding 的输入上下文、控制租约校验闭包与 ScreenCapture 的鉴权画面读取、Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
+ * [INPUT]: 消费DesktopVoiceHTTP本机唤醒配置与独立语音权限票据； ServerHTTPTransport承接HTTP分帧与响应，HTTPRequestSecurity统一校验Host/Origin与本机豁免，ConsoleManagementHTTP复用ConsoleActions策略统一严格本机同源管理接口，MijiaHTTP 在同一边界内承接扫码连接；依赖 Network 的 NWListener/NWConnection、AppKit 的 NSWorkspace/NSRunningApplication、CoreGraphics 的 CGWindowList 与 Foundation 的 JSON 编解码；消费 PhoneFileHTTP 的独立文件路由、LiveInputReceipt 的草稿模式回执、InputBinding 的输入上下文、控制租约校验闭包与 ScreenCapture 的鉴权画面读取、Models 的请求体类型、TargetStore 配置、Auth 鉴权、AppDiscovery 搜索、Util 地址与图标、InputExecutor 执行。
  * [OUTPUT]: 注入结构化应用派单回执；展示上报复用控制租约校验；注入输入框、指定窗口及应用动作适配；注入复用系统快捷操作的锁屏工具；注入小精灵 new/current 派单与共享输入/指针执行器与执行时控制租约核验；对外提供 Server（HTTP :46387 全部端点：状态/局域网与 Tailscale 配对二维码/配对心跳/应用搜索/图标/目标与快捷键管理（保留完整组合键简称）/激活与应用选择后鼠标就位/发送/图片预上传/快捷键触发/草稿实时同步与只读恢复探测、静态页面、console-main.js 控制台主业务入口与 recipients.js 接收者路由服务；非回环写请求强制 Bearer 校验）。
  * 原生解锁委托 UnlockNativeHTTP；手动密码委托 ManualUnlockRoute/HTTP，强制 HTTPS 同源页面、Bearer 与控制租约。
  * 小精灵快速打开使用同一目标配置的准确应用解析，禁止模糊名称绕过模型判断。
@@ -61,12 +61,7 @@ final class Server {
             guard let target = AgentAppDispatch.target(named: name, in: self?.store.targets ?? []) else { return false }
             return AgentAppProfile.resolve(target) == .codex
         }
-        AgentRunner.canControl = { [weak self] taskId in
-            guard let task = TaskStore.task(id: taskId), task.status == .running,
-                  let session = task.controlSession else { return false }
-            if SpriteDesktopInput.authorizes(task) { return true }
-            return self?.controlAuthorized(session) == true
-        }
+        AgentRunner.canControl = { [weak self] in AgentControlAuthority.allows(task: TaskStore.task(id: $0), remote: { self?.controlAuthorized($0) == true }) }
         AgentRunner.desktopAction = { [weak self] request, taskId, done in
             guard let self else { done(.failure(.message("服务不可用。"))); return }
             self.executor.performDesktopAction(request, authorized: { AgentRunner.canControl(taskId) }, completion: done)
@@ -154,19 +149,11 @@ final class Server {
         if PhoneFileHTTP.handle(method: method, path: path, authorization: authorization, connection: connection,
                                 respond: { status, json in self.respond(connection, status: status, json: json) }) { return }
 
-        if path.hasPrefix("/api/console/") {
-            guard let consoleActions, ConsoleActions.allowed(loopback: Self.isLoopback(connection), method: method,
-                host: Self.headerValue("Host", in: headerText), origin: Self.headerValue("Origin", in: headerText),
-                marker: Self.headerValue("X-PocketDesk-Console", in: headerText), contentType: Self.headerValue("Content-Type", in: headerText),
-                port: secure ? SecureTransport.port : port, secure: secure) else {
-                respond(connection, status: 403, json: ["error": "请在电脑本机控制台操作。"]); return
-            }
-            if MijiaHTTP.handle(method: method, path: path, rawPath: rawPath, body: bodyData, reply: { self.respond(connection, status: $0, data: $1, contentType: $2) }) { return }
-            consoleActions.handle(method: method, path: path, body: bodyData) { code, result in
-                self.respond(connection, status: code, json: result)
-            }
-            return
-        }
+        if ConsoleManagementHTTP.handle(method: method, path: path, rawPath: rawPath, body: bodyData,
+            loopback: fromLoopback, header: { Self.headerValue($0, in: headerText) },
+            port: secure ? SecureTransport.port : port, secure: secure, actions: consoleActions,
+            reply: { self.respond(connection, status: $0, json: $1) },
+            replyData: { self.respond(connection, status: $0, data: $1, contentType: $2) }) { return }
         // 原生通路有独立凭据与 TLS 固定身份；不借用网页的普通控制 token。
         if path.hasPrefix("/api/native-unlock/") {
             guard method == "POST", Self.headerValue("Origin", in: headerText) == nil,
@@ -610,7 +597,7 @@ final class Server {
             }
         case ("GET", "/"), ("GET", "/index.html"):
             serveFile("index.html", connection: connection)
-        case ("GET", let asset) where ["phone-files.js", "phone-files.css", "orb-rings.js", "orb-emotions.js", "orb-ball.js", "orb-engine.js", "orb-mobile.js", "device-info.js", "agent-client.js", "agent-panel.js", "agent-panel.css", "sprite-report.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "manual-unlock.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "recipients.js", "style.css", "app-extras.css", "screen.css", "console-agent.js", "console-connection.js", "console-main.js", "console-actions.js", "console-actions.css", "console-mijia.js", "console-mijia.css", "console-mijia-scope.js"].contains(String(asset.dropFirst())):
+        case ("GET", let asset) where ["phone-files.js", "phone-files.css", "orb-rings.js", "orb-emotions.js", "orb-ball.js", "orb-engine.js", "orb-mobile.js", "device-info.js", "agent-client.js", "agent-panel.js", "agent-panel.css", "sprite-report.js", "screen.js", "screen-geometry.js", "screen-gestures.js", "screen-frames.js", "screen-pip.js", "manual-unlock.js", "compose-queue.js", "compose.js", "pad.js", "settings.js", "motion-recognizer.js", "motion-send.js", "app.js", "recipients.js", "style.css", "app-extras.css", "screen.css", "console-agent.js", "console-connection.js", "console-main.js", "console-actions.js", "console-voice.js", "console-actions.css", "console-mijia.js", "console-mijia.css", "console-mijia-scope.js"].contains(String(asset.dropFirst())):
             serveFile(String(path.dropFirst()), connection: connection)
         default:
             // /api/v1 下的本机管理端点（模型服务配置与连通性实测）委托 AgentHTTP，

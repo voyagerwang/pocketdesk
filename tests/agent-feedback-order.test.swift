@@ -89,7 +89,7 @@ import Foundation
         check(latest.searches == 1 && latest.opens == 1, "搜索和打开各执行一次")
         check(latest.modelCalls == 3 && latestResult.error == nil, "混批失败反馈不能覆盖已成功打开的真实回执")
         let continued = latest.inputs.last ?? []
-        check(continued.contains { $0["role"] as? String == "tool" && ($0["content"] as? String)?.hasPrefix("已向") == true }, "下一轮确实收到打开回执")
+        check(continued.contains { $0["role"] as? String == "tool" && AgentReplies.isOpened($0["content"] as? String ?? "") }, "下一轮确实收到打开回执")
 
         // ---------- 首项反馈保留原语义：先澄清/结束，不执行封闭后的动作 ----------
         let before = Probe([calls([feedback, opening()]), answer])
@@ -113,7 +113,7 @@ import Foundation
         let quick = Probe([calls([opening(true), feedback])])
         let (quickTask, quickResult) = try quick.run("打开测试官网")
         check(quick.opens == 1 && quick.modelCalls == 1 && quickResult.error == nil, "单次完整打开不因尾部反馈失去直接回执")
-        check(quickResult.content?.hasPrefix("已向") == true, "快速打开只报告本机收到请求的事实")
+        check(AgentReplies.isOpened(quickResult.content ?? ""), "快速打开只报告本机收到请求的事实")
         let quickTools = (quickTask.transcript ?? []).filter { $0["role"] as? String == "tool" }
         check(quickTools.count == 2 && !(quickTools.last?["content"] as? String ?? "").contains("网页尚未打开"), "尾部反馈记录为未执行而非失败事实")
 

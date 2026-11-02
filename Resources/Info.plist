@@ -20,9 +20,20 @@
 	<string>0.3.2</string>
 	<key>CFBundleVersion</key>
 	<string>5</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>PocketDesk 通过蓝牙接收你绑定的 EasyInput 键盘麦克风，用于“小E”唤醒与语音指令。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>PocketDesk 在 EasyInput 键盘未连接时改用电脑内置麦克风，保证“小E”仍能听你说话。不录音、不保存、不上传。</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>PocketDesk 使用本地语音识别来识别唤醒词和你说出的指令。</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>PocketDesk 需要按你的指令读取访达所选文件，或读取并关闭 Google Chrome 中的重复标签页。</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>PocketDesk 需要屏幕录制权限，用于在手机端查看这台 Mac 的画面。</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

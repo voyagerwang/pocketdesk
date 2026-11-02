@@ -104,7 +104,7 @@ enum AgentQuickOpen {
                 case "open_page":
                     guard address == nil, calls.count == 1,
                           let arguments = function["arguments"] as? String, completesTask(arguments),
-                          payload.hasPrefix("已向默认浏览器提交打开网页请求"),
+                          payload == AgentReplies.page(),
                           let data = arguments.data(using: .utf8),
                           let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                           let raw = values["url"] as? String, let stable = stableURL(raw) else { return nil }
@@ -170,16 +170,16 @@ extension AgentRunner {
         switch opening {
         case .page(let url):
             switch openPage(url) {
-            case .success: finish("已向默认浏览器提交打开网页请求。")
+            case .success: finish(AgentReplies.page())
             case .failure(let error): finish("未打开：" + error.localizedDescription, error: true)
             }
         case .app(let display, let path):
             switch openApp(path) {
-            case .success: finish("已向系统提交打开应用请求：" + display)
+            case .success: finish(AgentReplies.app(display))
             case .failure(let error): finish("未打开：" + error.localizedDescription, error: true)
             }
         case .bookmark(let id):
-            openBookmark(id) { payload in finish(payload, error: !payload.hasPrefix("已向")) }
+            openBookmark(id) { payload in finish(payload, error: !AgentReplies.isOpened(payload)) }
         }
         return true
     }

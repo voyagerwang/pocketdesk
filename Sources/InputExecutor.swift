@@ -1030,7 +1030,7 @@ final class InputExecutor {
                     self.verify(label: shortcut.label, frontApp: frontName, delay: .milliseconds(600),
                                 changed: { beforePID.map { self.windowCount(pid: $0) < beforeWindows } ?? false },
                                 okText: { "已关闭\(appName)的窗口。" },
-                                pendingText: "已向\(appName)发送 \(shortcut.effectiveHotkey)，但没检测到窗口关闭——它不响应合成按键，建议改用「隐藏应用」。") { feedback in
+                                pendingText: "给\(appName)按了 \(shortcut.effectiveHotkey)，但它没响应这种模拟按键，窗口还开着；想关掉可以改用「隐藏应用」。") { feedback in
                         completion(.success(feedback))
                     }
                     return

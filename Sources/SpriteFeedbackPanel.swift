@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 SpriteFileDropView、PhoneFileStore 的批量拖入发送，以及 AppKit、SpriteSubtitleView 的组合字幕、SpriteOrbView 的原版动态组件、SpriteFeedback.ViewModel、AgentTask 与 TaskRecovery 的恢复事实；异步读取系统真实焦点归属，复用 HeadsetLog 记录应用归还请求，监听前台、锁屏和减少动态设置。
+ * [INPUT]: 接收DesktopVoice无焦点语音字幕，依赖 SpriteFileDropView、PhoneFileStore 的批量拖入发送，以及 AppKit、SpriteSubtitleView 的组合字幕、SpriteOrbView 的原版动态组件、SpriteFeedback.ViewModel、AgentTask 与 TaskRecovery 的恢复事实；异步读取系统真实焦点归属，复用 HeadsetLog 记录应用归还请求，监听前台、锁屏和减少动态设置。
  * [OUTPUT]: 440pt 紧凑恢复卡以原目标、原因和一个主动作引导；点击后在同一原生字段可见编辑，切换话题保留草稿；语音接收仅呈现状态与真实字幕，不显示占位或前文说明；600pt 普通结果保留有界滚动；被动展示透明精灵面板、原版表情、
  *           文件拖入发送反馈与拖拽期间短暂显现；空闲无提示文字、无收起按钮；明确取消抑制同展示代际迟到状态，并仅在本进程仍持焦点且无其他 key 窗口时归还原应用；恢复动作只发明确意图，执行冻结字幕并交出焦点；接收诊断只读本进程AX身份、输入法来源和修饰键状态，不读取正文。
  * [POS]: 桌面展示层；球体单独在 WebKit 内矢量绘制，正文由原生字体按屏幕比例绘制；语音字幕逐行居中自然展开、满行换行，不随球体缩放或旋转。
@@ -369,6 +369,18 @@ final class SpriteFeedbackPanel: NSPanel {
         desktopStatus("执行中")
         orbView.update(visible: isVisible && !screenIsLocked && !hiddenByApplication,
                        revision: presentationRevision + 1, emotion: "32", reduced: reduceMotion, taskId: "")
+    }
+    /// 外部收音只投影字幕，不取得编辑焦点或唤起输入法。
+    func externalVoice(status: String, text: String) {
+        guard !LockScreenInput.locked else { return }
+        if status.isEmpty { dismissDesktopCapture(); return }
+        desktopMode = true; hiddenByApplication = false; textEntryMode = false
+        desktopInput.isHidden = true; releaseDesktopFocus()
+        bubble.isHidden = true; answerScroll.isHidden = true; connectionNotice.isHidden = true
+        subtitleScroll.isHidden = false; desktopSubtitle.update(text: text)
+        configureRecovery(nil, taskId: nil); desktopStatus(status)
+        layoutContent(); centerAndShow()
+        orbView.update(visible: true, revision: presentationRevision + 1, emotion: "02", reduced: reduceMotion, taskId: "")
     }
     /// 明确重试只进入忙态，不借用键盘焦点、不启动语音。
     func beginDesktopRetry() {

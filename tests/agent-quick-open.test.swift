@@ -25,7 +25,7 @@ import Foundation
         var allowed = true
         var pageFailure: Error?
         var appFailure: Error?
-        var bookmarkPayload = "已向 Chrome 提交打开书签请求：测试书签"
+        var bookmarkPayload = AgentReplies.bookmark("测试书签")
         var bookmarkReadFailure: Error?
 
         var modelCalls: Int { modelInputs.count }
@@ -129,7 +129,7 @@ import Foundation
     static func assertQuickSuccess(_ probe: Probe, _ result: (task: AgentTask, outcome: AgentRunner.Outcome)) {
         assert(probe.modelCalls == 0 && probe.actions == 1, "准确单动作只执行一次，不请求模型")
         assert(probe.pageReads == 0, "打开目标不预读无关页面")
-        assert(result.outcome.content?.hasPrefix("已向") == true && result.outcome.error == nil, "只按系统收到请求的事实汇报")
+        assert(AgentReplies.isOpened(result.outcome.content ?? "") && result.outcome.error == nil, "只按系统收到请求的事实汇报")
         assert(result.outcome.rounds == 0 && !result.outcome.usage.unknown && result.outcome.usage.totalTokens == 0)
         let transcript = TaskStore.task(id: result.task.id)?.transcript ?? []
         assert(transcript.count == 2 && transcript.first?["role"] as? String == "user")
@@ -230,7 +230,7 @@ import Foundation
         unknown.modelResponses = [calls([("open_page", "{\"url\":\"https://example.test/unknown\",\"completesTask\":true}")])]
         let unknownResult = try unknown.run("打开未知网站")
         assert(unknown.modelCalls == 1 && unknown.openedPages == ["https://example.test/unknown"])
-        assert(unknownResult.outcome.content == "已向默认浏览器提交打开网页请求。" && unknownResult.outcome.error == nil,
+        assert(unknownResult.outcome.content == AgentReplies.page() && unknownResult.outcome.error == nil,
                "模型解析未知网站后按成功回执结束，省掉最终总结请求")
         assert(TaskStore.task(id: unknownResult.task.id)?.transcript?.last?["role"] as? String == "tool")
 

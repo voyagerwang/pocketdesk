@@ -9,7 +9,7 @@ import Foundation
 @main struct AgentOpenHistoryTests {
     static let text = "打开飞书开放平台创建应用页面"
     static let address = "https://open.feishu.cn/app"
-    static let receipt = "已向默认浏览器提交打开网页请求。"
+    static let receipt = AgentReplies.page()
     static var checks = 0
 
     static func check(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -163,7 +163,7 @@ import Foundation
                 return self.pageFails ? .failure(NSError(domain: "history-test", code: 2)) : .success(())
             }
             AgentRunner.openApp = { path in self.apps.append(path); return .success(()) }
-            AgentRunner.openBookmark = { id, done in self.openedBookmarks.append(id); done("已向 Chrome 提交打开书签请求：当前书签") }
+            AgentRunner.openBookmark = { id, done in self.openedBookmarks.append(id); done(AgentReplies.bookmark("当前书签")) }
             AgentRunner.canControl = { _ in self.allowed }
             AgentRunner.sendModel = { _, _, _, _, done in
                 self.modelCalls += 1

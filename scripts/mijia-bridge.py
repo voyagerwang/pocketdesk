@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-[INPUT]: 外部安装的 mijiaAPI 5.0.0、mijia-network.py 传输、mijia-policy.py 最小能力策略、mijia-sensor.py 只读查询、私有认证文件和 JSON 请求。
-[OUTPUT]: stdout 脱敏回执；标准灯/开关基础属性与温湿度只读查询，敏感及未知设备/动作默认拒绝；读取明确设备/云端来源及可信更新时间，提供扫码事件、运行时检查与云端离线提示。
-[POS]: scripts 的米家隔离进程边界；Swift 管理会话与家庭策略，本文件实时核对家庭设备目标、复用已取得家庭资料补房间，或将新授权写入独立暂存文件。
+[INPUT]: 外部安装的 mijiaAPI 5.0.0、mijia-network.py 固定云端会话直连传输、mijia-policy.py 最小能力策略、mijia-sensor.py 只读查询、私有认证文件和 JSON 请求。
+[OUTPUT]: stdout 脱敏回执；冻结范围下状态检查只访问所选家庭的真实只读设备接口，授权失效不误报已连接；标准灯/开关/插座基础属性与温湿度只读查询，敏感及未知设备/动作默认拒绝；读取明确设备/云端来源及可信更新时间，提供扫码事件、运行时检查与云端离线提示。
+[POS]: scripts 的米家隔离进程边界；Swift 管理会话与家庭策略，本文件先核验不可变家庭锁并阻止跨家庭请求，再实时核对家庭设备目标、复用已取得家庭资料补房间，或将新授权写入独立暂存文件。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
 
 import argparse
 import contextlib
 import importlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -225,6 +226,7 @@ class Bridge:
             clean_device=clean_device, clean_property=clean_property, limit=RESULT_LIMIT)
 
     def authenticate(self, operation):
+        _network.direct_cloud(self.api)
         # 业务接口自行验证凭据，取消消息接口预检；显式状态查询核实真实家庭接口。
         self.api._refresh_token = lambda: self.api.auth_data
         if operation == "status":
@@ -418,8 +420,17 @@ class Bridge:
             invalid("设备目标或规格已发生变化，请重新准备操作；未发送任何指令。")
         operation = canonical["operation"]
         label = prepared["label"]
+        # 屏幕上的这句话是给人看的：说“灯开好了”，不写“已设置为 true”。
+        name = label.split(" · ")[0].strip() or label
+        bool_value = type(canonical["value"]) is bool
+        if bool_value:
+            done = f"{name}开好了。" if canonical["value"] else f"{name}关好了。"
+        elif type(canonical["value"]) in (int, float):
+            done = f"{name}已调到 {json.dumps(canonical['value'], ensure_ascii=False)}。"
+        else:
+            done = f"{name}已按指令调整。"
         data = {"label": label, "accepted": False, "verified": False,
-                "status": "unconfirmed", "message": f"{label}：操作结果尚未确认，请在米家中核对；不会自动重发。"}
+                "status": "unconfirmed", "message": f"{done[:-1]}，但没读到回读值；这次不会自动重发。"}
         self.receipt = data
         data["device"] = clean_device(target)
         method = {"did": canonical["device"], "siid": capability["method"]["siid"],
@@ -431,19 +442,25 @@ class Bridge:
         response = self.item_receipt(self.api.set_devices_prop(method), method, mutating=True)
         data["accepted"] = True
         if "r" in capability.get("rw", ""):
-            try:
-                read_method = {k: v for k, v in method.items() if k != "value"}
-                raw = self.api._request("/miotspec/prop/get", {"params": [read_method], "datasource": 2})
-                read = self.item_receipt(raw, read_method)
+            read_method = {k: v for k, v in method.items() if k != "value"}
+            display_value = json.dumps(canonical["value"], ensure_ascii=False)
+            # 云端回读有传播延迟，写下去马上读经常还是旧值；隔一会儿再读两次，
+            # 否则一秒钟前的正确写入会被报成“未确认”。
+            for attempt in range(3):
+                if attempt:
+                    time.sleep(0.6)
+                try:
+                    raw = self.api._request("/miotspec/prop/get", {"params": [read_method], "datasource": 2})
+                    read = self.item_receipt(raw, read_method)
+                except Exception:
+                    continue
                 if "value" in read and _policy.safe_value(capability, read["value"]):
                     data["value"] = read["value"]
                     if equal_value(read["value"], canonical["value"]):
-                        display_value = json.dumps(canonical["value"], ensure_ascii=False)
-                        data.update(status="verified", verified=True, message=f"{label} 已设置为 {display_value}，并已读回核实。")
-            except Exception:
-                pass
+                        data.update(status="verified", verified=True, message=done)
+                        break
         elif response["code"] == 0:
-            data.update(status="accepted", message=f"{label}：米家已确认写入指令；该属性不可读回核实。")
+            data.update(status="accepted", message=f"{done[:-1]}，米家已接收指令，这台设备没法回读确认。")
         return data
 
     def handle(self, request):
@@ -486,11 +503,39 @@ def is_network(error):
                                "HTTPError", "RequestException") for cls in type(error).__mro__)
 
 
+def frozen_home(request, auth_path):
+    """冻结范围先于SDK初始化；直接调用Python入口也不能指定另一个家庭。"""
+    path = Path(auth_path).with_name("scope-lock.json")
+    if not path.exists() and re.fullmatch(r"login-[0-9a-fA-F-]{36}", path.parent.name):
+        path = path.parent.parent / "scope-lock.json"
+    if not path.exists():
+        return None
+    try:
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or not info.st_flags & stat.UF_IMMUTABLE):
+            raise ValueError()
+        lock = json.loads(path.read_text())
+        auth = json.loads(Path(auth_path).read_text())
+        if (lock["version"] != 1 or not isinstance(lock["homeID"], str) or not lock["homeID"]
+                or hashlib.sha256(str(auth["userId"]).encode()).hexdigest() != lock["account"]):
+            raise ValueError()
+        target = request["request"] if request["operation"] == "prepare" else request
+        if target.get("home_id", lock["homeID"]) != lock["homeID"]:
+            raise ValueError()
+        if "home_id" in FIELDS[target["operation"]]:
+            target["home_id"] = lock["homeID"]
+        return lock
+    except Exception:
+        raise BridgeError("scope", "家庭权限已锁定，禁止访问其他家庭或更换账号。")
+
+
 def envelope(request, auth_path, sdk=None, api=None, raw_spec=None):
     bridge = None
     mutating = False
     try:
         operation = validate_request(request)
+        frozen = frozen_home(request, auth_path)
         mutating = operation in MUTATIONS
         sdk = sdk or load_sdk()
         if api is None:
@@ -499,10 +544,17 @@ def envelope(request, auth_path, sdk=None, api=None, raw_spec=None):
                 api = sdk.mijiaAPI(str(auth_path))
             except Exception:
                 raise BridgeError("auth", "米家授权文件无法使用，请重新扫码授权。")
+        if frozen:
+            # SDK内部owner查询也只看到冻结家庭，不访问账号级家庭清单。
+            api.get_homes_list = lambda: [{"id": frozen["homeID"], "name": frozen["homeName"],
+                                          "uid": api.auth_data["userId"]}]
         bridge = Bridge(sdk, api, auth_path, raw_spec)
         with _network.memoized_homes(api) as cached_homes:
             bridge.cached_homes = cached_homes
             bridge.authenticate(operation)
+            if frozen and operation == "status":
+                # 冻结清单只是本机授权边界，不能拿它证明云端凭据仍有效。
+                bridge.devices(frozen["homeID"])
             data = bridge.handle(request)
         return {"ok": True, "data": data, "mutating": mutating}
     except _policy.PolicyError as error:

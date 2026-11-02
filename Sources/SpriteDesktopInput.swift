@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖原生小精灵接收框、系统输入焦点、耳机默认/自定义操作与 TaskService。
- * [OUTPUT]: 显式恢复选择绑定原任务，重试直接提交并封住连点；可见文字输入切换话题保留草稿，转语音沿用同一字段；默认语音仍按语义判断归属。接收框焦点交接在共享有界准备期内确认后立即唤起豆包，超时记录归属和分段耗时，快捷键前与失败时记录接收框AX/输入法/修饰键事实，并只读观察本进程带标记的修饰键到达；同源转写、组合文字稳定提交、取消及迟到清理共用既有代际与焦点门禁；接收状态用简短标题，具体失败原因仅记日志，不记录正文。
+ * [INPUT]: 接收DesktopVoice完整自动语音提交，依赖原生小精灵接收框、系统输入焦点、耳机默认/自定义操作与 TaskService。
+ * [OUTPUT]: 显式恢复选择绑定原任务，重试直接提交并封住连点；可见文字输入切换话题保留草稿，转语音沿用同一字段；默认语音仍按语义判断归属。唤醒词入口 beginWakeDictation 复用同一接收框，但没有按下/松开：语音窗出现又自己关掉就算说完，无字/启动失败/取消都只回执一次 nil，提交归 DesktopVoice 那条链。接收框焦点交接在共享有界准备期内确认后立即唤起豆包，超时记录归属和分段耗时，快捷键前与失败时记录接收框AX/输入法/修饰键事实，并只读观察本进程带标记的修饰键到达；同源转写、组合文字稳定提交、取消及迟到清理共用既有代际与焦点门禁；接收状态用简短标题，具体失败原因仅记日志，不记录正文。
  * [POS]: Sources 的桌面语音适配层；复用普通语音链路的豆包窗口判断，收尾组合文字后交给 TaskService，不承担语音识别。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -11,6 +11,28 @@ final class SpriteDesktopInput: NSObject, NSTextFieldDelegate {
     private static let localControlSession = UUID().uuidString
     static func authorizes(_ task: AgentTask) -> Bool {
         task.controlSession == localControlSession && !LockScreenInput.locked
+    }
+    static func submitAutomaticVoice(_ text: String, requestID: String) throws -> AgentTask {
+        guard !LockScreenInput.locked else { throw CocoaError(.userCancelled) }
+        return try TaskService.submit(subject: String(Auth.token.prefix(8)), requestId: requestID,
+            text: text, context: nil, controlSession: localControlSession)
+    }
+    var hasInputInProgress: Bool { recording || routingInput || (panel.desktopMode && !panel.desktopInput.isHidden) }
+    /// 接收框当前正文字数：唤醒豆包时用来挑停顿容忍，不读内容、不做判定。
+    var desktopCharacters: Int { panel.desktopText.count }
+    /// 叫停一轮唤醒豆包收音（DesktopVoice 侧收尾时调用）；回执在 cancel 里发，这里不重复。
+    func dismissWakeDictation() {
+        guard wakeCompletion != nil else { return }
+        cancel("wake dictation cancelled")
+    }
+    /// 唤醒路径的“说完了”：豆包是按住说话，不松手它就一直收。
+    /// 本地听出这句完了就松手，随后仍走“窗关 + 文字稳定”那套收尾，不另开一条提交。
+    @discardableResult func endWakeDictation() -> Bool {
+        guard wakeCompletion != nil, recording else { return false }
+        recording = false; option(false)
+        releasedAt = Date(); changedAt = Date(); startReleaseDiagnostics()
+        voiceLog("sprite wake dictation: silence detected; voice shortcut released")
+        return true
     }
     private let panel: SpriteFeedbackPanel
     private let headset = HeadsetLongPress()
@@ -51,6 +73,8 @@ final class SpriteDesktopInput: NSObject, NSTextFieldDelegate {
         var retried = false
     }
     private var dictationCancellation: DictationCancellation?
+    /// 唤醒词把正文交给豆包时的回执：有字带回文字，没字带回 nil，由 DesktopVoice 决定用本地兜底。
+    private var wakeCompletion: ((String?) -> Void)?
     // ---------- 松开等待诊断 ----------
     // 诊断采用单调时钟；原有转写、焦点与代际门禁仍由提交链路决定。
     private struct ReleaseDiagnostics {
@@ -281,6 +305,43 @@ final class SpriteDesktopInput: NSObject, NSTextFieldDelegate {
         if recording { return .started }
         return continueVoice(key: key, toggle: toggle)
     }
+    /// 唤醒词把正文交给豆包：走同一个接收框，但不靠按下/松开，靠语音窗自己关判断“说完了”。
+    /// 返回 false 表示这轮没接下（锁屏、环境不允许、接收框起不来），调用方直接用本地识别。
+    func beginWakeDictation(completion: @escaping (String?) -> Void) -> Bool {
+        guard environmentAllows(), !LockScreenInput.locked, !recording,
+              dictationCancellation == nil, !routingInput, wakeCompletion == nil else { return false }
+        guard panel.beginDesktopCapture(intent: .newTask, continuing: false) else { return false }
+        retireRecordingOwners()
+        releaseDiagnostics = nil
+        wakeCompletion = completion
+        preparedInput = false; inputIntent = .newTask; taskId = nil; inputContextTaskId = nil
+        captureGeneration += 1
+        let generation = captureGeneration
+        recording = true; routingInput = false; showingTask = false
+        voiceObserved = false; textObserved = false; triggerAt = nil; triggerUptime = nil
+        previousText = ""; voiceShortcutRequested = false; voiceOriginalText = panel.desktopText
+        optionDown = false; releasedAt = nil; continuationPending = false
+        customVoiceKey = nil; customVoiceToggle = false
+        panel.useVoicePresentation()
+        panel.setDesktopInputContext(intent: .newTask, continuing: false)
+        panel.desktopStatus("准备中")
+        startWhenFocused(generation: generation, beganAt: uptime())
+        return true
+    }
+    /// 一轮唤醒豆包收尾：只回执一次，之后状态回干净，不把半路迟到的事件带进下一轮。
+    private func finishWake(_ text: String?) {
+        guard let completion = wakeCompletion else { return }
+        wakeCompletion = nil
+        captureGeneration += 1
+        recording = false; releasedAt = nil; triggerAt = nil; triggerUptime = nil
+        releaseDiagnostics = nil; continuationPending = false; routingInput = false
+        voiceShortcutRequested = false; optionDown = false; preparedInput = false
+        option(false)
+        retireRecordingOwners()
+        // 拿到正文就留着面板给任务结果用，失败才收起；收起后 result 会落在看不见的窗口上。
+        if text == nil { panel.dismissDesktopCapture() } else { panel.beginDesktopExecution() }
+        completion(text)
+    }
     private func begin(key: HeadsetKey? = nil, toggle: Bool = false) {
         guard environmentAllows() else { return }
         guard !recording, dictationCancellation == nil else { return }
@@ -425,6 +486,10 @@ final class SpriteDesktopInput: NSObject, NSTextFieldDelegate {
         NSLog("PocketDesk headset released; waiting for transcript")
     }
     private func prepareVoiceRetry(_ reason: String) {
+        if wakeCompletion != nil {
+            voiceLog("sprite wake dictation failed; reason=\(reason); " + panel.desktopVoiceDiagnostics)
+            finishWake(nil); return
+        }
         voiceLog("sprite startup: receiver at failure; " + panel.desktopVoiceDiagnostics)
         captureGeneration += 1
         recording = false; releasedAt = nil; triggerAt = nil; triggerUptime = nil
@@ -446,6 +511,8 @@ final class SpriteDesktopInput: NSObject, NSTextFieldDelegate {
         voiceShortcutRequested = false
         retireRecordingOwners()
         preparedInput = false; inputIntent = .automatic
+        // 唤醒路径被取消（Esc / 锁屏 / 面板失焦）：立刻回执 nil，让 DesktopVoice 落回本地或待唤醒。
+        if let completion = wakeCompletion { wakeCompletion = nil; completion(nil) }
     }
     /// 同步退休两条入口的旧拥有者；不能等轮询，否则旧停顿/松开可能结束新录音。
     private func retireRecordingOwners() {
@@ -514,6 +581,12 @@ final class SpriteDesktopInput: NSObject, NSTextFieldDelegate {
                uptime() - postedAt >= HeadsetVoiceTiming.startupObservationSeconds {
                 prepareVoiceRetry("尚未检测到语音启动")
             }
+            // 唤醒路径没人按键：语音窗出现又自己关掉，就是“说完了”，从这里接上原有收尾判定。
+            if wakeCompletion != nil, voiceObserved, releasedAt == nil, !dictationVisible(),
+               let postedAt = triggerUptime, uptime() - postedAt >= 0.4 {
+                releasedAt = Date(); changedAt = Date(); startReleaseDiagnostics()
+                voiceLog("sprite wake dictation: dictation window closed; waiting for stable text")
+            }
         }
         if let released = releasedAt {
             guard panel.desktopMode, panel.isKeyWindow else { cancel("input window lost after release"); return }
@@ -525,6 +598,10 @@ final class SpriteDesktopInput: NSObject, NSTextFieldDelegate {
                 panel.desktopStatus(waitingForContinuation ? "任务接续核对未完成，未执行" : "未收到完整转写，未执行"); return
             }
             guard !continuationPending else { recordReleaseWait("continuation", released: released, chars: text.utf16.count); return }
+            // 豆包一个字都没收到：不要在这里干等 15 秒，直接交回本地并行听到的那份。
+            if text.isEmpty, wakeCompletion != nil, Date().timeIntervalSince(released) >= 1.5 {
+                voiceLog("sprite wake dictation: empty transcript"); finishWake(nil); return
+            }
             guard !text.isEmpty else { recordReleaseWait("empty-text", released: released, chars: 0); return }
             guard Date().timeIntervalSince(released) >= HeadsetVoiceTiming.finalTextStabilitySeconds else {
                 recordReleaseWait("release-stability", released: released, chars: text.utf16.count); return
@@ -556,6 +633,10 @@ final class SpriteDesktopInput: NSObject, NSTextFieldDelegate {
             routingInput = true; preparedInput = false
             let generation = captureGeneration
             panel.beginDesktopExecution()
+            if wakeCompletion != nil {
+                // 唤醒路径的正文交回 DesktopVoice：草稿、续接、锁屏和播报都在那一条链上，不能另起一份。
+                routingInput = false; finishWake(committed); return
+            }
             submitInput(committed, generation: generation)
         } else if !recording, !routingInput, showingTask, let id = taskId, panel.desktopMode, let task = TaskStore.task(id: id) {
             panel.desktopTask(task)

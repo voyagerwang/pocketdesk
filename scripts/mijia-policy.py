@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 [INPUT]: 小米返回的设备类型 URN、官方 MIOT 原始规格及 SDK 解析属性；不访问账号、网络或文件。
-[OUTPUT]: 默认拒绝的最小能力策略；灯/开关基础控制及标准温湿度传感器只读查询，按原始身份、单位、位宽与范围核对数值。
+[OUTPUT]: 默认拒绝的最小能力策略；灯/开关/插座基础控制及标准温湿度传感器只读查询，按原始身份、单位、位宽与范围核对数值。
 [POS]: 米家桥接的纯安全决策；列表、规格、准备、执行及读回共用，模型与设备名称不能扩大权限。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -9,15 +9,15 @@ import math
 import re
 
 
-NOTICE = "安全范围仅开放灯和开关的基础属性，以及温湿度传感器的只读查询；摄像头、门锁、音箱、网关、其他设备及场景暂不开放。"
+NOTICE = "安全范围仅开放灯、开关和插座的基础属性，以及温湿度传感器的只读查询；摄像头、门锁、音箱、网关、其他设备及场景暂不开放。"
 SENSOR_KIND = "temperature-humidity-sensor"
-DEVICE_TYPES = {"light": "0000A001", "switch": "0000A003", SENSOR_KIND: "0000A00A"}
+DEVICE_TYPES = {"light": "0000A001", "switch": "0000A003", "outlet": "0000A002", SENSOR_KIND: "0000A00A"}
 SERVICE_TYPES = {"light": "00007802", "switch": "0000780C", SENSOR_KIND: "00007814"}
 PROPERTY_TYPES = {"on": ("00000006", "bool", "开关"),
                   "brightness": ("0000000D", "uint", "亮度"),
                   "temperature": ("00000020", "float", "温度"),
                   "relative-humidity": ("0000000C", "uint", "湿度")}
-DEVICE_PROPERTIES = {"light": {"on", "brightness"}, "switch": {"on"},
+DEVICE_PROPERTIES = {"light": {"on", "brightness"}, "switch": {"on"}, "outlet": {"on"},
                      SENSOR_KIND: {"temperature", "relative-humidity"}}
 SENSOR_UNITS = {"temperature": "celsius", "relative-humidity": "percentage"}
 UINT_MAXIMUM = {"uint8": 0xFF, "uint16": 0xFFFF, "uint32": 0xFFFFFFFF}
@@ -113,7 +113,8 @@ def safe_properties(device, parsed, raw):
         if type(siid) is not int or siid <= 0 or siid in seen_services:
             raise PolicyError("设备服务编号无法唯一核对，未开放任何设备功能。")
         seen_services.add(siid)
-        if urn_kind(service.get("type"), "service") != (kind, SERVICE_TYPES[kind]):
+        service_kind = "switch" if kind == "outlet" else kind
+        if urn_kind(service.get("type"), "service") != (service_kind, SERVICE_TYPES[service_kind]):
             continue
         seen_properties = set()
         for prop in service.get("properties", []):

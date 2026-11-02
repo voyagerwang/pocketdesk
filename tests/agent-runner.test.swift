@@ -130,7 +130,7 @@ import Foundation
         AgentRunner.cleanChromeTabs = savedCleanChromeTabs
         AgentRunner.resolveApp = { _ in nil }
         AgentRunner.readBookmarks = { [] }
-        AgentRunner.openBookmark = { _, done in done("已向 Chrome 提交打开书签请求：API仪表盘") }
+        AgentRunner.openBookmark = { _, done in done(AgentReplies.bookmark("API仪表盘")) }
         let recoveredOpen = try run("open_target", "{\"app\":\"编程猫 API 的仪表盘\"}", fallbackOpen: true)
         assert(recoveredOpen.content != nil && recoveredOpen.error == nil, "首次查找失败后成功打开书签必须成功")
         let websiteRecovery = try run("open_target", "{\"app\":\"DeepSeek API平台\"}", fallbackWebsite: true)

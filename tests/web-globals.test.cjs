@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Node 内建断言与文件系统，读取 Web/index.html、Web/pad.js、Web/compose.js、Web/motion-send.js、Web/screen.js。
  * [OUTPUT]: 锁定 window.pocketdeskSend 的唯一归属（pad.js 的画面/指针指令通道）与 compose 的独立发送入口
- *           pocketdeskComposeSend，并确认安卓专属的输入补丁不会作用到 iOS。
+ *           pocketdeskComposeSend，并确认安卓专属输入补丁及有界连接事务的网络错误分类。
  * [POS]: tests 的静态结构回归；不启动服务、不发网络请求、不注入系统事件。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -54,12 +54,12 @@ assert.ok(/function heartbeatAdvice\(/.test(app), 'app.js 应有心跳失败分�
 assert.ok(/error\.httpStatus === 401/.test(app), '401（配对失效）必须与其它失败分开报');
 assert.ok(/navigator\.onLine === false/.test(app), '手机离线必须单独报，而不是说成电脑断链');
 assert.ok(/error && !error\.isNetwork/.test(app), '页面脚本错误必须与网络错误分开（非网络问题别说成断链）');
-assert.ok(/function taggedFetch\(/.test(app), 'fetch 失败要被标记 isNetwork，否则分不出网络错与脚本错');
+assert.ok(/async function connectionJSON\(/.test(app) && /wrapped\.isNetwork = true; throw wrapped;/.test(app), '有界连接事务必须将 fetch 失败标记为网络错误');
 assert.ok(!/与电脑的连接已断开/.test(app), '含糊的"与电脑的连接已断开"文案应已淘汰，改按原因分别陈述');
 // 恢复要快：失败后有补拍节拍，且必须在成功时取消、退后台时取消，避免定时器堆积。
 assert.ok(/HEARTBEAT_RETRY_MS = 1200/.test(app), '失败后应有 1.2 秒补拍节拍');
 assert.ok(/function scheduleHeartbeatRetry\(/.test(app) && /function cancelHeartbeatRetry\(/.test(app), '补拍定时器需要成对的调度与取消');
-assert.ok(/heartbeatFailures = 0;\s*cancelHeartbeatRetry\(\);/.test(app), '心跳成功必须取消补拍，否则残留定时器会持续打服务端');
+assert.ok(/heartbeatFailures = 0;[\s\S]{0,200}cancelHeartbeatRetry\(\);/.test(app), '心跳成功必须取消补拍，否则残留定时器会持续打服务端');
 // 断连时长要出现在恢复提示里：否则用户无法判断"刚才到底断没断"。
 assert.ok(/已重新连接到电脑（中断 \$\{humanGap\(gap\)\}）/.test(app), '恢复提示应报出中断时长');
 assert.ok(/\/app\.js\?v=\d+\.\d+\.\d+/.test(html), 'index.html 必须给 app.js 带版本号（版本号策略与逐资源校验在 live-recovery.test.cjs）');

@@ -21,7 +21,9 @@ import Darwin
             ("请查一下现在米家客厅的湿度是多少？", "humidity", "客厅"),
             ("帮我查看卧室温度", "temperature", "卧室"),
             ("米家温度是多少", "temperature", nil),
-            ("室内湿度", "humidity", nil)
+            ("室内湿度", "humidity", nil),
+            ("小艺现在房间湿度是多少", "humidity", nil),
+            ("小艺，客厅温度是多少", "temperature", "客厅")
         ] as [(String, String, String?)] {
             check(MijiaSensorQuery.request(in: text) == .init(metric: metric, query: query), "单句解析：" + text)
         }
@@ -49,15 +51,18 @@ import Darwin
         }
         let historical = receipt(payload())
         check(historical?.current == false, "8月17日历史值不成为当前值")
-        check(historical?.text == "客厅湿度当前值暂时读不到；最近记录 64%（8月17日）。", "历史64%短文案与北京时间准确")
+        check(historical?.text == "客厅湿度现在读不到实时值，最近一次是 64%（8月17日 21:24）。", "历史64%文案带日期和时分")
         let recent = receipt(payload(stamp: now.timeIntervalSince1970 - 60))
-        check(recent?.current == false && recent?.text.contains("今天09:15") == true, "刚更新云记录也不冒充直读")
+        check(recent?.current == false, "刚更新的云记录也不冒充直读")
+        check(recent?.fresh == true && recent?.text == "客厅湿度 64%，1 分钟前上报。", "刚上报的云值直接当答案，不当失败")
+        let stale = receipt(payload(stamp: now.timeIntervalSince1970 - 3600))
+        check(stale?.fresh == false && stale?.text.contains("读不到实时值") == true, "一小时前的云值说清是旧值")
         for stamp: Any in [NSNull(), "1786973041", true, now.timeIntervalSince1970 + 60, 0, 1_786_973_041_000] {
             let unknown = receipt(payload(stamp: stamp))
             check(unknown?.current == false && unknown?.text.contains("更新时间未知") == true, "Swift只消费已经规范化的秒时间")
         }
         let direct = receipt(payload(source: "device"))
-        check(direct?.current == true && direct?.text == "客厅湿度 64%。", "直读事实清楚呈现")
+        check(direct?.current == true && direct?.fresh == true && direct?.text == "客厅湿度 64%。", "直读事实清楚呈现")
         check(receipt(payload(source: "cache")) == nil, "未知来源拒绝")
         check(receipt(payload(value: true)) == nil, "布尔不能伪装数字")
         check(receipt(payload(value: "64")) == nil, "字符串不能伪装读数")

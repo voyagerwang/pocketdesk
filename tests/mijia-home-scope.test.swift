@@ -73,6 +73,23 @@ private final class Fixture {
         MijiaGateway.perform(arguments: MijiaGateway.encode(values), taskId: task, authorized: { true })
     }
     static func main() throws {
+        do {
+            let f = try Fixture(); try f.select()
+            let selected = try f.scope.authorize()
+            let frozen = f.directory.appendingPathComponent("scope-lock.json")
+            try JSONSerialization.data(withJSONObject: ["version": 1, "account": selected.account, "homeID": selected.homeID]).write(to: frozen)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: frozen.path)
+            let before = f.saved(), calls = f.requestedOperations.count
+            check(denied { _ = try f.scope.saveSelection(homeID: "home-2").get() }, "权限锁拒绝换家庭")
+            check(f.requestedOperations.count == calls, "冻结后越界选择零云调用")
+            let homes = try f.scope.homeList().get()["homes"] as? [[String: String]]
+            check(homes?.count == 1 && homes?.first?["id"] == "home-1", "冻结后仅展示获准家庭")
+            _ = try f.scope.saveSelection(homeID: "home-1").get()
+            check(f.saved() == before && (try? f.scope.authorize()) == selected, "冻结家庭重复确认不改票据")
+            try f.account("another-account")
+            check(denied { _ = try f.scope.authorize() }, "冻结后换账号也不能接管同ID家庭")
+            check(denied { _ = try f.scope.saveSelection(homeID: "home-1").get() }, "新账号不能通过重新选择解锁")
+        }
         // ---------- 账号绑定的持久化选择，始终不默认全部家庭 ----------
         do {
             let f = try Fixture()

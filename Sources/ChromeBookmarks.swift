@@ -87,7 +87,7 @@ enum ChromeBookmarks {
             guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome") else { completion("未打开：未安装 Chrome。"); return }
             NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, error in
                 if let error { completion("未打开：" + error.localizedDescription) }
-                else { completion("已向 Chrome 提交打开书签请求：" + entry.name) }
+                else { completion(AgentReplies.bookmark(entry.name)) }
             }
         } catch { completion("未打开：" + error.localizedDescription) }
     }

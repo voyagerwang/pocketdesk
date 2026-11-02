@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 本机 /api/console 的文件与解锁接口，控制台的操作卡片。
- * [OUTPUT]: 网页内文件选择与分块拖放/待收状态、密码配置、显式钥匙串授权检查、开关、二维码核对与设备撤销；密码不持久化、不回填。
+ * [OUTPUT]: 对voice设置共享本机JSON请求封装；网页内文件选择与分块拖放/待收状态、密码配置、显式钥匙串授权检查、开关、二维码核对与设备撤销；密码不持久化、不回填。
  * [POS]: 独立闭包管理常用电脑操作，避免与应用/模型设置的保存函数冲突。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -16,6 +16,7 @@
     if (!response.ok) throw new Error(result.error || '操作失败，请重试。');
     return result;
   }
+  window.pocketdeskConsoleRequest = request;
   function message(id, text, error = false) { $(id).textContent = text; $(id).classList.toggle('action-error', error); }
   function renderFiles(files) {
     const box = $('sendFileList'); box.replaceChildren();

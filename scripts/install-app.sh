@@ -40,6 +40,17 @@ cp "$ROOT_DIR/scripts/mijia-network.py" "$BUILD_APP/Contents/Resources/Mijia/mij
 cp "$ROOT_DIR/scripts/mijia-policy.py" "$BUILD_APP/Contents/Resources/Mijia/mijia-policy.py"
 cp "$ROOT_DIR/scripts/mijia-sensor.py" "$BUILD_APP/Contents/Resources/Mijia/mijia-sensor.py"
 cp "$ROOT_DIR/scripts/setup-mijia.sh" "$BUILD_APP/Contents/Resources/Mijia/setup-mijia.sh"
+# 神经音色桥脚本必须随包走：只装 App 不拷这个文件，DesktopVoiceTTS.ready 就是 false，
+# 声音会静默退回系统音色（机械感），而且在控制台只表现为一句“音色服务不可用”。
+mkdir -p "$BUILD_APP/Contents/Resources/TTS"
+cp "$ROOT_DIR/scripts/tts-say.py" "$BUILD_APP/Contents/Resources/TTS/tts-say.py"
+# 声纹桥随包走：脚本在，运行时环境与模型在 ~/Library/Application Support/VoiceDeck/voiceprint（scripts/setup-voiceprint.sh 一次装好）。
+if [ -f "$ROOT_DIR/scripts/voiceprint.py" ]; then
+  mkdir -p "$BUILD_APP/Contents/Resources/Voiceprint"
+  cp "$ROOT_DIR/scripts/voiceprint.py" "$BUILD_APP/Contents/Resources/Voiceprint/voiceprint.py"
+fi
+# 打包自检：缺一个随包脚本就是一次“功能静默降级”（音色退回系统音色、声纹桥起不来），必须当场失败。
+[ -f "$BUILD_APP/Contents/Resources/TTS/tts-say.py" ] || { echo "打包缺少 TTS 脚本，音色会退回系统音色" >&2; exit 1; }
 # 固定 designated requirement，避免每次本地重编译都因 CDHash 改变而丢失辅助功能授权。
 # 这是本机开发签名策略；正式分发时应替换为 Apple Developer ID 签名。
 mkdir -p "$BUILD_APP/Contents/Helpers"
@@ -62,6 +73,14 @@ if pgrep -x VoiceDeck >/dev/null 2>&1; then
   # 等端口释放：退得不够干净时新进程会绑不上 46387，白装一次。
   sleep 1.5
 fi
-python3 "$ROOT_DIR/scripts/install-headset-services.py"
+# 耳机辅助服务与 App 服务一起在这步注册；这一步失败过（launchctl 已存在 exit 5）会把 App 一起留在停机状态，
+# 所以失败不再是致命的：耳机辅助服务允许缺失，App 必须起来。
+if ! python3 "$ROOT_DIR/scripts/install-headset-services.py"; then
+  echo "耳机辅助服务注册失败，继续启动 App" >&2
+fi
+DOMAIN="gui/$(id -u)"
+if ! launchctl print "$DOMAIN/dev.voicedeck.app" >/dev/null 2>&1; then
+  launchctl bootstrap "$DOMAIN" "$HOME/Library/LaunchAgents/dev.voicedeck.app.plist" 2>/dev/null || true
+fi
 # launchd starts the app; do not race it with a second LaunchServices launch.
 echo "Installed and started: $INSTALL_APP"

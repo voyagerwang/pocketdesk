@@ -144,6 +144,6 @@ enum DesktopMenuActions {
                 Thread.sleep(forTimeInterval: 0.1)
             }
         }
-        return .success(.sent("已向\(app.localizedName ?? "目标应用")发出「\(command.label)」菜单操作，应用最终结果尚未核验；不会自动重试。"))
+        return .success(.sent("已经在\(app.localizedName ?? "目标应用")里点了「\(command.label)」，应用自己是否执行完我看不到，不会重复点。"))
     }
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 [INPUT]: scripts/mijia-bridge.py 与内存 SDK/API/官方规格替身；临时授权文件与隔离子进程。
-[OUTPUT]: 验证认证/家庭隔离、灯开关最小能力、官方规格失败关闭、动作场景拒绝、写入/回执与凭据边界。
+[OUTPUT]: 验证固定云会话直连、认证/家庭隔离、灯开关最小能力、官方规格失败关闭、动作场景拒绝、写入/回执与凭据边界。
 [POS]: tests 的米家协议验收；验证 Python 边界，Swift 的租约和持久去重由独立执行器测试覆盖。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 """
@@ -159,6 +159,19 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertIn(result["error"]["kind"], ("invalid", "choice", "policy"))
         self.assertEqual(self.mutations(), [])
+
+    def test_direct_transport_is_set_before_device_discovery(self):
+        self.api.api_base_url = "https://api.mijia.tech/app"
+        self.api.session = SimpleNamespace(trust_env=True, proxies={"https": "http://isolated"}, verify=True)
+        original = self.api.get_devices_list
+        def devices(home_id=None):
+            self.assertFalse(self.api.session.trust_env)
+            self.assertEqual(self.api.session.proxies, {})
+            self.assertTrue(self.api.session.verify)
+            return original(home_id=home_id)
+        self.api.get_devices_list = devices
+        result = self.call("list_devices", home_id="h1")
+        self.assertTrue(result["ok"], result)
 
     def test_status_checks_real_homes_and_disables_hidden_refresh(self):
         result = self.call("status")

@@ -136,11 +136,18 @@ enum AgentDesktopActions {
                 guard valid() else { completion(.failure(.message("执行前控制权或应用状态已变化。"))); return }
                 let issued = request.action == .hideApp ? app.hide() : app.terminate()
                 guard issued else { completion(.failure(.message("\(name)未接受操作请求，可能有待处理的保存提示。"))); return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(1000)) {
-                    let confirmed = request.action == .hideApp ? app.isHidden : app.isTerminated
-                    let verb = request.action == .hideApp ? "隐藏" : "退出"
-                    completion(.success(confirmed ? .delivered("已\(verb)\(name)。") : .sent("已请求\(verb)\(name)，尚未确认；如有保存提示，请在电脑处理。")))
+                let verb = request.action == .hideApp ? "隐藏" : "退出"
+                let settled = { request.action == .hideApp ? app.isHidden : app.isTerminated }
+                // 大应用退出要几秒；只等一秒就报“尚未确认”，用户明明看到它关了。
+                func poll(_ remaining: Int) {
+                    if settled() { completion(.success(.delivered("已\(verb)\(name)。"))); return }
+                    guard remaining > 0 else {
+                        completion(.success(.sent("已请求\(verb)\(name)，但没看到它关掉；如果弹了保存提示，请在电脑上处理。")))
+                        return
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250)) { poll(remaining - 1) }
                 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(300)) { poll(14) }
             }
         case .closeWindow:
             guard let target = selectedWindow(request, app: app), valid() else {

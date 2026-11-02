@@ -1,6 +1,6 @@
 /**
- * [INPUT]: MijiaBridge 的真实家庭清单、本机 auth.json 的账号标识及私有家庭选择文件。
- * [OUTPUT]: 绑定账号摘要的单家庭授权票据、异步家庭选择接口与执行锁；缺失/损坏/账号变化均拒绝设备访问。
+ * [INPUT]: MijiaBridge 的真实家庭清单、本机账号、家庭选择及可选系统不可变scope-lock白名单。
+ * [OUTPUT]: 单家庭票据和执行锁；冻结时仅展示原家庭，拒绝任何换家庭/账号漂移，重复保存不改票据。
  * [POS]: 米家控制台选择与 Gateway 执行共用的范围边界；准备请求不持锁，执行前复核票据并与选择保存串行。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -30,6 +30,7 @@ final class MijiaHomeScope {
         let revision: String
         var ticket: Ticket { Ticket(account: account, homeID: homeID, homeName: homeName, revision: revision) }
     }
+    private struct Boundary: Decodable { let version: Int; let account: String; let homeID: String }
     static let shared = MijiaHomeScope()
     private let dependencies: Dependencies
     private let lock = NSLock()
@@ -70,6 +71,11 @@ final class MijiaHomeScope {
     func homeList() -> Result<[String: Any], MijiaBridge.Failure> {
         do {
             let account = try accountHash()
+            if try boundary() != nil {
+                lock.lock(); defer { lock.unlock() }
+                let saved = try selection()
+                return .success(snapshot([["id": saved.homeID, "name": saved.homeName]], account: account))
+            }
             let homes = try fetchHomes()
             lock.lock(); defer { lock.unlock() }
             guard try accountHash() == account else { throw failure("米家账号已变化，请重新获取家庭列表。") }
@@ -81,6 +87,13 @@ final class MijiaHomeScope {
         do {
             guard !homeID.isEmpty, homeID.count <= 256 else { throw failure("家庭选择无效，请重新选择。") }
             let account = try accountHash()
+            if let frozen = try boundary() {
+                guard homeID == frozen.homeID, account == frozen.account else {
+                    throw failure("家庭权限已锁定，禁止切换到其他家庭或账号。")
+                }
+                // 同一家庭是只读确认，不触碰不可变选择文件或解除在途票据。
+                return homeList()
+            }
             let homes = try fetchHomes()
             guard let home = homes.first(where: { $0["id"] == homeID }), let name = home["name"] else {
                 throw failure("该家庭已不可用，请刷新列表并选择其中一个家庭。")
@@ -122,7 +135,19 @@ final class MijiaHomeScope {
               let selected = try? JSONDecoder().decode(Selection.self, from: data), selected.version == 1,
               selected.account == account, !selected.homeID.isEmpty, selected.homeID.count <= 256,
               !selected.homeName.isEmpty, UUID(uuidString: selected.revision) != nil else { throw failure(Self.selectionMessage) }
+        if let frozen = try boundary(), selected.homeID != frozen.homeID || selected.account != frozen.account {
+            throw failure("当前账号或家庭不在已锁定范围内，设备访问已拒绝。")
+        }
         return selected
+    }
+    private func boundary() throws -> Boundary? {
+        let url = dependencies.fileURL.deletingLastPathComponent().appendingPathComponent("scope-lock.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let data = try? Self.privateRead(url), let value = try? JSONDecoder().decode(Boundary.self, from: data),
+              value.version == 1, value.account.count == 64, !value.homeID.isEmpty, value.homeID.count <= 256 else {
+            throw failure("家庭权限锁无法核验，已拒绝设备访问。")
+        }
+        return value
     }
     private func accountHash() throws -> String {
         let data = try Self.privateRead(dependencies.authURL)
