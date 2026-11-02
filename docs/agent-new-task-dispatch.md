@@ -255,4 +255,42 @@ Cola既有普通耳机新建验收仍成立。本轮只读核查另发现：Cola
 
 遗留边界沿用前几轮：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；复跑在两个应用里留下的测试消息没有删。
 
+### 稳定性复跑4（2026-11-02 21:00–21:36）：编号撞车与系统级 AX 焦点故障
+
+本轮本应叫「复跑4」，但开跑前先用只读 AX 扫描查编号，发现**复跑 4、5 在两个应用里都已存在**（WorkBuddy 侧栏有「PocketDesk 稳定性复跑4」「…复跑5」「…复跑八」，Cola 侧栏有「PocketDesk稳定性复跑4」「…复跑5（可忽略）」），且 WorkBuddy 文档里只记录到复跑 3。**同一时间另有一个会话在跑同一套复跑**（它 20:57 起持续改 `Sources/AgentTaskComposer.swift`、`AgentWorkBuddyNewTask.swift`，21:03、21:15、21:21 各改一次，HEAD 前进到 `ef7a4a8`）。
+
+按复跑3 自己写下的教训（「或改用带时间戳的正文避免撞号」），本轮正文改用 **`PocketDesk 稳定性复跑4-2100，可忽略`**，既保住可归因性，也不占用编号序列。
+
+**验证对象**：`~/Applications/PocketDesk.app` 二进制 mtime 19:47:14，晚于最后源码改动 19:25，且 `16082bf` 之后只有 docs 变更、`git status Sources/` 干净——已安装包与当时 HEAD 等价成立。探针按 `install-app.sh` 的**完全相同编译参数**（全量 Sources 去掉 `main.swift`、带五个 framework 与 `-Xlinker` 参数、**不加 `-O`**）编出；先前用 `-O` 编的版本只有 7.5MB、且缺 `currentFrame`/`sameElement`/`sameReference` 等标识符，是编译选项差异而非代码差异。特征串核对按工作区记忆的教训用 Python 按 UTF-8 字节 `find`（`grep -a` 对中文会漏报）：`写入前门禁`/`提交有效性核验`/`提交前门禁`/`重建辅助功能树`/`新建子聊天`/`currentFrame`/`sameElement`/`focusResolved`/`sameReference` 九项在探针与已安装包中**各命中 1 次**，探针 11,333,360 字节 vs 已安装包 11,416,400 字节。
+
+**结果一：Cola 通过。** `confirmed / visible=true`，两次均成功（21:23:44 用工作树探针 7.70s、21:35 用带诊断探针 6.50s）。日志：唤醒 Cola → 请求辅助功能树 → 派单 delivered。独立第二来源：只读 AX 扫描（439 节点，不写不改）读到新子聊天标题「PocketDesk稳定性复跑4-2100」与正文「PocketDesk 稳定性复跑4-2100，可忽略」，正文各只出现一次，无半截重复；Cola 侧边栏出现对应条目，且 Cola 自己回了「这条『稳定性复跑4-2100』我按你说的跳过了」。
+
+**结果二：WorkBuddy 未通过，且原因不在派单代码。** 六次尝试全部停在 `needsInput`/`visible=false`/`attempted=false`（未写入任何正文，AX 树确认无本轮正文）。失败点随探针版本逐层前移，把整条链路的问题暴露出来：
+
+| 探针 | 失败点 | 说明 |
+| --- | --- | --- |
+| 改动前（=已安装包） | 新任务入口内容尚未完整可读 | AX 树深度上限 32、扫描预算 2s 撞上限 |
+| 含并行会话扫描修复 | 独立窗口打开期间焦点或控制权已变化 | 窗口列表读取在 AX 忙时读不到 |
+| 再放宽窗口重试 4×40ms→12×80ms | 原主窗口或控制权已变化 | |
+| 含完整诊断版本 | 输入位置或替换结果无法确认 | 焦点引用核验 `matched=true`，但落键后读回 `utf16=0/26` |
+
+逐层排查的实测证据：
+
+- **页面证据完好**，不是页面缺内容：只读扫描两个窗口都读到欢迎标题「WorkBuddy, 我帮你」、占位「今天帮你做些什么？@ 添加上下文，/调用技能与指令」、撰写框、发送按钮、工作空间选择器与「新建任务」入口，深度 60 内完整可达。
+- **窗口几何补证可用**：两个窗口 `AXPosition`/`AXSize` 返回 AXValue（主窗 (0,33) 1470×861、独立窗 (415,49) 640×800），`sameWindow` 复刻验证既能区分两窗、也能在重新取引用后仍认作同一物理窗口（`CFEqual=false` 时 `sameWindow=true`）。注意 `AXPosition` 返回的是 AXValue 而非 NSNumber，按 NSNumber 取会读成 nil。
+- **窗口列表读取在静止时 40/40 全成功**（中位 18ms），只在派单瞬间读不到——属 AX 服务瞬时繁忙，原 `retrying(4, spacing: 40_000)` 的预算正好落在最忙时段。
+- **最终根因是系统级 AX 焦点服务异常，与 WorkBuddy 代码无关**：`AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute)` 返回 `-25204`（cannotComplete）、`kAXFocusedApplicationAttribute` 同样 `-25204`；**逐个查询全部运行中的应用（含 loginwindow、WindowServer 侧的 WindowManager、控制中心、Zed 等）无一报告有焦点元素**；WorkBuddy 与 Cola 各自树内 `AXFocused=true` 的节点数均为 0。绕过 PocketDesk 全部逻辑、直接用 `CGEvent.keyboardSetUnicodeString` 往主窗输入框注入一个字符，AXPress 返回 0（成功）但读回仍为空——**原始键盘事件也无处可去**。
+
+这解释了同一个环境里 Cola 为何仍能通过：Cola 走「AX 设值 + 语义发送按钮」，不依赖系统键盘焦点；WorkBuddy 依赖系统焦点注入正文，因此整体失效。**派单协议在这种情况下如实停下、没有把「读不到」冒充「已送达」，是正确的保护行为**（`attempted=false`，AX 树确认未写入任何正文）。
+
+**本轮留下的可复用结论**：
+
+1. **复跑编号没有跨会话协调**。复跑3 记过一次，本轮再次发生（并行会话占了 4、5 和「复跑八」）。探针是临时脚本、各会话各自计数，编号必然撞车。**后续复跑前一律先用只读 AX 扫描查最新编号，或直接用带时间戳的正文**。
+2. **编译参数必须与 `install-app.sh` 一致**才能做「探针 == 已安装包」的对照：全量 Sources、去 `main.swift`、带 framework 与 `-Xlinker`、**不加 `-O`**。加 `-O` 时产物小 4MB 且丢标识符，会让特征串核对误判成代码不一致。
+3. **核对二进制特征串不要用 `grep -a` 匹配中文**（工作区记忆已有此条），本轮再次验证：必须用 Python 按 UTF-8 字节 `find`。
+4. **系统级 AX 焦点失效时，依赖键盘注入的目标必然派单失败**，而依赖 AX 设值+语义按钮的目标不受影响。诊断这类失败要先查 `kAXFocusedUIElementAttribute` 的系统级返回码，再怀疑应用代码。
+5. **多会话共用同一对应用时，派单会互相破坏**：本轮 WorkBuddy 侧栏出现的「复跑6」草稿与第二个独立窗来自并行会话，导致本轮走了「保留草稿→另开独立窗」路径并与既有独立窗的「恰好新增一个窗口」判定冲突。**复跑应避免与其它会话并发占用同一目标应用**。
+
+遗留边界沿用前几轮：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；本轮在 Cola 侧留下两条「PocketDesk稳定性复跑4-2100」子聊天（两次成功派单各一条），在 WorkBuddy 侧未写入任何正文。
+
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
