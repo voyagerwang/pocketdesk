@@ -359,4 +359,85 @@ LOG [live-diagnostic] 草稿停止原因 -> 失败 | 落键后读回：textEqual
 
 遗留边界沿用前几轮：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；本轮在 Cola 侧留下一条「PocketDesk稳定性复跑5」子聊天，WorkBuddy 侧未写入任何正文；并行会话第 6 轮正文从未送达（`confirmed` 0 次），其残留草稿已清。
 
+### 稳定性复跑2（2026-11-02 20:27–21:55，本会话）：深度上限修复的验证边界与已安装包落地
+
+本节与上一节（复跑5）同属一个编号「复跑2」的撞号现场，不重复上一节已记录的注入通道对照实验与并发死锁过程，只记**本会话独立做出的增量**：把 `cf5dfdc` 的深度修复做到已安装包，并划清「代码已修好」与「环境故障挡住」两者的边界。
+
+**本轮正文**：「PocketDesk 稳定性复跑2，可忽略」（与上一节的「复跑5」同属编号 2 的撞号链）。开跑前用只读 AX 扫描查过：WorkBuddy 侧栏已有「复跑2」两条、「复跑3」「复跑4」「复跑5」各一条，Cola 侧已有「稳定性复跑2」三条、「复跑3」「复跑4」「复跑5」各一条——**编号 2 已被用过至少三次**，按既有先例照跑并如实记录。
+
+#### 一、修复内容（提交 `cf5dfdc`）
+
+`AgentTaskComposer.scan` 的 `depth < 32` 上限低于 WorkBuddy 5.9.3 主窗的真实深度。修复为：
+
+- 深度上限 **32 → 48**：实测同一窗口多扫 71 个节点（950 → 1021），耗时不变（1.3s）。48 层对 37 层实测深度留出余量。
+- 单次扫描时间预算 **2s → 3s**、`prepare` 就绪等待 **2s → 5s**：深度放宽后双窗口全扫最慢实测 **2.02s**，2s 预算会把「刚好扫完」的完整树判成截断（10 轮实测 depth=48 最慢 1.926s，depth=40 最慢 1.745s，均不截断）。
+- `windows(pid)` 与 `focusedWindow(pid)` 补**短重试**：归属核验会把进程级 AX 超时压到 40ms（`AXUIElementSetMessagingTimeout(system, 0.04)`），AX 服务正忙时窗口列表就读不到——**实测设完 40ms 超时后连续读 AXWindows，5 次里有 1 次返回 -25204**。裸读会把「读不到」当成「没有窗口」。
+- `newFocusedWindow` 的新增/焦点判定改用 `sameWindow`（位置+尺寸）补证，不再只认跨读取必然变化的 `CFEqual`。
+
+**三处可复核诊断**（原先「焦点或控制权已变化」「窗口或控制权未核实」只回笼统结论，排障只能靠猜）：
+
+- `validWithDetail` 带出授权/环境/归属与补证条件（`ownerPID`/`ownerSource`/`axStatus`/`activePIDs`/`immediatePID`/`systemUIStatus`）。
+- 扫描回调报出**最先耗尽的预算**（`depth(n)`/`nodes(n)`/`time(x.xxs)`），区分「树太深」「节点太多」「时间不够」三类截断。
+- `homeStateEvidence` 报出欢迎标题数、可见编辑器数与各自矩形（不含正文）。
+
+#### 二、验证边界：哪些是代码问题、哪些是环境问题
+
+本轮用**修复后的生产读取路径**直接做只读验证（编译自当前 HEAD 的探针，直接调用 `AgentTaskComposer.nodes` 与 `AgentWorkBuddyNewTask.windowKind/homeState`）：
+
+```
+windows=2
+win[0] nodes=238 truncated=false complete=true   windowKind=primary    homeState=empty
+win[1] nodes=60  truncated=false complete=true   windowKind=independent homeState=empty
+```
+
+两个窗口均 `complete=true`、`windowKind` 判为 primary/independent——**深度修复在生产路径上确实生效**，原先的「窗口或控制权未核实」不再出现。
+
+派单失败点随之**前移**到正文写入阶段，且**修复前后完全一致**：
+
+```
+PROBE_RESULT app=WorkBuddy state=needsInput visible=false attempted=false elapsed=5.69s
+PROBE_DETAIL 输入位置或替换结果无法确认，已停止同步；请核对电脑内容。
+LOG [focus] WorkBuddy 输入焦点引用核验 -> 已生效 | sameReference=true; matched=true
+LOG [live-diagnostic] 草稿停止原因 -> 失败 | 落键后读回：textEqual=false，utf16=0/21
+```
+
+用**修复前的探针**（19:47 已安装包 / `/private/tmp/pd-rerun8/probe`）在同状态下复跑两次，失败点与文字**逐字相同**——说明当前阻塞与本次修复无关。
+
+**环境故障的最终判定**（本会话独立复核，与上一节一致）：
+
+- `AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute)` 与 `kAXFocusedUIElementAttribute` **连续 5 次全部返回 -25204**；同时 `NSWorkspace.shared.frontmostApplication` = WorkBuddy、`activeApps` = [24128]、`IsSecureEventInputEnabled()` = false，**应用级 AX 读全部正常**（`AXWindows` status=0、节点数正确）。
+- 绕过 PocketDesk 全部逻辑，三路注入对照：**unicode 注入无效（读回 0）**、**剪贴板 + `Cmd+V` 无效（读回 0）**、**合成按键码无效（读回 0）**。ASCIISelftest 探针同样落不进去（hits=0）——**注入通道整体失效，不是 WorkBuddy 单独的问题**。
+- `AXUIElementSetAttributeValue(editor, kAXValueAttribute, 正文)` **反而成功**：status=0，且**独立重读**确认正文真落进 DOM（valueLen=21）。但 `AXPress` 发送按钮返回 0 却**未真正发送**（撰写框内容未清空）——与既有结论一致：Chromium 的 AXPress 报告成功不等于动作发生。
+- **重装应用无法修复**：21:51 用 `scripts/rebuild-safe.sh` 重装（含本次修复）后，`/api/status` 返回 HTTP 200，但焦点服务仍 `-25204`、注入仍失效。**这类系统级 AX 焦点故障需要重建用户登录会话（注销/重启）才能恢复，不能靠改代码或重装绕过。**
+
+#### 三、已安装包落地与验证对象核对
+
+按上一节记录的口径核对（编译参数与 `install-app.sh` 一致：全量 Sources、去 `main.swift`、带五个 framework 与 `-Xlinker`、**不加 `-O`**）：
+
+| 特征串 | 已安装包 | 探针 |
+| --- | --- | --- |
+| `写入前门禁`/`提交有效性核验`/`提交前门禁`/`重建辅助功能树`/`新建子聊天`/`currentFrame`/`sameElement`/`focusResolved`/`sameReference` | 各 HIT 1 次 | 各 HIT 1 次 |
+| `maximumScanDepth`/`scanTruncated`/`validWithDetail`/`homeStateEvidence`/`独立窗口归属核验` | 各 HIT（本次修复） | 各 HIT |
+
+重装后 `~/Applications/PocketDesk.app/Contents/MacOS/VoiceDeck` mtime 21:51（11454240 字节），已含本次修复的全部特征串；**本轮之前它是 19:47 的旧版（11416400 字节），不含这些特征串**。探针 11,620,720 字节与已安装包不等（探针多一个 `@main` 入口且无 Info.plist/资源），故二者只能按**特征串**对照，不能按字节相等对照。
+
+`scripts/rebuild-safe.sh` 在 agent 会话里 `launchctl bootstrap` 报 exit 5（耳机守护进程注册失败，属已知边界——agent shell 不在 Aqua 图形登录会话），主 app 二进制已编译装好，**另需手动 `open ~/Applications/PocketDesk.app` 才能起来**；起来后 `/api/status` 返回 HTTP 200。
+
+#### 四、本轮结果
+
+- **Cola 通过**：`confirmed / visible=true`，8.39s 与 6.08s 两次（修复前后的探针各一次）。日志：唤醒 Cola → 请求辅助功能树 → 输入框 AX 聚焦 → 派单 delivered。**独立第二来源**：只读 AX 扫描（Cola 444 节点）命中 `AXStaticText value=PocketDesk 稳定性复跑2，可忽略`，正文只出现一次，无半截重复。
+- **WorkBuddy 未通过**：`needsInput / visible=false / attempted=false`，**未写入任何正文**（AX 树确认无本轮正文残留，撰写框读回长度 0）。原因已定位到系统级 AX 焦点服务故障（见上），非派单代码缺陷。
+
+**回归**：`agent-runner` 隔离回归通过（direct execution / lease / dispatch / failure / target isolation）；`agent-workspace` 隔离回归通过，含本轮新增的扫描预算断言（深度上限必须覆盖实测的 37 层；深度/时间/节点任一预算耗尽即判截断）。
+
+**本轮新增的可复用结论**：
+
+1. **代码缺陷与环境故障要分层定位，不能互相顶替**。本轮两次跑同一段代码，失败点逐字相同，说明当前阻塞与修复无关；而同一台机上「修复前的探针」也在同一状态失败——**同一现象在修复前后一致，就是排除代码因素的对照证据**，比读代码更快。
+2. **「读得到页面」不等于「能写进去」，「写进去」也不等于「能发出去」**，三段要分别验证：AX 读（WorkBuddy 正常）、AX 设值（正常，能落 DOM）、AXPress 发送（**报告成功但未发生**）。任何一段都不能由另一段的成功推断。
+3. **系统级 AX 读失败会污染应用级读的可靠性**：`AXUIElementSetMessagingTimeout(system, 0.04)` 是进程级设置，归属核验按它读一次之后，后续所有 AX 读都被压到 40ms，AX 服务忙时窗口列表就读不到。**凡是要紧的裸读都要带短重试**，否则「读不到」会被当成「没有」。
+4. **修复后要让用户真正受益，必须重装**：本轮修复在源码里，但已安装包还是 19:47 的旧版；重装后又发现 `launchctl bootstrap` 在 agent 会话里必然失败，需手动 `open` 补上启动。**重装后要按特征串核对确认已安装包确实含新代码**，不能只看 mtime。
+5. **同一编号反复撞车已是常态**（复跑2 至少三条、复跑3/4/5 各一条）。编号序列在两个应用里各自计数、无跨会话协调，**任何一轮复跑前都应先只读扫描查编号**，并在记录里写清实际用了几次。
+
+遗留边界沿用前几轮：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；本轮在 Cola 侧留下一条「PocketDesk 稳定性复跑2」子聊天，WorkBuddy 侧未写入任何正文；**系统级 AX 焦点故障需注销/重启登录会话才能恢复，在此之前 WorkBuddy 的键盘注入通道必然失败**。
+
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
