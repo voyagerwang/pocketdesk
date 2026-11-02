@@ -208,4 +208,25 @@ Cola既有普通耳机新建验收仍成立。本轮只读核查另发现：Cola
 
 遗留边界沿用前一轮：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；两轮复跑在两个应用里留下了若干条测试消息（Cola 几条子聊天、WorkBuddy 几条任务），没有删。
 
+### 稳定性复跑3（2026-11-02 20:08）与锁屏边界
+
+探针改为 20:03 从当前 HEAD（`16082bf` + `ea0e1c7`，工作树干净）重新编译的 `/private/tmp/pd-rerun8/probe`。它与已安装包 `~/Applications/PocketDesk.app/Contents/MacOS/VoiceDeck`（19:47 重装）逐字节核对了九个特征串（`写入前门禁`/`提交有效性核验`/`提交前门禁`/`重建辅助功能树`/`新建子聊天`/`currentFrame`/`sameElement`/`focusResolved`），两边全部命中，确认本轮验证对象就是已安装包。
+
+- **WorkBuddy**：`confirmed / visible=true`，5.08s。日志：唤醒 WorkBuddy → 请求辅助功能树（manual=0）→ 输入框 AX 聚焦 → 焦点引用核验 `sameReference=true / matched=true` → 派单 delivered。
+- **Cola**：`confirmed / visible=true`，4.56s。日志：唤醒 Cola → 请求辅助功能树（manual=0）→ 输入框 AX 聚焦 → 派单 delivered。
+- **应用侧第二来源**：只读 AX 扫描（只读 AX 树，不写不改；WorkBuddy 395 节点 / Cola 413 节点），两边都读到新任务或子聊天标题「PocketDesk 稳定性复跑2」与正文「PocketDesk 稳定性复跑2，可忽略」。正文各只出现一次，没有半截重复。
+- **回归**：全量 Sources 编译通过；`agent-runner` 隔离回归通过（direct execution / lease / dispatch / failure / target isolation）。
+
+**编号撞车**：本轮原本也想叫「复跑2」，但同一时间另一个会话也在跑同一套复跑，已先提交 `ea0e1c7`/`1fa26c3` 记录了复跑 1 与复跑 2。于是同一编号在两个应用里各出现两条（Cola 侧边栏出现两个「PocketDesk稳定性复跑2」）。**这暴露了复跑编号没有跨会话协调这一事实**——探针只是临时脚本，各会话各自计数。以后复跑前应先用只读 AX 扫描查最新编号，或改用带时间戳的正文避免撞号。
+
+**第 4–8 轮被锁屏门禁按设计挡住**：继续往第 4–8 轮推进时，两应用全部停在激活阶段，回执为 `needsInput`/`failed`，`visible=false`、`attempted=false`（未写入任何正文）。日志把原因写得很清楚：
+
+```
+唤醒 WorkBuddy -> 失败 | 未能核实键盘归属，当前可见应用是 Cola；expectedPID=24128; ownerPID=597; ownerSource=accessibility; axStatus=0; activePIDs=[]; immediatePID=unknown; systemUIStatus=-25200; systemUIOwner=unknown; secureInput=false
+```
+
+`ownerPID=597` 是 `loginwindow`（`/System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow console`）。用 `CGSessionCopyCurrentDictionary()` 复核：`CGSSessionScreenIsLocked = true`、`CGSSessionScreenLockedTime` = 20:15:14，即**屏幕在跑第 4 轮前被锁上了**。锁屏后 `AXFocusedApplication` 归属落到 loginwindow，`EnvironmentGate`/`activateTarget` 的键盘归属核验因此拿不到目标应用，如实拒绝而不是假装派单成功；只读 AX 扫描同时只剩 1 个节点，两个应用的树都读不到。这是设计内的正确停止，不是回归——解锁后同一探针即可继续。
+
+遗留边界沿用前几轮：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；复跑在两个应用里留下的测试消息（含因编号撞车多出的一条「复跑2」）没有删。
+
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
