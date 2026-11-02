@@ -617,26 +617,59 @@ enum AgentTaskComposer {
     }
 
     static func nodes(pid: pid_t, window: AXUIElement? = nil, prioritizeEditor: Bool = false,
-                      onScan: ((Int, Bool) -> Void)? = nil) -> [Node] {
+                      onScan: ((Int, Bool) -> Void)? = nil,
+                      onScanDetail: ((Int, Bool, String) -> Void)? = nil) -> [Node] {
         requestDOMAccessibility(pid: pid)
-        let first = scan(pid: pid, window: window, prioritizeEditor: prioritizeEditor, onScan: onScan)
+        let first = scan(pid: pid, window: window, prioritizeEditor: prioritizeEditor, onScan: onScan, onScanDetail: onScanDetail)
         // 树如果不是没建好而是一直空壳，再强制重建一次：不拿“读不到”冒充“页面上没有”。
         guard !first.contains(where: { $0.role == "AXWebArea" || $0.role == "AXTextArea" }),
               rebuildAccessibility(pid: pid) else { return first }
-        return scan(pid: pid, window: window, prioritizeEditor: prioritizeEditor, onScan: onScan)
+        return scan(pid: pid, window: window, prioritizeEditor: prioritizeEditor, onScan: onScan, onScanDetail: onScanDetail)
+    }
+
+    /// AX 树遍历的深度上限。WorkBuddy 5.9.3 主窗在侧栏会话堆积后真实深度达 37 层
+    /// （56 个 AXTextArea 埋在 depth 28、15 个在 depth 35 的 AXRow>AXCell 里）；
+    /// 原上限 32 会在这些节点上截断，complete 变 false，新任务派单被"窗口或控制权未核实"整轮挡住。
+    /// 放宽到 48 后实测同一窗口多扫 71 个节点、耗时不变（1.3s），仍在预算内。
+    static let maximumScanDepth = 48
+
+    /// 单次全窗扫描的时间预算。深度放宽后主窗约 1021 节点，双窗口全扫最慢实测 2.02s，
+    /// 2s 预算会偶发把完整树判成截断，故留 3s。
+    static let scanBudgetSeconds: TimeInterval = 3
+
+    /// 深度、节点数、时间预算任一先到都算截断。截断的树不能当"读到了"用——
+    /// 页面证据（欢迎标题、撰写框、唯一性）都建立在完整遍历上，缺一截就可能漏掉真实控件。
+    static func scanTruncated(depth: Int, depthLimit: Int, nodesRemaining: Int,
+                              now: TimeInterval, deadline: TimeInterval) -> Bool {
+        if depth >= depthLimit { return true }
+        if nodesRemaining <= 0 { return true }
+        if now >= deadline { return true }
+        return false
     }
 
     private static func scan(pid: pid_t, window: AXUIElement?, prioritizeEditor: Bool,
-                             onScan: ((Int, Bool) -> Void)?) -> [Node] {
+                             onScan: ((Int, Bool) -> Void)?,
+                             onScanDetail: ((Int, Bool, String) -> Void)?) -> [Node] {
         guard let root = window ?? TargetWindowLocator.axWindowElement(pid: pid) else { onScan?(0, true); return [] }
         let windowFrame = frame(root)
         var result: [Node] = [], remaining = 6000
-        var deadline = ProcessInfo.processInfo.systemUptime + 2
+        var deadline = ProcessInfo.processInfo.systemUptime + scanBudgetSeconds
         var truncated = false
+        // 记录最先耗尽的预算，便于区分"树太深""节点太多""时间不够"三类截断。
+        var truncationCause = ""
         var visited: [CFHashCode: [AXUIElement]] = [:]
         var complete: [CFHashCode: [AXUIElement]] = [:]
         func walk(_ element: AXUIElement, depth: Int, inMenu: Bool = false, inComposer: Bool = false) {
-            guard depth < 32, remaining > 0, ProcessInfo.processInfo.systemUptime < deadline else { truncated = true; return }
+            let now = ProcessInfo.processInfo.systemUptime
+            if scanTruncated(depth: depth, depthLimit: maximumScanDepth, nodesRemaining: remaining,
+                             now: now, deadline: deadline) {
+                if truncationCause.isEmpty {
+                    if depth >= maximumScanDepth { truncationCause = "depth(\(depth))" }
+                    else if remaining <= 0 { truncationCause = "nodes(\(remaining))" }
+                    else { truncationCause = "time(\(String(format: "%.2f", now - (deadline - scanBudgetSeconds))))s)" }
+                }
+                truncated = true; return
+            }
             let hash = CFHash(element)
             var needsComposerPropagation = false
             if inComposer, let index = result.firstIndex(where: { CFEqual($0.element, element) }) {
@@ -688,12 +721,13 @@ enum AgentTaskComposer {
                 if ["AXWebArea", "AXWindow", "AXApplication"].contains(role) { break }
                 local = candidate
             }
-            deadline = ProcessInfo.processInfo.systemUptime + 2
+            deadline = ProcessInfo.processInfo.systemUptime + scanBudgetSeconds
             walk(local, depth: 0)
-            deadline = ProcessInfo.processInfo.systemUptime + 2
+            deadline = ProcessInfo.processInfo.systemUptime + scanBudgetSeconds
         }
         walk(root, depth: 0)
         onScan?(result.count, truncated)
+        onScanDetail?(result.count, truncated, truncationCause)
         return result
     }
 
@@ -756,6 +790,18 @@ enum AgentTaskComposer {
 
     static func valid(_ pid: pid_t, _ authorized: () -> Bool) -> Bool {
         authorized() && EnvironmentGate.blockReason() == nil && InputFocus.focusedApplicationPID() == pid
+    }
+
+    /// 与 valid 同一判定，但附带归属诊断。门禁失败时必须能说清是授权、环境还是应用归属不成立，
+    /// 否则只回一句"焦点或控制权已变化"，排障只能靠猜。
+    static func validWithDetail(_ pid: pid_t, _ authorized: () -> Bool) -> (valid: Bool, detail: String) {
+        let allowed = authorized()
+        let blockReason = EnvironmentGate.blockReason()
+        let owner = InputFocus.applicationOwner()
+        let detail = "authorized=\(allowed); blockReason=\(blockReason ?? "none"); expectedPID=\(pid); "
+            + "ownerPID=\(owner.pid.map(String.init) ?? "unknown"); \(owner.detail)"
+        let valid = allowed && blockReason == nil && owner.pid == pid
+        return (valid, detail)
     }
 
     private static func pageURL(_ element: AXUIElement) -> String? {

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: AgentWorkspaceRequest/Policy、工作空间选择器与新任务导航的纯策略；AX 元素仅作身份替身，不读取桌面。
- * [OUTPUT]: 验证本地工作空间动作参数、准确/同名匹配、操作项隔离、模型/权限排除及名称/值选中核验；覆盖 WorkBuddy PopUpButton 与已选项目/分支/Worktree 行的身份和歧义、项目菜单双动作补证与可见语义发送按钮去重；覆盖 WorkBuddy 5.8.2 可见空白新页直接聚焦、共享空框和发送前原正文框的焦点候选过滤、物理框焦点一致性与正文门禁、草稿子文本与真实新增消息的接收证据隔离、侧栏导航回退、隐藏 AX 副本过滤与同物理控件双引用归一、延迟树就绪、唯一新建入口与真实草稿保护。
+ * [OUTPUT]: 验证本地工作空间动作参数、准确/同名匹配、操作项隔离、模型/权限排除及名称/值选中核验；覆盖 WorkBuddy PopUpButton 与已选项目/分支/Worktree 行的身份和歧义、项目菜单双动作补证与可见语义发送按钮去重；覆盖 WorkBuddy 5.8.2 可见空白新页直接聚焦、共享空框和发送前原正文框的焦点候选过滤、物理框焦点一致性与正文门禁、草稿子文本与真实新增消息的接收证据隔离、侧栏导航回退、隐藏 AX 副本过滤与同物理控件双引用归一、延迟树就绪、唯一新建入口与真实草稿保护；覆盖 AX 树遍历深度与时间预算必须覆盖 WorkBuddy 5.9.3 主窗实测的 37 层真实深度，深度/时间/节点任一预算耗尽即判截断。
  * [POS]: WorkBuddy/ZCode 项目导航的无副作用回归；不启动应用、不发送任务、不修改真实草稿。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -428,6 +428,25 @@ import AppKit
         assert(AgentTaskComposer.emptyNewComposers(profile: .workbuddy,
             snapshot: [newTask, welcome, node("AXTextArea", "", value: "", enabled: false)]).isEmpty, "禁用输入框不用于派单")
         expectBlocked(navigation([newTask, welcome, blank, blank582]), "多个空白新页输入框拒绝猜测")
+
+        // AX 树遍历预算：WorkBuddy 5.9.3 主窗实测真实深度 37 层，原上限 32 会截断整棵树，
+        // complete 变 false，新任务派单整轮停在"窗口或控制权未核实"。预算必须覆盖实测深度。
+        assert(AgentTaskComposer.maximumScanDepth > 37,
+            "扫描深度上限必须覆盖 WorkBuddy 5.9.3 主窗实测的 37 层真实深度")
+        assert(AgentTaskComposer.scanBudgetSeconds >= 2.1,
+            "时间预算必须覆盖双窗口全扫实测最慢 2.02s")
+        assert(AgentTaskComposer.scanTruncated(depth: 37, depthLimit: AgentTaskComposer.maximumScanDepth,
+                                              nodesRemaining: 1021, now: 10, deadline: 13) == false,
+            "深度与时间都在预算内不算截断")
+        assert(AgentTaskComposer.scanTruncated(depth: 32, depthLimit: 32,
+                                              nodesRemaining: 950, now: 10, deadline: 13) == true,
+            "深度上限先到即视为截断，不拿不完整的树当页面证据")
+        assert(AgentTaskComposer.scanTruncated(depth: 10, depthLimit: 48,
+                                              nodesRemaining: 1021, now: 13, deadline: 13) == true,
+            "时间预算先到即视为截断")
+        assert(AgentTaskComposer.scanTruncated(depth: 10, depthLimit: 48,
+                                              nodesRemaining: 0, now: 10, deadline: 13) == true,
+            "节点预算耗尽即视为截断")
         print("PASS WorkBuddy/ZCode workspace navigation policies")
     }
 }
