@@ -1,6 +1,6 @@
 /**
  * [INPUT]: EasyInput纯音频协议、唤醒/稳定短口令规则及临时配置目录。
- * [OUTPUT]: 验证畸形帧/会话/序号/ADPCM界限、精确唤醒同句提取、重喊唤醒词、自适应停顿、空结果收尾策略与配置私有持久性。
+ * [OUTPUT]: 验证畸形帧/会话/序号/ADPCM界限、精确唤醒同句提取、重喊唤醒词、自适应停顿、空结果收尾策略与配置私有持久性；追问/候选/原因/要点的口语挑句与闲聊就地回应。
  * [POS]: 自动语音协议回归；不连接蓝牙、不启动麦克风/识别、不执行用户任务。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -140,6 +140,41 @@ import Darwin
         for text in ["小艺开灯", "小艺帮我记个待办", "把灯关掉然后退下", "小艺明天什么待办", "退下以后再说"] {
             check(DesktopVoiceTurn.local(text) == nil, "剥名字后不误接：" + text)
         }
+        // ---------- 对话感：追问念出来、失败说原因、长回答念要点、闲聊就地回 ----------
+        check(DesktopVoiceTurn.spokenQuestion("找到两个叫张三的联系人，要发给哪一个？\n- 张三（产品部）\n- 张三（研发部）\n直接说名称就行。") == "找到两个叫张三的联系人，要发给哪一个？选项在屏幕上", "同名候选念不清就指屏幕")
+        check(DesktopVoiceTurn.spokenQuestion("要发到哪个群？\n1. 产品群\n2. 研发群\n3. 周会群") == "要发到哪个群？产品群、研发群，还是周会群？", "两三个短候选直接念进问句")
+        check(DesktopVoiceTurn.spokenQuestion("日程几点开始？") == "日程几点开始？", "单句问题原样念")
+        check(DesktopVoiceTurn.spokenQuestion("已记下。") == nil && DesktopVoiceTurn.spokenQuestion(nil) == nil, "不是问题不硬念")
+        let longQuestion = "我在你家里找到了好几个名字里都带着灯字的设备，它们分别在不同的房间里面，你想控制的是哪一个房间的？"
+        check(DesktopVoiceTurn.spokenQuestion(longQuestion) == "你想控制的是哪一个房间的？", "长问句只念真正在问的分句")
+        check(DesktopVoiceTurn.spokenReason("飞书登录过期了，发不出去。请在电脑上重新登录。") == "飞书登录过期了，发不出去", "失败只念第一句原因")
+        check(DesktopVoiceTurn.spokenReason("Error Domain=NSURLErrorDomain Code=-1001") == nil, "英文报错不念")
+        check(DesktopVoiceTurn.spokenReason("未知错误。") == nil, "空洞错误不念")
+        check(DesktopVoiceTurn.conversational(.failed, recovery: nil, result: "网页服务没响应。") == "网页服务没响应", "自带否定的原因不再垫话")
+        check(DesktopVoiceTurn.conversational(.failed, recovery: nil, result: "工作台服务在重启中。") == "没办成，工作台服务在重启中", "中性原因前面补一句没办成")
+        check(DesktopVoiceTurn.conversational(.unconfirmed, recovery: "unconfirmed", result: "已尝试发送，接收待核实。") == nil, "已发出未核实不编话，用固定措辞")
+        check(DesktopVoiceTurn.conversational(.unconfirmed, recovery: "executionFailure", result: "已尝试发送，接收待核实。") == nil, "带发送事实的执行失败也不说成没办成")
+        check(DesktopVoiceTurn.conversational(.unconfirmed, recovery: "executionFailure", result: "米家服务暂时连不上。") == "米家服务暂时连不上", "真正的执行失败念原因")
+        check(DesktopVoiceTurn.conversational(.needsInput, recovery: "prerequisite", result: "需要先在电脑控制台选一个家庭。") == "需要先在电脑控制台选一个家庭", "前置条件念出要做什么")
+        let essay = "北京明天多云转晴，最高气温十八度。早晚温差比较大，出门记得带件外套，另外空气质量良好适合户外活动。"
+        check(DesktopVoiceTurn.spokenGist(essay) == "北京明天多云转晴，最高气温十八度，细节在屏幕上", "长回答念第一句结论再指屏幕")
+        check(DesktopVoiceTurn.spokenGist("明天有这些安排：\n- 评审\n- 周会") == "明天有这些安排，我列在屏幕上了", "列表开头不念半截")
+        check(DesktopVoiceTurn.spokenGist("已打开微信。") == nil, "动作回执不当成回答念")
+        let casualCases: [(String, DesktopVoiceTurn.Local)] = [("你好", .greet), ("小E，早上好", .greet), ("你叫什么名字", .identity),
+                                                               ("你能干什么", .identity), ("辛苦了", .praise), ("好的", .okay), ("嗯", .okay)]
+        for (text, kind) in casualCases {
+            check(DesktopVoiceTurn.local(text) == kind, "闲聊就地回应：" + text)
+            check(DesktopVoiceTurn.casual(kind), "闲聊在回答问题时让给任务：" + text)
+        }
+        check(!DesktopVoiceTurn.casual(.dismiss) && !DesktopVoiceTurn.casual(.hush), "退下与止声任何时候都就地处理")
+        for text in ["你好帮我开灯", "你能帮我记个待办吗", "好的帮我发出去"] {
+            check(DesktopVoiceTurn.local(text) == nil, "带正事的话不被闲聊吞掉：" + text)
+        }
+        check(DesktopVoiceTurn.reply(.greet, hour: 8).contains("早"), "早上问候按时段")
+        check(DesktopVoiceTurn.reply(.greet, hour: 2).contains("晚") || DesktopVoiceTurn.reply(.greet, hour: 2).contains("夜"), "深夜问候按时段")
+        check(DesktopVoiceTurn.reply(.identity, wake: "小E").hasPrefix("我是小E"), "自我介绍带上名字")
+        check(DesktopVoiceTurn.reply(.okay).isEmpty, "应一声好的不再回话")
+        check(DesktopVoiceTurn.outcome(.failed).contains("屏幕") , "兜底失败句告诉他去哪看原因")
         for text in ["是多少", "那后天呢", "还有呢", "换成卧室", "几点", "那湿度呢"] {
             check(DesktopVoiceTurn.followUp(text), "短追问认出来：" + text)
         }
