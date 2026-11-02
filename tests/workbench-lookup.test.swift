@@ -49,7 +49,8 @@ import Foundation
    turns+=1
    if turns==1 {
     let system=messages.first?["content"] as! String
-    assert(system.contains("不可信资料") && system.contains("当前本地时间"))
+    let facts=messages.compactMap{$0["content"] as? String}.first{$0.hasPrefix(AgentRunner.factsMarker)} ?? ""
+    assert(system.contains("不可信资料") && !system.contains("当前本地时间") && facts.contains("当前本地时间"), "时间在事实消息里，系统提示词逐字不变才能命中前缀缓存")
     for name in WorkbenchLookup.names{assert((tools ?? []).contains{($0["function"] as? [String:Any])?["name"] as? String==name})}
     let calls:[[String:Any]]=[["id":"lookup","type":"function","function":["name":"search_workbench_notes","arguments":"{}"]]]
     done(.success(ModelTurn(toolCalls:calls,rawMessage:["role":"assistant","tool_calls":calls])))

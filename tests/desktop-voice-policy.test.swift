@@ -175,6 +175,9 @@ import Darwin
         check(DesktopVoiceTurn.reply(.identity, wake: "小E").hasPrefix("我是小E"), "自我介绍带上名字")
         check(DesktopVoiceTurn.reply(.okay).isEmpty, "应一声好的不再回话")
         check(DesktopVoiceTurn.outcome(.failed).contains("屏幕") , "兜底失败句告诉他去哪看原因")
+        check(DesktopVoiceTurn.summary("明天两个日程（11月3日），下午的撞了。") == "明天两个日程，下午的撞了", "口播总括洗掉括号与句末标点照念")
+        check(DesktopVoiceTurn.summary(String(repeating: "长", count: 90)) == nil && DesktopVoiceTurn.summary(nil) == nil && DesktopVoiceTurn.summary("  ") == nil, "空的或过长的总括不念")
+        check(DesktopVoiceTurn.receiptDelay >= 2, "“这就去办”不抢在快速结果前面")
         for text in ["是多少", "那后天呢", "还有呢", "换成卧室", "几点", "那湿度呢"] {
             check(DesktopVoiceTurn.followUp(text), "短追问认出来：" + text)
         }

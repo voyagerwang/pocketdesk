@@ -240,7 +240,10 @@ import Foundation
         let pending = waitFor(dispatched.id, status: .submitted)
         check(pending.recovery?.kind == .unconfirmed && dispatchCount == 1, "未核实派单结束为submitted并保存恢复事实")
         AgentRunner.sendModel = { _, messages, _, _, done in
-            check((messages.first?["content"] as? String)?.contains("不可重放") == true, "续接prompt保留已提交派单占用事实")
+            // 会变的执行器事实放在工具定义之后的独立用户消息里，静态系统提示词保持可缓存。
+            let facts = messages.compactMap { $0["content"] as? String }.first { $0.hasPrefix(AgentRunner.factsMarker) } ?? ""
+            check(facts.contains("不可重放") && (messages.first?["content"] as? String) == AgentRunner.systemPrompt, "续接prompt保留已提交派单占用事实，系统提示词不夹带会变的事实")
+            check(messages.filter { ($0["content"] as? String)?.hasPrefix(AgentRunner.factsMarker) == true }.count == 1, "续跑只保留本轮一条事实消息")
             done(.success(toolTurn("task_feedback", ["kind": "clarification", "message": "你再解释一遍任务。"])))
         }
         let review = try TaskService.supplement(taskId: pending.id, text: "核对刚才有没有收到", expectedRevision: pending.revision, requestId: "dispatch-check")

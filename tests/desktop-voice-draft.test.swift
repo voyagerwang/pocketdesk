@@ -15,7 +15,7 @@ enum TaskStatus { case accepted, running, verifying, needsInput, submitted, succ
         }
     }
 }
-struct AgentTask { var id: String; var requestId: String; var controlSession: String?; var status = TaskStatus.succeeded; var result: String? = nil; var recovery: Recovery? = nil; var text: String = ""; var error: String? = nil }
+struct AgentTask { var id: String; var requestId: String; var controlSession: String?; var status = TaskStatus.succeeded; var result: String? = nil; var recovery: Recovery? = nil; var text: String = ""; var error: String? = nil; var spoken: String? = nil }
 struct Recovery { var kind: String; var nextStep: String? = nil }
 enum LockScreenInput { static var locked = false }
 enum TaskStore { static var tasks: [String:AgentTask] = [:]; static func task(id: String) -> AgentTask? { tasks[id] } }
@@ -285,6 +285,36 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         ask.testSegment();ask.testReceive("今天天气不错",at:840)
         ask.testAdvance(to:843);ask.testAdvance(to:846)
         precondition(continued.count==1 && askIDs.count==1,"免唤醒窗口过期后旁人说话不接任务")
+        // 模型写了口播总括：流式中途先念，收尾时同一句不再念；没提前念的，收尾念总括而不是截正文第一句。
+        let brief=DesktopVoice()
+        var briefIDs:[String]=[],briefHeard:[String]=[]
+        brief.say={text in briefHeard.append(text);return 0.5}
+        brief.submitUnlocked={_,request in
+            var t=AgentTask(id:UUID().uuidString,requestId:request,controlSession:"native",text:"明天有什么日程")
+            t.status = .running;TaskStore.tasks[t.id]=t;briefIDs.append(t.id);return t
+        }
+        brief.testReceive("小E，明天有什么日程",at:900)
+        brief.testAdvance(to:902.1);brief.testAdvance(to:904.7)
+        precondition(briefIDs.count==1,"日程问句正常派单")
+        brief.speakEarly(taskId:"别的任务",line:"不该念")
+        precondition(briefHeard.isEmpty,"不是语音自己提交的任务不旁听")
+        brief.speakEarly(taskId:briefIDs[0],line:"明天两个日程，下午的撞了")
+        precondition(briefHeard==["明天两个日程，下午的撞了"],"口播行写完就先念，不等整段回答")
+        brief.speakEarly(taskId:briefIDs[0],line:"明天两个日程，下午的撞了")
+        precondition(briefHeard.count==1,"同一任务只提前念一次")
+        TaskStore.tasks[briefIDs[0]]!.status = .succeeded
+        TaskStore.tasks[briefIDs[0]]!.result = "- 十点评审\n- 两点周会"
+        TaskStore.tasks[briefIDs[0]]!.spoken = "明天两个日程，下午的撞了"
+        brief.testAdvance(to:908)
+        precondition(briefHeard.count==1,"收尾时同一句总括不再念第二遍")
+        brief.testSegment();brief.testReceive("小E，这周有什么待办",at:920)
+        brief.testAdvance(to:922.1);brief.testAdvance(to:924.7)
+        precondition(briefIDs.count==2,"第二句正常派单")
+        TaskStore.tasks[briefIDs[1]]!.status = .succeeded
+        TaskStore.tasks[briefIDs[1]]!.result = "这周第一条是写周报，第二条是交报销，第三条是约体检。"
+        TaskStore.tasks[briefIDs[1]]!.spoken = "这周三条待办，最急的是写周报"
+        brief.testAdvance(to:925)
+        precondition(briefHeard.last=="这周三条待办，最急的是写周报","没提前念的收尾时念总括，而不是正文第一句")
         print("Desktop voice lifecycle: short command submitted once without native final; negation, rewake recovery and finalize timeout handled")
         #endif
         // ---------- 唤醒后的正文交给豆包：本地只做并行兜底 ----------

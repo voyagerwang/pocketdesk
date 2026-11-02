@@ -358,6 +358,12 @@ enum DesktopVoiceTurn {
             return nil
         }
     }
+    /// 模型写的口播总括：先总后分的一句话，洗掉括号与机器时间后照念；空的或过长的不念，交回挑句规则。
+    static func summary(_ raw: String?, now: Date = Date()) -> String? {
+        guard let raw else { return nil }
+        let text = spokenClean(raw, now: now).trimmingCharacters(in: CharacterSet(charactersIn: " 。.；;"))
+        return text.isEmpty || text.count > SpokenSummary.maxLength ? nil : text
+    }
     /// 念完一个问题后，给多久不用喊名字就能直接回答。
     static let replyWindow: TimeInterval = 8
 
@@ -473,7 +479,8 @@ enum DesktopVoiceTurn {
     /// 只喊了名字就等一小会儿，确认没有下文再回一句，避免踩在用户的话上。
     static let ackDelay: TimeInterval = 0.35
     /// 事情没这么快办完时，多久之后先说一句“这就去办”。
-    static let receiptDelay: TimeInterval = 1.2
+    /// 1.2 秒太早：零模型快路与流式口播常在一两秒内就到，先说“这就去办”紧接着又报结果，听起来像连珠炮。
+    static let receiptDelay: TimeInterval = 2.5
     /// 豆包接管正文的硬闸：这么久没有任何结果就交回本地已经并行听到的那份。
     /// 真正的“它没起来”由接收框那层几秒内就判定，这里只防一条链路卡死。
     static let dictationBudget: TimeInterval = 60

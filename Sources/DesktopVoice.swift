@@ -119,6 +119,9 @@ final class DesktopVoice: NSObject {
     /// 提交时消费：这句回答要接到哪件任务上。
     private var answering: String?
     private var replyCount = 0
+    /// 流式口播已经提前念过的任务：收尾时同一句就不再念第二遍。
+    private var previewed: [String: String] = [:]
+    private var previewCount = 0
     private var lastTaskAt: TimeInterval = 0
     private var taskID: String?
     private var pendingTasks = Set<String>()
@@ -243,7 +246,7 @@ final class DesktopVoice: NSObject {
          "status": status, "audioDebug": audio.diagnostics, "micDebug": systemMic.diagnostics,
          "voiceDebug": ["running": running, "capturing": capturing, "finishing": finishing,
              "bodyCharacters": body.count, "committedCharacters": prefix.count, "partialCharacters": partial.count,
-             "quickSubmissions": quickCount, "rewakes": rewakeCount, "replies": replyCount, "recoveries": recoverCount,
+             "quickSubmissions": quickCount, "rewakes": rewakeCount, "replies": replyCount, "previews": previewCount, "recoveries": recoverCount,
              "wakes": wakeCount, "finals": finalCount, "emptyFinals": emptyFinalCount, "submitted": submittedCount, "lastTaskId": lastTaskID,
              "mutedDrops": mutedDrops, "asr": asrMode, "adapted": adaptCount,
              "verify": ["pass": verifyPass, "refuse": verifyRefuse, "short": verifyShort, "fail": verifyFail]], "receivingAudio": receivedAudio && running, "draft": draft, "parked": parked,
@@ -757,8 +760,23 @@ final class DesktopVoice: NSObject {
         let duration = feedback(phrase)
         muteUntil = max(muteUntil, now + duration + echoTail)
     }
-    /// 任务收尾时一句话反馈，像有人应了一声；有结论念结论，要他定夺就把问题问出来，没办成就说卡在哪。
+    /// 模型回答还在生成，口播总括那一行已经写完：语音自己提交的任务就先念出来，不等整段收完。
+    /// 正在收音时不插话（收尾时照常念）；看得见的动作本来就不出声，这里也不念。
+    func speakEarly(taskId: String, line: String) {
+        guard settings.ackEnabled, pendingTasks.contains(taskId), previewed[taskId] == nil,
+              !capturing, !LockScreenInput.locked || settings.allowLocked,
+              let phrase = DesktopVoiceTurn.summary(line) else { return }
+        if let task = TaskStore.task(id: taskId), DesktopVoiceTurn.perceivable(task.text) { return }
+        previewed[taskId] = phrase; previewCount += 1
+        if taskID == taskId { receiptPending = false }
+        lastOutcome = phrase
+        stopSpeaking()
+        let said = feedback(phrase)
+        muteUntil = max(muteUntil, now + max(said + echoTail, Double(phrase.count) / 4.6 + 0.6 + (source == .system ? 0.4 : 0)))
+    }
+    /// 任务收尾时一句话反馈，像有人应了一声；有总括念总括，要他定夺就把问题问出来，没办成就说卡在哪。
     private func announce(_ task: AgentTask) {
+        let early = previewed.removeValue(forKey: task.id)
         guard settings.ackEnabled else { return }
         receiptPending = false
         // “已请求但还没确认”不是失败：用户看到应用关了，我却在报“没办成”，比不说还糟。
@@ -770,9 +788,13 @@ final class DesktopVoice: NSObject {
         // 要他定夺时先把问题本身问出来；带编号的候选不能被当成“读数”念成半句。
         let question = outcome == .needsInput && (recovery == nil || recovery == "clarification")
             ? DesktopVoiceTurn.spokenQuestion(task.result) : nil
+        // 办成了且模型写了口播总括：念总括（先总后分），而不是从正文里截第一句。
+        let summary = outcome == .succeeded || outcome == .answered ? DesktopVoiceTurn.summary(task.spoken) : nil
+        // 流式时已经先念过同一句：不再重复。结局变了（比如最后没办成）就照常报新结论。
+        if let early, early == summary { return }
         // 查到的东西就念查到的东西；“搞定了”“还没确认上”只在没有可念结论时兜底。
         // 附带条件的结果（例如只有历史读数）也照念，念完那句就够，不必再报状态。
-        var spoken = question ?? ((outcome == .succeeded || outcome == .answered)
+        var spoken = question ?? summary ?? ((outcome == .succeeded || outcome == .answered)
             ? DesktopVoiceTurn.speakable(task.result) : nil)
         if spoken == nil, outcome != .succeeded, outcome != .answered,
            DesktopVoiceTurn.hasNumber(task.result ?? "") {
