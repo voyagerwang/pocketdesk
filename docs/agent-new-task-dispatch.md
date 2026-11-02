@@ -229,4 +229,30 @@ Cola既有普通耳机新建验收仍成立。本轮只读核查另发现：Cola
 
 遗留边界沿用前几轮：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；复跑在两个应用里留下的测试消息（含因编号撞车多出的一条「复跑2」）没有删。
 
+### 稳定性复跑2 二次验证（2026-11-02 20:27）与锁屏解除后的即时恢复
+
+屏幕在 20:15:14 被锁上后，第 4–8 轮按设计停在激活阶段。**解锁后（20:26 `CGSSessionScreenIsLocked` 转为 false）用同一套办法把复跑2 又完整跑了一遍**，验证链路恢复而非只在解锁瞬间可用。探针是 20:07 从当前 HEAD（`1fa26c3`，工作树干净）重新编译的 `/private/tmp/pd-rerun2/probe`：
+
+- **WorkBuddy**：`confirmed / visible=true`，10.53s，pid=24128。日志：唤醒 WorkBuddy → **失败**（未能核实键盘归属，`ownerPID=24128` 却仍判失败）→ 请求辅助功能树（manual=0）→ 输入框 AX 聚焦 → 焦点引用核验 `sameReference=true / matched=true` → **真实空框点击后已核实键盘归属与输入焦点** → 输入框 AX 聚焦（两轮）→ 焦点引用核验两轮均 `matched=true` → 派单 delivered。
+- **Cola**：`confirmed / visible=true`，4.32s，pid=16114。日志：唤醒 Cola → 请求辅助功能树（manual=0）→ 输入框 AX 聚焦 → 派单 delivered。
+
+这一轮有两处值得单独记下：
+
+- **唤醒失败但派单仍成功，是修复在起作用。** WorkBuddy 这次的「唤醒 WorkBuddy → 失败 | 未能核实键盘归属」发生在解锁刚完成、焦点尚未稳定时；后续日志显示派单走的是「真实空框点击后已核实键盘归属与输入焦点」这条兜底路径，而不是靠 `activate` 阶段的归属核验过关。**同一根因（AX 引用/归属读空）不再导致整条派单被误判失败**——这正是 19:25 那批「读空即判失败」修复要达到的效果：读不到只降级到更严格的兜底路径，不直接判死。
+- **只读 AX 扫描要在派单后稍等再扫。** 派单刚完成时立刻扫描，WorkBuddy 侧 `hits=0`、节点数反而从 404 掉到 375——那是当前视图还停在上一轮的页面，新任务尚未进入可见的 AX 子树。间隔数秒后复扫得到 452 节点并命中标题与正文。**「扫描没命中」在这一刻不能直接当成「正文没落地」**，与派单失败要分开判。
+
+独立第二来源（不依赖回执自称送达）：
+
+- **只读 AX 扫描**（只读 AX 树，不写不改）：WorkBuddy 452 节点命中标题「PocketDesk 稳定性复跑2」与正文；Cola 432 节点命中正文「PocketDesk 稳定性复跑2，可忽略」。
+- **WorkBuddy 任务库**：20:27:15 新生成会话「PocketDesk 稳定性复跑2」——派单在 WorkBuddy 里新建任务的落地证据，与 AX 树命中互相独立。
+
+**关于锁屏根因的独立复核**（与上一节的结论一致，此处记录复核方法，避免下次重走弯路）：
+
+- `CGSessionCopyCurrentDictionary()` 返回 `CGSSessionScreenIsLocked = true`、`CGSSessionScreenLockedTime = 20:15:14`、`onConsole = true`、`loginDone = true`——是**真锁屏**（登录窗口在前台），不是息屏。
+- 锁屏期间**只读 AX 扫描只剩 1 个节点**（`AXApplication` 空壳），这是「树读不到」的直接表现；把它误当成冷树问题去请求 `AXManualAccessibility` 是无效动作（`manual=0` 表示写入本身成功，树仍不构建）。
+- 截图交叉验证：`screencapture` 在锁屏时成功但画面全黑；唤醒显示后仍全黑说明**唤醒 ≠ 解锁**，解锁必须由用户完成。
+- 本机无法自解的三条路都已验证到底：钥匙串条目确实存在（`dev.voicedeck.quickunlock.password`，2026-09-20 写入），但从非 GUI 上下文读取会挂起等系统授权弹窗；`native-v1` 凭据的私钥在手机端，Mac 只有公钥（`quick-unlock-state.json` 里该凭据 `lastUsedAt=None`，说明手机侧从未成功走过）；`/api/manual-unlock/*` 要求 HTTPS 之外还要**手机端的控制会话**（`secure-controller-required`），仅凭 token 不放行。**结论：锁屏必须由用户在机器上解锁，探针不应尝试自解。**
+
+遗留边界沿用前几轮：Cola「请选择模型」与 WorkBuddy 未登录态仍只停在提示，不替用户选模型；WorkBuddy 深链预填路径本次未改，也无超长正文压制验收；复跑在两个应用里留下的测试消息没有删。
+
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
