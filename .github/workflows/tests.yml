@@ -32,7 +32,8 @@ jobs:
 
   swift:
     name: Swift 编译与回归
-    runs-on: macos-14
+    # 与本机一致用较新的 Swift（源码已用到 6.1 的实参尾逗号）。
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4

@@ -57,17 +57,26 @@ for test in tests/*.test.swift; do
   binary="$BUILD/bin/$name"
   log="$BUILD/logs/$name.log"
   echo "::group::$name (${mode%% *})"
+  # 没有 @main 的是顶层脚本式测试：必须以 main.swift 身份编译，且不能带 -parse-as-library。
+  script=0; grep -q "@main" "$test" || script=1
+  flags=("${FLAGS[@]}"); [[ $script -eq 1 ]] && flags=("${FLAGS[@]:1}")
   if [[ "$mode" == FULL ]]; then
-    wrapped="$BUILD/src/$name.swift"
+    # 包装文件放在原测试旁边：有测试用 #filePath 找仓库里的 Web/ 资源。
+    if [[ $script -eq 1 ]]; then mkdir -p "$BUILD/src/$name"; wrapped="$BUILD/src/$name/main.swift"
+    else wrapped="$ROOT/tests/.$name.ci.swift"; fi
     { echo "@testable import PocketDeskCore"; cat "$test"; } > "$wrapped"
-    swiftc "${FLAGS[@]}" -I "$BUILD" -L "$BUILD" -lPocketDeskCore "${FRAMEWORKS[@]}" \
+    swiftc "${flags[@]}" -I "$BUILD" -L "$BUILD" -lPocketDeskCore "${FRAMEWORKS[@]}" \
       "$wrapped" ${extra[@]+"${extra[@]}"} -o "$binary" > "$log" 2>&1
+    status=$?
+    [[ $script -eq 0 ]] && rm -f "$wrapped"
   else
     subset=()
     for file in ${mode#SUBSET}; do subset+=("Sources/$file"); done
-    swiftc "${FLAGS[@]}" "${FRAMEWORKS[@]}" "${subset[@]}" "$test" ${extra[@]+"${extra[@]}"} -o "$binary" > "$log" 2>&1
+    entry="$test"
+    if [[ $script -eq 1 ]]; then mkdir -p "$BUILD/src/$name"; entry="$BUILD/src/$name/main.swift"; cp "$test" "$entry"; fi
+    swiftc "${flags[@]}" "${FRAMEWORKS[@]}" ${subset[@]+"${subset[@]}"} "$entry" ${extra[@]+"${extra[@]}"} -o "$binary" > "$log" 2>&1
+    status=$?
   fi
-  status=$?
   if [[ $status -eq 0 ]]; then
     run_with_timeout "$binary" >> "$log" 2>&1
     status=$?

@@ -39,3 +39,6 @@ scope-lock.json
 home-scope.json
 quick-light.json
 quick-ac.json
+
+# scripts/run-swift-tests.sh 运行中的临时包装文件
+tests/.*.ci.swift
