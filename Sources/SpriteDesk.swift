@@ -82,6 +82,10 @@ enum SpriteDesk {
         // 不让执行循环自己认识桌面语音身份。
         AgentRunner.lockedVoice = { DesktopVoice.lockedTask($0) }
         AgentRunner.lockedToolRefusal = { taskId, tool in AgentControlAuthority.lockedToolRefusal(taskId: taskId, tool: tool) }
+        // 模型的口播总括一写完就交给桌面语音先念；只有语音自己提交的任务才会被念，其余忽略。
+        AgentRunner.spokenPreview = { taskId, line in
+            DispatchQueue.main.async { DesktopVoice.shared.speakEarly(taskId: taskId, line: line) }
+        }
         voice.install()
     }
 }

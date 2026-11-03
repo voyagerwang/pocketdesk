@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 配置唤醒词、单轮转写、单调时间和声学活动；不访问设备或任务。
- * [OUTPUT]: 唤醒分段/同段重复识别去重、转写入口的唤醒名剥离、自适应停顿、麦克风兜底时机与文案策略；仅新唤醒片段可重开输入，不把转写修订当作再次呼叫。
+ * [OUTPUT]: 追问/失败原因/长回答要点的口语挑句与闲聊就地回应（招呼按时段、自我介绍、夸奖、应一声不回）；唤醒分段/同段重复识别去重、转写入口的唤醒名剥离、自适应停顿、麦克风兜底时机与文案策略；仅新唤醒片段可重开输入，不把转写修订当作再次呼叫。
  * [POS]: 自动语音的纯判定层；麦克风只供样本、识别只供转写，发声、提交与锁屏授权由 DesktopVoice 管理。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -80,7 +80,7 @@ enum DesktopVoiceTurn {
         .needsInput: ["有个地方要你定一下", "还得你确认一下"],
         // 动作发出去了但没核对上，既不是成功也不是没做。
         .unconfirmed: ["已经发出去了，还没确认上", "发出去了，回执还没回来"],
-        .failed: ["这个没弄成", "没办成，你看下"],
+        .failed: ["抱歉，这个没弄成，原因在屏幕上", "这次没办成，你看一眼屏幕"],
     ]
     static func outcome(_ outcome: Outcome, avoiding previous: String? = nil, roll: Int = 0) -> String {
         pick(outcomes[outcome] ?? [], avoiding: previous, roll: roll)
@@ -89,6 +89,8 @@ enum DesktopVoiceTurn {
     /// 屏幕上的那句话是写给人看的（设备全名、云端术语、括号补注），直接念又长又隔应；
     /// 这里只做“能念出口”的瘦身：去设备全名、去括号、短句、把“为”说成“是”。
     /// 动作回执（已设置/已打开/已发送…）没有可念的事实，返回 nil 交给通用反馈。
+    /// 动作回执的标志词：这些句子说的是“做了什么”，不是可以念给人听的结论。
+    static let actionMarks = ["已执行", "已打开", "已保存", "已发送", "已创建", "已提交", "已派", "已添加", "已关闭", "已启动", "已尝试", "已把", "已让", "已交给"]
     static let spokenProperties = ["湿度", "温度", "电量", "开关", "状态", "亮度", "余额", "进度"]
     static let countWords: [(String, Int)] = [("一", 1), ("二", 2), ("两", 2), ("三", 3), ("四", 4),
                                               ("五", 5), ("六", 6), ("七", 7), ("八", 8), ("九", 9), ("十", 10)]
@@ -160,8 +162,7 @@ enum DesktopVoiceTurn {
             return name + (line.hasSuffix("true") ? "开了" : "关了")
         }
         // 动作类回执一句话就够，念原文反而像机器报表。
-        let actions = ["已执行", "已打开", "已保存", "已发送", "已创建", "已提交", "已派", "已添加", "已关闭", "已启动", "已尝试", "已把", "已让", "已交给"]
-        if actions.contains(where: { text.contains($0) }) { return nil }
+        if actionMarks.contains(where: { text.contains($0) }) { return nil }
         // 括号里多半是设备型号、时间戳这类念不出意义的补注。
         for pattern in ["（[^）]*）", "\\([^)]*\\)", "\\[[^\\]]*\\]"] {
             text = text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
@@ -233,6 +234,139 @@ enum DesktopVoiceTurn {
         if spokenProperties.contains(where: { text.hasPrefix($0) }), text.contains("是") { return "现在" + text }
         return text
     }
+    // MARK: - 对话感：追问念出来、失败说原因、长回答念要点
+    //
+    // 真人助理不会说“有个地方要你定一下”然后让你自己去看屏幕——他会直接问；
+    // 也不会只说“没弄成”——他会顺口说一句卡在哪。下面三个函数都只从结果原文里挑一句
+    // 能张口说的话，挑不出就返回 nil，由调用方退回固定短句：宁可少说，不念半句或报表。
+
+    /// 屏幕文字转口语前的统一清洗：去括号补注、Markdown 记号、机器时间与字段分隔符。
+    static func spokenClean(_ raw: String, now: Date = Date()) -> String {
+        var text = raw
+        for pattern in ["（[^）]*）", "\\([^)]*\\)", "\\[[^\\]]*\\]"] {
+            text = text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        }
+        text = text.replacingOccurrences(of: "[「」“”\"`*>#]", with: "", options: .regularExpression)
+        text = spokenTime(text, now: now)
+        text = text.replacingOccurrences(of: "\\s*·\\s*", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    /// 逐行清洗再拼回：spokenTime 会吞掉中文之间的空白（含换行），整段一起洗会把两行粘成一句。
+    static func spokenLines(_ raw: String, now: Date = Date()) -> String {
+        raw.components(separatedBy: .newlines).map { spokenClean($0, now: now) }.filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+    /// 按中文句读切句，标点留在句尾（问号要留着，才知道哪句是在问）。
+    static func sentences(_ text: String) -> [String] {
+        var output: [String] = [], current = ""
+        for character in text {
+            current.append(character)
+            if "。！!；;？?\n".contains(character) {
+                let piece = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !piece.isEmpty { output.append(piece) }
+                current = ""
+            }
+        }
+        let tail = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tail.isEmpty { output.append(tail) }
+        return output
+    }
+    static let candidateBullet = "^(?:[-•*＊]|[0-9]{1,2}[.、)）]|[①②③④⑤⑥⑦⑧⑨])\\s*"
+    /// 追问念出来：取第一句问句；候选两三个且都短就直接念进去，多了就指一下屏幕。
+    static func spokenQuestion(_ result: String?, now: Date = Date()) -> String? {
+        guard let raw = result?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        var prose: [String] = [], options: [String] = []
+        for line in raw.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { continue }
+            if let bullet = trimmed.range(of: candidateBullet, options: .regularExpression) {
+                let item = spokenClean(String(trimmed[bullet.upperBound...]), now: now)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: " ，,。；;"))
+                if !item.isEmpty { options.append(item) }
+            } else {
+                prose.append(spokenClean(trimmed, now: now))
+            }
+        }
+        guard var question = sentences(prose.joined(separator: "\n"))
+            .first(where: { $0.hasSuffix("？") || $0.hasSuffix("?") }) else { return nil }
+        if question.hasSuffix("?") { question = String(question.dropLast()) + "？" }
+        question = question.trimmingCharacters(in: CharacterSet(charactersIn: " ，,：:"))
+        // 问句太长就只留最后那个分句——真正在问的就是它。
+        if question.count > 40, let comma = question.dropLast().lastIndex(where: { $0 == "，" || $0 == "," }) {
+            question = String(question[question.index(after: comma)...]).trimmingCharacters(in: .whitespaces)
+        }
+        guard question.count >= 2, question.count <= 40 else { return nil }
+        guard !options.isEmpty else { return question }
+        if (2...3).contains(options.count), Set(options).count == options.count, options.allSatisfy({ $0.count <= 10 }) {
+            return question + options.dropLast().joined(separator: "、") + "，还是" + options[options.count - 1] + "？"
+        }
+        return question + "选项在屏幕上"
+    }
+    /// 没办成的原因：第一句人话。错误码、英文异常念出来只会更像机器，宁可不念。
+    static func spokenReason(_ result: String?, now: Date = Date()) -> String? {
+        guard let raw = result?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        guard var sentence = sentences(spokenLines(raw, now: now)).first else { return nil }
+        sentence = sentence.trimmingCharacters(in: CharacterSet(charactersIn: " ，,：:。！!；;"))
+        if sentence.count > 40, let comma = sentence.firstIndex(where: { $0 == "，" || $0 == "," }),
+           sentence.distance(from: sentence.startIndex, to: comma) >= 4 {
+            sentence = String(sentence[..<comma])
+        }
+        guard sentence.count >= 4, sentence.count <= 40 else { return nil }
+        guard sentence.range(of: "(?i)error|exception|errno|错误码|状态码|未知错误|http ?[0-9]{3}", options: .regularExpression) == nil else { return nil }
+        return sentence
+    }
+    /// 这句话本身已经在说“没成”，就不必再垫一句“没办成”。
+    static func soundsNegative(_ text: String) -> Bool {
+        ["没", "未", "无法", "不能", "不了", "找不到", "打不开", "失败", "读不到", "连不上", "不支持", "抱歉", "暂时", "需要", "得先", "要先"]
+            .contains { text.contains($0) }
+    }
+    /// 回答太长念不完：念第一句结论，再告诉他细节在屏幕上——而不是只说一句“查到了”。
+    static func spokenGist(_ result: String?, now: Date = Date()) -> String? {
+        guard let raw = result?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
+              !actionMarks.contains(where: { raw.contains($0) }) else { return nil }
+        let cleaned = spokenLines(raw, now: now)
+        guard var first = sentences(cleaned).first else { return nil }
+        // 以冒号收尾的是列表开头：“明天有这些安排：”——说一半，剩下的指给他看。
+        let intro = first.hasSuffix("：") || first.hasSuffix(":")
+        first = first.trimmingCharacters(in: CharacterSet(charactersIn: " ，,：:。！!；;"))
+        // 问句不当结论念；数字结论交给 speakable，这里只管长的文字回答。
+        guard first.count >= 4, first.count <= 48, !first.hasSuffix("？"), !first.hasSuffix("?") else { return nil }
+        if intro { return first + "，我列在屏幕上了" }
+        let more = cleaned.count - first.count > 12
+        return more ? first + "，细节在屏幕上" : first
+    }
+    /// 没有现成可念的结论时，按收尾类型挑一句：追问念问题，失败念原因，长回答念要点。
+    /// 已发出未核实（unconfirmed 且不是执行失败）不在这里编话，那一句必须由固定措辞说清。
+    static func conversational(_ outcome: Outcome, recovery: String?, result: String?, now: Date = Date()) -> String? {
+        let text = result ?? ""
+        switch outcome {
+        case .needsInput:
+            if recovery == nil || recovery == "clarification" {
+                return spokenQuestion(result, now: now) ?? spokenReason(result, now: now)
+            }
+            return spokenReason(result, now: now)
+        case .failed:
+            guard let reason = spokenReason(result, now: now) else { return nil }
+            return soundsNegative(reason) ? reason : "没办成，" + reason
+        case .unconfirmed:
+            let sent = ["已尝试", "已发出", "发出去", "待核实", "待核对", "接收"].contains { text.contains($0) }
+            guard recovery == "executionFailure", !awaiting(text), !sent, let reason = spokenReason(result, now: now) else { return nil }
+            return soundsNegative(reason) ? reason : "没办成，" + reason
+        case .succeeded, .answered:
+            return spokenGist(result, now: now)
+        case .receipt:
+            return nil
+        }
+    }
+    /// 模型写的口播总括：先总后分的一句话，洗掉括号与机器时间后照念；空的或过长的不念，交回挑句规则。
+    static func summary(_ raw: String?, now: Date = Date()) -> String? {
+        guard let raw else { return nil }
+        let text = spokenClean(raw, now: now).trimmingCharacters(in: CharacterSet(charactersIn: " 。.；;"))
+        return text.isEmpty || text.count > SpokenSummary.maxLength ? nil : text
+    }
+    /// 念完一个问题后，给多久不用喊名字就能直接回答。
+    static let replyWindow: TimeInterval = 8
+
     /// 把结果当列举念：头一句说“几条”，后面逐条念，时间要贴着标题念，别只报个钟点。
     static func enumeration(_ text: String) -> String? {
         guard let colon = text.firstIndex(where: { $0 == "：" || $0 == ":" }) else { return nil }
@@ -345,14 +479,18 @@ enum DesktopVoiceTurn {
     /// 只喊了名字就等一小会儿，确认没有下文再回一句，避免踩在用户的话上。
     static let ackDelay: TimeInterval = 0.35
     /// 事情没这么快办完时，多久之后先说一句“这就去办”。
-    static let receiptDelay: TimeInterval = 1.2
+    /// 1.2 秒太早：零模型快路与流式口播常在一两秒内就到，先说“这就去办”紧接着又报结果，听起来像连珠炮。
+    static let receiptDelay: TimeInterval = 2.5
     /// 豆包接管正文的硬闸：这么久没有任何结果就交回本地已经并行听到的那份。
     /// 真正的“它没起来”由接收框那层几秒内就判定，这里只防一条链路卡死。
     static let dictationBudget: TimeInterval = 60
 
     /// 对助手本人说的话，不是任务：说一句就回，不派单、不走模型。
     /// “退下”派给任务，收回来的当然是“搞定了”——这种回复很诡异。
-    enum Local { case dismiss, hush, thanks, remember, forget }
+    enum Local { case dismiss, hush, thanks, remember, forget, greet, identity, praise, okay }
+    /// 闲聊类：只在没有待回答的问题时就地回应；正在等他回答时，“好的”“嗯”就是答案，必须交给任务。
+    static let casualKinds: Set<Local> = [.greet, .identity, .praise, .okay]
+    static func casual(_ kind: Local) -> Bool { casualKinds.contains(kind) }
     static let literals: [(Local, Set<String>)] = [
         (.dismiss, ["退下", "退下吧", "退下退下", "退下吧退下", "你退下", "下去吧", "你下去吧", "你走吧", "走吧", "你可以走了", "没事了", "没事了退下", "没你事了", "你可以退下了"]),
         (.hush, ["别说了", "不要说了", "闭嘴", "安静", "安静点", "别吵", "别念了", "停一下", "停下来"]),
@@ -360,6 +498,11 @@ enum DesktopVoiceTurn {
         // 声纹注册与取消：锁屏放开之后，这两句是机主守住“只认我”的闸门，必须能直接用嘴说。
         (.remember, ["记住我的声音", "记一下我的声音", "记下我的声音", "记住这个声音", "记住我的声纹", "注册我的声音", "认识我的声音"]),
         (.forget, ["忘掉我的声音", "忘掉这个声音", "忘掉我的声纹", "清掉我的声音", "取消声纹", "别认我的声音", "忘了我"]),
+        // 打个招呼、问它是谁、夸一句、应一声：真人不会把这些当成“任务”去办，回一句就好。
+        (.greet, ["你好", "您好", "你好呀", "在吗", "在不在", "早", "早上好", "早安", "中午好", "下午好", "晚上好", "哈喽", "哈啰"]),
+        (.identity, ["你是谁", "你叫什么", "你叫什么名字", "你是干嘛的", "你能干什么", "你会什么", "你能做什么", "你会干什么", "你都会什么"]),
+        (.praise, ["真棒", "真厉害", "厉害", "好样的", "辛苦了", "辛苦", "干得好", "干得漂亮", "不错", "做得好", "太棒了"]),
+        (.okay, ["好的", "好", "知道了", "嗯", "嗯嗯", "行", "收到", "明白", "明白了", "好嘞", "ok", "OK", "okay"]),
     ]
     /// 正文里常常还带着唤醒名（“小艺退下”“小艺小艺，退下吧”），句尾还挂着语气词。
     /// 不先剥干净，这几句就会被当成活儿派出去——“退下”上一版就被理解成“退出名叫小艺的应用”。
@@ -401,7 +544,28 @@ enum DesktopVoiceTurn {
         // 注册/取消由 DesktopVoice 自己说（要先等对方开口再收音），这里留空避免抢话。
         .remember: [],
         .forget: [],
+        .greet: [],
+        .identity: [],
+        .praise: ["嘿嘿，应该的", "能帮上就好", "不辛苦，还有事就叫我"],
+        // 应一声“好的”不需要回话；再回一句“嗯”只会变成两个人互相客气。
+        .okay: [],
     ]
+    /// 打招呼按时段回，后面顺口问一句要办什么，不念时间也不自我介绍一长串。
+    static func greeting(hour: Int, roll: Int = 0) -> String {
+        let pool: [String]
+        switch hour {
+        case 5..<11: pool = ["早呀，今天先办点什么？", "早，有什么要我做的吗？"]
+        case 11..<14: pool = ["中午好，要我帮你做点什么？", "在呢，中午好"]
+        case 14..<18: pool = ["在呢，要办点什么？", "下午好，有事你说"]
+        case 18..<23: pool = ["晚上好，要我帮你做点什么？", "在呢，晚上好"]
+        default: pool = ["这么晚还没睡呀，要我做点什么？", "在呢，夜深了，有事你说"]
+        }
+        return pool[abs(roll) % pool.count]
+    }
+    /// “你是谁 / 你能干什么”：一句话说清名字和三五样常用本事，不背功能清单。
+    static func introduction(wake: String) -> String {
+        "我是" + wake + "，能帮你开关灯、记待办、查日程、发飞书、开应用，直接跟我说就行"
+    }
     /// 记声纹时收多久：够人磎慢念两三句并停顿，又不至于让人干站着。
     static let enrollSeconds: TimeInterval = 20
     static let enrollMinimumSampleCount = 32000
@@ -449,8 +613,13 @@ enum DesktopVoiceTurn {
             .filter { $0.count >= enrollMinimumSampleCount }
         return Array(chunks.prefix(enrollMaxSegments))
     }
-    static func reply(_ kind: Local, avoiding previous: String? = nil, roll: Int = 0) -> String {
-        pick(replies[kind] ?? [], avoiding: previous, roll: roll)
+    static func reply(_ kind: Local, avoiding previous: String? = nil, roll: Int = 0,
+                      hour: Int = Calendar.current.component(.hour, from: Date()), wake: String = "小E") -> String {
+        switch kind {
+        case .greet: return greeting(hour: hour, roll: roll)
+        case .identity: return introduction(wake: wake)
+        default: return pick(replies[kind] ?? [], avoiding: previous, roll: roll)
+        }
     }
     /// 固定池里挑一句：优先不重复上一句，池里只有一句时就一直是它。
     static func pick(_ items: [String], avoiding previous: String?, roll: Int) -> String {

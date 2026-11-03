@@ -15,7 +15,7 @@ enum TaskStatus { case accepted, running, verifying, needsInput, submitted, succ
         }
     }
 }
-struct AgentTask { var id: String; var requestId: String; var controlSession: String?; var status = TaskStatus.succeeded; var text = ""; var result: String? = nil; var recovery: Recovery? = nil }
+struct AgentTask { var id: String; var requestId: String; var controlSession: String?; var status = TaskStatus.succeeded; var text = ""; var result: String? = nil; var recovery: Recovery? = nil; var error: String? = nil; var spoken: String? = nil }
 struct Recovery { var kind: String; var nextStep: String? = nil }
 enum LockScreenInput { static var locked = false }
 enum TaskStore { static var tasks: [String:AgentTask] = [:]; static func task(id: String) -> AgentTask? { tasks[id] } }

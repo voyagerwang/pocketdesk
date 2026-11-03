@@ -1,6 +1,6 @@
 /**
  * [INPUT]: EasyInputAudio绑定PCM与SystemMicrophoneAudio兜底PCM、本地Speech识别、DesktopVoiceTurn纯规则、唤醒应答发声、豆包接管正文的注入入口与既有任务入口。
- * [OUTPUT]: 唤醒回应与同段转写去重；锁屏也能跑完整任务、需解锁屏幕的工具在工具层拒；只喊名字时把正文交给豆包（只能用系统默认输入设备，本地识别并行听同一段、失败/无字/超时回落本地那份），一口气说完仍走本地；豆包按住说话时“说完了”只看两个证据——麦克风还有声、或接收框还在出字，喊名字会掐掉剩余播报静音额度只剩回采尾巴，不让人半句话被两秒松手截断；锁屏没有豆包也没有屏幕：识别改用系统云端（失败一次退回本机）、应答只给短提示音不吞后续正文；重喊保留旧输入并重开，播报期间仍可唤醒打断；纯本机模式下键盘优先、断开自动换电脑麦克风、键盘回来自动切回；长停顿自愈、后台任务分别收尾。
+ * [OUTPUT]: 唤醒回应与同段转写去重；锁屏也能跑完整任务、需解锁屏幕的工具在工具层拒；只喊名字时把正文交给豆包（只能用系统默认输入设备，本地识别并行听同一段、失败/无字/超时回落本地那份），一口气说完仍走本地；豆包按住说话时“说完了”只看两个证据——麦克风还有声、或接收框还在出字，喊名字会掐掉剩余播报静音额度只剩回采尾巴，不让人半句话被两秒松手截断；锁屏没有豆包也没有屏幕：识别改用系统云端（失败一次退回本机）、应答只给短提示音不吞后续正文；重喊保留旧输入并重开，播报期间仍可唤醒打断；纯本机模式下键盘优先、断开自动换电脑麦克风、键盘回来自动切回；长停顿自愈、后台任务分别收尾；收尾有结论念结论、追问把问题与两三个短候选念出来并开 8 秒免唤醒回答窗口（回答接回原任务，锁屏不开）、失败念第一句人话原因，闲聊/打招呼就地回应。
  * [POS]: 自动语音生命周期协调器；不注入按键、不解锁电脑、不保存原始音频、不上传待唤醒转写。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -114,6 +114,17 @@ final class DesktopVoice: NSObject {
     private var voiceprintScore: Double?
     private var voiceprintThreshold: Double?
     private var lastTaskID = ""
+    /// 刚念完一个问题：这几秒里不用喊名字，直接说就是在回答它。
+    private var replyTaskID: String?
+    private var replyUntil: TimeInterval = 0
+    /// 这一轮是从“直接回答”开始的（不是喊名字开始的）。
+    private var replying = false
+    /// 提交时消费：这句回答要接到哪件任务上。
+    private var answering: String?
+    private var replyCount = 0
+    /// 流式口播已经提前念过的任务：收尾时同一句就不再念第二遍。
+    private var previewed: [String: String] = [:]
+    private var previewCount = 0
     private var lastTaskAt: TimeInterval = 0
     private var taskID: String?
     private var pendingTasks = Set<String>()
@@ -238,7 +249,7 @@ final class DesktopVoice: NSObject {
          "status": status, "audioDebug": audio.diagnostics, "micDebug": systemMic.diagnostics,
          "voiceDebug": ["running": running, "capturing": capturing, "finishing": finishing,
              "bodyCharacters": body.count, "committedCharacters": prefix.count, "partialCharacters": partial.count,
-             "quickSubmissions": quickCount, "rewakes": rewakeCount, "recoveries": recoverCount,
+             "quickSubmissions": quickCount, "rewakes": rewakeCount, "replies": replyCount, "previews": previewCount, "recoveries": recoverCount,
              "wakes": wakeCount, "finals": finalCount, "emptyFinals": emptyFinalCount, "submitted": submittedCount, "lastTaskId": lastTaskID,
              "mutedDrops": mutedDrops, "asr": asrMode, "adapted": adaptCount,
              "verify": ["pass": verifyPass, "refuse": verifyRefuse, "short": verifyShort, "fail": verifyFail]], "receivingAudio": receivedAudio && running, "draft": draft, "parked": parked,
@@ -416,6 +427,8 @@ final class DesktopVoice: NSObject {
         if newWake, let part = parts.last {
             guard canWake() else { if final { stopRecognition() }; return }
             guard !LockScreenInput.locked || settings.allowLocked else { return }
+            // 重新喊了名字就是开新话题，刚才那个问题的免唤醒窗口作废。
+            closeReplyWindow()
             segmentWakeCount = parts.count
             stopSpeaking(); muteUntil = 0; playbackListening = false
             if capturing { rewoke(part.body, previous: parts.count > 1 ? part.before : nil) }
@@ -423,7 +436,26 @@ final class DesktopVoice: NSObject {
             if final && capturing { append(part.body, final: true) }
         } else if capturing {
             append(parts.last?.body ?? text, final: final)
+        } else if replyOpen, startReply(text) {
+            if final && capturing { append(text, final: true) }
         } else if final { stopRecognition() }
+    }
+    /// 念完问题后的几秒：播报已经结束、没有新任务在跑、也不在锁屏，才把这段话当成回答。
+    private var replyOpen: Bool {
+        guard replyTaskID != nil else { return false }
+        if now >= replyUntil { closeReplyWindow(); return false }
+        return now >= muteUntil && !speaking() && taskID == nil && !LockScreenInput.locked
+    }
+    private func closeReplyWindow() { replyTaskID = nil; replyUntil = 0 }
+    /// 不喊名字直接回答：像喊过名字一样开一轮，只是不再应答“我在”，提交时接回原任务。
+    private func startReply(_ raw: String) -> Bool {
+        let text = DesktopVoiceTurn.normalize(raw, wake: settings.wakeWord).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let target = replyTaskID else { return false }
+        replyUntil = 0
+        wake(text)
+        guard capturing else { replyTaskID = nil; return false }
+        replying = true; replyTaskID = target; replyCount += 1
+        return true
     }
     private func feedback(_ phrase: String) -> TimeInterval {
         let text = DesktopVoiceTurn.feedback(phrase, wake: settings.wakeWord)
@@ -657,12 +689,18 @@ final class DesktopVoice: NSObject {
     }
     private func returnToWake() {
         cancelDictation()
+        if replying { replying = false; replyTaskID = nil }
         stopRecognition(); capturing = false; finishing = false; body = ""; prefix = ""; partial = ""; turnAudio.removeAll()
         ackPending = false
         status = waiting; present("", ""); applyHandback()
     }
     /// 刚才那件事还没说热、而这句话又明摆着在追问时，才接上去；否则仍当新任务。
     private func followUpTarget(_ text: String) -> String? {
+        // 刚问过他的问题，这句就是回答：不看句式，直接接回那件任务。
+        if let target = answering {
+            answering = nil
+            if !LockScreenInput.locked, let task = TaskStore.task(id: target), task.status.acceptsFollowUp { return target }
+        }
         guard !LockScreenInput.locked, !lastTaskID.isEmpty,
               now - lastTaskAt <= DesktopVoiceTurn.followUpWindow,
               DesktopVoiceTurn.followUp(text),
@@ -673,9 +711,15 @@ final class DesktopVoice: NSObject {
         let text = DesktopVoiceTurn.command(body)
         let audio = turnAudio
         stopRecognition(); capturing = false; finishing = false; body = ""; prefix = ""; partial = ""; turnAudio = []
+        let reply = replying ? replyTaskID : nil
+        replying = false; replyTaskID = nil
         guard !text.isEmpty else { returnToWake(); return }
         applyHandback()
-        if let local = DesktopVoiceTurn.local(text) { answer(local); return }
+        // 正在等他回答时，“好的”“嗯”就是答案，不能当成闲聊吞掉；退下、别说了照常就地处理。
+        if let local = DesktopVoiceTurn.local(text), reply == nil || !DesktopVoiceTurn.casual(local) {
+            answer(local); return
+        }
+        answering = reply
         // 锁屏已经放开了全部能力，守住“只认机主”的就只剩这道声纹门。
         guard needsOwnerVoice else { submit(text); return }
         verifyOwner(text: text, audio: audio)
@@ -684,7 +728,7 @@ final class DesktopVoice: NSObject {
     private func answer(_ kind: DesktopVoiceTurn.Local) {
         if kind == .remember { beginEnrollment(); return }
         if kind == .forget { forgetVoiceprint(); return }
-        let phrase = DesktopVoiceTurn.reply(kind, avoiding: lastAck, roll: Int.random(in: 0..<64))
+        let phrase = DesktopVoiceTurn.reply(kind, avoiding: lastAck, roll: Int.random(in: 0..<64), wake: settings.wakeWord)
         if !phrase.isEmpty {
             lastAck = phrase
             stopSpeaking()
@@ -731,32 +775,65 @@ final class DesktopVoice: NSObject {
         let duration = feedback(phrase)
         muteUntil = max(muteUntil, now + duration + echoTail)
     }
-    /// 任务收尾时一句话反馈，像有人应了一声；失败与待确认只说结论，不复述内容。
+    /// 模型回答还在生成，口播总括那一行已经写完：语音自己提交的任务就先念出来，不等整段收完。
+    /// 正在收音时不插话（收尾时照常念）；看得见的动作本来就不出声，这里也不念。
+    func speakEarly(taskId: String, line: String) {
+        guard settings.ackEnabled, pendingTasks.contains(taskId), previewed[taskId] == nil,
+              !capturing, !LockScreenInput.locked || settings.allowLocked,
+              let phrase = DesktopVoiceTurn.summary(line) else { return }
+        if let task = TaskStore.task(id: taskId), DesktopVoiceTurn.perceivable(task.text) { return }
+        previewed[taskId] = phrase; previewCount += 1
+        if taskID == taskId { receiptPending = false }
+        lastOutcome = phrase
+        stopSpeaking()
+        let said = feedback(phrase)
+        muteUntil = max(muteUntil, now + max(said + echoTail, Double(phrase.count) / 4.6 + 0.6 + (source == .system ? 0.4 : 0)))
+    }
+    /// 任务收尾时一句话反馈，像有人应了一声；有总括念总括，要他定夺就把问题问出来，没办成就说卡在哪。
     private func announce(_ task: AgentTask) {
+        let early = previewed.removeValue(forKey: task.id)
         guard settings.ackEnabled else { return }
         receiptPending = false
         // “已请求但还没确认”不是失败：用户看到应用关了，我却在报“没办成”，比不说还糟。
         let awaiting = DesktopVoiceTurn.awaiting(task.result ?? "")
         let verdict: DesktopVoiceTurn.Verdict = task.status == .succeeded ? .succeeded
             : (task.status == .needsInput || (task.status == .failed && awaiting) ? .needsInput : .failed)
-        let outcome = DesktopVoiceTurn.outcome(verdict, answered: DesktopVoiceTurn.answered(task.result),
-                                               recovery: task.recovery.map { String(describing: $0.kind) })
-        // 查到的东西就念查到的东西；“搞定了”只在没有可念结论时当兵底。
+        let recovery = task.recovery.map { String(describing: $0.kind) }
+        let outcome = DesktopVoiceTurn.outcome(verdict, answered: DesktopVoiceTurn.answered(task.result), recovery: recovery)
+        // 要他定夺时先把问题本身问出来；带编号的候选不能被当成“读数”念成半句。
+        let question = outcome == .needsInput && (recovery == nil || recovery == "clarification")
+            ? DesktopVoiceTurn.spokenQuestion(task.result) : nil
+        // 办成了且模型写了口播总括：念总括（先总后分），而不是从正文里截第一句。
+        let summary = outcome == .succeeded || outcome == .answered ? DesktopVoiceTurn.summary(task.spoken) : nil
+        // 流式时已经先念过同一句：不再重复。结局变了（比如最后没办成）就照常报新结论。
+        if let early, early == summary { return }
         // 查到的东西就念查到的东西；“搞定了”“还没确认上”只在没有可念结论时兜底。
         // 附带条件的结果（例如只有历史读数）也照念，念完那句就够，不必再报状态。
-        var spoken = (outcome == .succeeded || outcome == .answered)
-            ? DesktopVoiceTurn.speakable(task.result) : nil
+        var spoken = question ?? summary ?? ((outcome == .succeeded || outcome == .answered)
+            ? DesktopVoiceTurn.speakable(task.result) : nil)
         if spoken == nil, outcome != .succeeded, outcome != .answered,
            DesktopVoiceTurn.hasNumber(task.result ?? "") {
             spoken = DesktopVoiceTurn.speakable(task.result)
         }
         // 他能立刻看见的事，办成了就不吭声；只有失败或要他定夺时才说话。
         if DesktopVoiceTurn.perceivable(task.text), outcome == .succeeded || outcome == .unconfirmed { return }
+        // 还是没有可念的：失败念原因、长回答念第一句结论，都挑不出才用固定短句。
+        if spoken == nil {
+            spoken = DesktopVoiceTurn.conversational(outcome, recovery: recovery,
+                                                                 result: task.status == .failed ? (task.error ?? task.result) : task.result)
+        }
         let phrase = spoken ?? DesktopVoiceTurn.outcome(outcome, avoiding: lastOutcome, roll: Int.random(in: 0..<64))
         lastOutcome = phrase
-        stopSpeaking(); _ = feedback(phrase)
+        stopSpeaking()
+        let said = feedback(phrase)
         // 没有精确时长时按中文每秒 4.6 字保守估计，宁可比实际多静默一会儿。
-        muteUntil = now + Double(phrase.count) / 4.6 + 0.6 + (source == .system ? 0.4 : 0)
+        let estimate = Double(phrase.count) / 4.6 + 0.6 + (source == .system ? 0.4 : 0)
+        muteUntil = now + max(said + echoTail, estimate)
+        // 刚把问题问出口：接下来几秒他直接回答就行，不用再喊一次名字。锁屏时不开，免得旁人随口一句就接上。
+        if let question, phrase == question, !LockScreenInput.locked, task.status.acceptsFollowUp {
+            replyTaskID = task.id
+            replyUntil = muteUntil + DesktopVoiceTurn.replyWindow
+        }
     }
     // MARK: - 声纹
 

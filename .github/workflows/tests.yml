@@ -1,0 +1,53 @@
+name: Tests
+
+# 每次推送和 PR 都跑：网页脚本与 Python 回归在 Linux 上跑；Swift 先做一次与发布同样的整包编译，
+# 再跑 Swift 回归（不安装应用、不调用真实模型或设备）。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scripts:
+    name: Web 与 Python 回归
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Python test dependencies
+        run: python -m pip install aiohttp
+      - name: Run
+        run: bash scripts/run-script-tests.sh
+
+  swift:
+    name: Swift 编译与回归
+    # 与本机一致用较新的 Swift（源码已用到 6.1 的实参尾逗号）。
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain info
+        run: swiftc --version
+      - name: Build app (same as release)
+        run: |
+          swiftc Sources/*.swift -o "$RUNNER_TEMP/VoiceDeck" \
+            -framework AppKit -framework WebKit -framework Network -framework CoreImage -framework Carbon
+      - name: Swift regression tests
+        run: bash scripts/run-swift-tests.sh
+      - name: macOS-only Python tests
+        run: |
+          python3 tests/mijia-setup.test.py
+          swiftc -parse-as-library Sources/PhoneFileStore.swift Sources/PhoneFileHTTP.swift \
+            tests/phone-file-http.fixture.swift -o "$RUNNER_TEMP/phone-file-http-fixture"
+          python3 tests/phone-file-http.test.py "$RUNNER_TEMP/phone-file-http-fixture"

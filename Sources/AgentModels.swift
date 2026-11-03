@@ -99,13 +99,17 @@ struct TaskUsage: Codable, Equatable {
     var unknown: Bool
     var provider: String?
     var model: String?
+    /// 命中服务端前缀缓存的输入 token（DeepSeek prompt_cache_hit_tokens / OpenAI cached_tokens）；
+    /// 服务端不报就是 nil，不拿 0 冒充“没命中”。
+    var cachedPromptTokens: Int? = nil
 
     static let none = TaskUsage(promptTokens: nil, completionTokens: nil, totalTokens: nil, unknown: true)
     /// 尚未调用模型的累计起点；与已调用但没有返回用量的 unknown 分开。
     static let zero = TaskUsage(promptTokens: 0, completionTokens: 0, totalTokens: 0, unknown: false)
 
     init(promptTokens: Int?, completionTokens: Int?, totalTokens: Int?, unknown: Bool,
-         provider: String? = nil, model: String? = nil) {
+         provider: String? = nil, model: String? = nil, cachedPromptTokens: Int? = nil) {
+        self.cachedPromptTokens = cachedPromptTokens
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
         self.totalTokens = totalTokens
@@ -127,8 +131,11 @@ struct TaskUsage: Codable, Equatable {
         let completion = int("completion_tokens")
         let total = int("total_tokens") ?? (prompt.map { $0 + (completion ?? 0) })
         if prompt == nil && completion == nil && total == nil { return .none }
+        let details = raw["prompt_tokens_details"] as? [String: Any]
+        let cached = int("prompt_cache_hit_tokens")
+            ?? (details?["cached_tokens"] as? Int) ?? (details?["cached_tokens"] as? NSNumber)?.intValue
         return TaskUsage(promptTokens: prompt, completionTokens: completion, totalTokens: total, unknown: false,
-                         provider: raw["provider"] as? String, model: raw["model"] as? String)
+                         provider: raw["provider"] as? String, model: raw["model"] as? String, cachedPromptTokens: cached)
     }
 }
 
@@ -267,6 +274,8 @@ struct AgentTask: Codable, Equatable {
     var pendingInputRelation: Bool?
     /// 未完成原因与恢复提示；nil 兼容旧任务，不从错误文案推断能力限制。
     var recovery: TaskRecovery?
+    /// 模型给语音准备的一句总括（“口播”行）；只用于朗读，不在屏幕显示；旧任务为 nil。
+    var spoken: String?
 
     init(schemaVersion: Int = AgentTask.currentSchemaVersion,
          id: String = UUID().uuidString,
@@ -386,6 +395,7 @@ extension TaskUsage {
         if let totalTokens { dict["totalTokens"] = totalTokens }
         if let provider { dict["provider"] = provider }
         if let model { dict["model"] = model }
+        if let cachedPromptTokens { dict["cachedPromptTokens"] = cachedPromptTokens }
         return dict
     }
 }

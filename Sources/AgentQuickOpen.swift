@@ -81,7 +81,10 @@ enum AgentQuickOpen {
     /// 工具请求与回执按调用 ID 配对；助手文案不能证明网页真的被提交打开。
     private static func completedPageURL(_ task: AgentTask) -> String? {
         guard let transcript = task.transcript else { return nil }
-        let inputs = transcript.filter { $0["role"] as? String == "user" }
+        // 执行器事实消息不是用户的话（见 AgentRunner.factsMarker），只数真正的用户输入。
+        let inputs = transcript.filter {
+            $0["role"] as? String == "user" && !(($0["content"] as? String)?.hasPrefix(AgentRunner.factsMarker) ?? false)
+        }
         guard inputs.count == 1, inputs.first?["content"] as? String == task.text else { return nil }
         var receipts: [String: String] = [:]
         for message in transcript where message["role"] as? String == "tool" {

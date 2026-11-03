@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 真实DesktopVoice草稿提交/私有存储与任务/锁屏替身；临时只读目录制造清理失败。
- * [OUTPUT]: 验证字幕修订不重唤醒、新呼叫保留旧半句而不提交、播报可打断、旧输入队列及故障去重；固定口令仍单次提交；豆包接管时正文不用、转交给它，它没接上就回落到本地并行听到的那份且剥掉唤醒名，它出字也剥。
+ * [OUTPUT]: 追问念出问题与候选、念完前的声音不当回答、8秒内免唤醒回答接回原任务且不另开、窗口过期不接；验证字幕修订不重唤醒、新呼叫保留旧半句而不提交、播报可打断、旧输入队列及故障去重；固定口令仍单次提交；豆包接管时正文不用、转交给它，它没接上就回落到本地并行听到的那份且剥掉唤醒名，它出字也剥。
  * [POS]: 自动语音接收与草稿持久化故障回归；不启动蓝牙、识别或实际用户任务。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -15,7 +15,7 @@ enum TaskStatus { case accepted, running, verifying, needsInput, submitted, succ
         }
     }
 }
-struct AgentTask { var id: String; var requestId: String; var controlSession: String?; var status = TaskStatus.succeeded; var result: String? = nil; var recovery: Recovery? = nil; var text: String = "" }
+struct AgentTask { var id: String; var requestId: String; var controlSession: String?; var status = TaskStatus.succeeded; var result: String? = nil; var recovery: Recovery? = nil; var text: String = ""; var error: String? = nil; var spoken: String? = nil }
 struct Recovery { var kind: String; var nextStep: String? = nil }
 enum LockScreenInput { static var locked = false }
 enum TaskStore { static var tasks: [String:AgentTask] = [:]; static func task(id: String) -> AgentTask? { tasks[id] } }
@@ -252,6 +252,69 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         TaskStore.tasks[taskIDs[1]]!.status = .succeeded
         concurrent.testAdvance(to:205.4)
         precondition(finished==Set(taskIDs) && speechCount==2,"后台任务各自播报一次结果")
+        // 追问把问题本身念出来；念完几秒内不用再喊名字，直接回答就接回原任务，不另开新任务。
+        LockScreenInput.locked=false
+        let ask=DesktopVoice()
+        var askIDs:[String]=[],heard:[String]=[],continued:[(String,String)]=[]
+        ask.say={text in heard.append(text);return 0.5}
+        ask.submitUnlocked={_,request in
+            var t=AgentTask(id:UUID().uuidString,requestId:request,controlSession:"native")
+            t.status = .running;TaskStore.tasks[t.id]=t;askIDs.append(t.id);return t
+        }
+        ask.continueTask={id,text in
+            continued.append((id,text));var t=TaskStore.tasks[id]!;t.status = .running;TaskStore.tasks[id]=t;return t
+        }
+        ask.testReceive("小E，给张三发消息说我晚点到",at:800)
+        ask.testAdvance(to:802.1);ask.testAdvance(to:804.7)
+        precondition(askIDs.count==1,"第一句正常派单")
+        TaskStore.tasks[askIDs[0]]!.status = .needsInput
+        TaskStore.tasks[askIDs[0]]!.result = "要发给哪个张三？\n1. 产品部张三\n2. 研发部张三"
+        ask.testAdvance(to:804.8)
+        precondition(heard.last=="要发给哪个张三？产品部张三，还是研发部张三？","追问把问题和候选念出来，而不是“有个地方要你定一下”")
+        ask.testSegment();ask.testReceive("研发部那个",at:806)
+        precondition(continued.isEmpty && ((ask.snapshot()["voiceDebug"] as? [String: Any])?["replies"] as? Int ?? -1)==0,"问题还没念完时的声音不当回答")
+        ask.testSegment();ask.testReceive("研发部那个",at:811)
+        ask.testAdvance(to:813.1);ask.testAdvance(to:815.7)
+        precondition(continued.count==1 && continued[0].0==askIDs[0] && continued[0].1=="研发部那个","不喊名字的回答接回原任务")
+        precondition(askIDs.count==1,"回答不另开新任务")
+        // 窗口过了再随口说话不算回答，也不派单。
+        TaskStore.tasks[askIDs[0]]!.status = .needsInput
+        TaskStore.tasks[askIDs[0]]!.result = "几点开始？"
+        ask.testAdvance(to:817)
+        precondition(heard.last=="几点开始？","单句追问原样念")
+        ask.testSegment();ask.testReceive("今天天气不错",at:840)
+        ask.testAdvance(to:843);ask.testAdvance(to:846)
+        precondition(continued.count==1 && askIDs.count==1,"免唤醒窗口过期后旁人说话不接任务")
+        // 模型写了口播总括：流式中途先念，收尾时同一句不再念；没提前念的，收尾念总括而不是截正文第一句。
+        let brief=DesktopVoice()
+        var briefIDs:[String]=[],briefHeard:[String]=[]
+        brief.say={text in briefHeard.append(text);return 0.5}
+        brief.submitUnlocked={_,request in
+            var t=AgentTask(id:UUID().uuidString,requestId:request,controlSession:"native",text:"明天有什么日程")
+            t.status = .running;TaskStore.tasks[t.id]=t;briefIDs.append(t.id);return t
+        }
+        brief.testReceive("小E，明天有什么日程",at:900)
+        brief.testAdvance(to:902.1);brief.testAdvance(to:904.7)
+        precondition(briefIDs.count==1,"日程问句正常派单")
+        brief.speakEarly(taskId:"别的任务",line:"不该念")
+        precondition(briefHeard.isEmpty,"不是语音自己提交的任务不旁听")
+        brief.speakEarly(taskId:briefIDs[0],line:"明天两个日程，下午的撞了")
+        precondition(briefHeard==["明天两个日程，下午的撞了"],"口播行写完就先念，不等整段回答")
+        brief.speakEarly(taskId:briefIDs[0],line:"明天两个日程，下午的撞了")
+        precondition(briefHeard.count==1,"同一任务只提前念一次")
+        TaskStore.tasks[briefIDs[0]]!.status = .succeeded
+        TaskStore.tasks[briefIDs[0]]!.result = "- 十点评审\n- 两点周会"
+        TaskStore.tasks[briefIDs[0]]!.spoken = "明天两个日程，下午的撞了"
+        brief.testAdvance(to:908)
+        precondition(briefHeard.count==1,"收尾时同一句总括不再念第二遍")
+        brief.testSegment();brief.testReceive("小E，这周有什么待办",at:920)
+        brief.testAdvance(to:922.1);brief.testAdvance(to:924.7)
+        precondition(briefIDs.count==2,"第二句正常派单")
+        TaskStore.tasks[briefIDs[1]]!.status = .succeeded
+        TaskStore.tasks[briefIDs[1]]!.result = "这周第一条是写周报，第二条是交报销，第三条是约体检。"
+        TaskStore.tasks[briefIDs[1]]!.spoken = "这周三条待办，最急的是写周报"
+        brief.testAdvance(to:925)
+        precondition(briefHeard.last=="这周三条待办，最急的是写周报","没提前念的收尾时念总括，而不是正文第一句")
         print("Desktop voice lifecycle: short command submitted once without native final; negation, rewake recovery and finalize timeout handled")
         #endif
         // ---------- 唤醒后的正文交给豆包：本地只做并行兜底 ----------

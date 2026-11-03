@@ -313,17 +313,20 @@ enum TaskService {
                     && !TaskStore.hasBlockedAppDispatch(updated) && outcome.appDispatchReceipt == nil
                 updated.status = updated.appDispatchReceipt?.taskStatus ?? (outcome.needsInput || unresolvedDispatch ? .needsInput : .succeeded)
                 updated.result = content
+                updated.spoken = outcome.spoken
                 updated.error = updated.status == .failed ? content : nil
                 // 漂移如实标注：读到的页面和提交时绑定的不是同一页，必须让人知道。
                 if outcome.drifted { updated.result = "注意：读取的页面与你提交时看到的不同，本次读的是「\(outcome.pages.first?.binding.title ?? "未知标题")」。\n\n" + content }
             } else {
                 updated.status = .failed
+                updated.spoken = nil
                 updated.error = outcome.error ?? "未知错误。"
             }
             // 模型文字与协议失败都不能清掉既有提交事实，唯有新执行器回执才能推进接收状态。
             if let receipt = updated.appDispatchReceipt, outcome.appDispatchReceipt == nil {
                 updated.status = receipt.taskStatus
                 updated.result = updated.status == .failed ? nil : receipt.summary
+                updated.spoken = nil
                 updated.error = updated.status == .failed ? receipt.summary : nil
                 updated.recovery = .init(kind: updated.status == .submitted ? .unconfirmed : .executionFailure)
             }
