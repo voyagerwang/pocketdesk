@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Foundation 的 URLSession/JSONSerialization、ModelConfig 后端选择及 CodexModelClient 的登录额度规划能力。
- * [OUTPUT]: 对外提供统一 ModelClient.send；Codex 与 API 都返回 content、tool_calls 与带来源的 usage，失败不自动跨后端重试。API 默认流式（SSE 增量拼装 content 与 tool_calls、末块用量），经线程旁路把累计文字交给观察者；请求体键排序以稳定命中服务端前缀缓存；服务端拒收流式参数（400）时同一请求退回整段一次。
+ * [OUTPUT]: 对外提供统一 ModelClient.send；Codex 与 API 都返回 content、tool_calls 与带来源的 usage，失败不自动跨后端重试。API 默认流式（SSE 增量拼装 content 与 tool_calls、末块用量），经线程旁路把累计文字交给观察者；请求体键排序以稳定命中服务端前缀缓存；服务端拒收流式参数（400）时同一请求退回整段一次；系统代理隧道建起来但 TLS 握手失败（代理节点挂了）时，绕开代理直连重发一次。
  * [POS]: Sources 的模型适配层最薄的一层：只翻译协议，不持有任何工具执行权。
  *        工具由 PocketDesk 本地执行后作为结果回传，模型永远不能直接操作电脑。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -18,6 +18,8 @@ struct ModelTurn {
 struct ModelFailure: Error {
     var httpStatus: Int?
     var message: String
+    /// 网络层失败且值得绕开系统代理再试一次（代理节点挂了就是这样）。
+    var retryDirect = false
 }
 
 enum ModelClient {
@@ -39,6 +41,12 @@ enum ModelClient {
     static var streamingEnabled = true
     /// 每次请求的会话配置；回归测试换成挂了替身 URLProtocol 的配置，不联网。
     static var sessionConfiguration: () -> URLSessionConfiguration = { .ephemeral }
+    /// 绕开系统代理的会话：模型接口多半在国内，代理节点挂了不该把惄子一起拖下水。
+    static var directSessionConfiguration: () -> URLSessionConfiguration = {
+        let config = URLSessionConfiguration.ephemeral
+        config.connectionProxyDictionary = [:]
+        return config
+    }
 
     /// 单次请求。回调不在主线程；调用方自行切回自己的队列。
     /// 错误只回传服务端摘要，不回显用户上下文或含凭据的请求头。
@@ -58,7 +66,29 @@ enum ModelClient {
             return
         }
         request(config: config, url: url, messages: messages, tools: tools, timeoutSeconds: timeoutSeconds,
-                stream: streamingEnabled, partial: partial, completion: completion)
+                stream: streamingEnabled, partial: partial, bypassProxy: preferDirect(url.host),
+                completion: completion)
+    }
+
+    // MARK: - 路由记忆
+    //
+    // 代理节点挂了时，第一块会先在 TLS 握手上撞五秒；一个任务往往要跑好几轮模型，
+    // 每轮都撞一次就成了几十秒。直连验证过一次就记住主机，几分钟内直接走直连。
+    private static let routeLock = NSLock()
+    private static var directHosts: [String: TimeInterval] = [:]
+    private static let directMemory: TimeInterval = 600
+    static func preferDirect(_ host: String?) -> Bool {
+        guard let host, !host.isEmpty else { return false }
+        routeLock.lock(); defer { routeLock.unlock() }
+        guard let until = directHosts[host] else { return false }
+        if until <= Date().timeIntervalSince1970 { directHosts.removeValue(forKey: host); return false }
+        return true
+    }
+    private static func rememberDirect(_ host: String, available: Bool) {
+        guard !host.isEmpty else { return }
+        routeLock.lock(); defer { routeLock.unlock() }
+        if available { directHosts[host] = Date().timeIntervalSince1970 + directMemory }
+        else { directHosts.removeValue(forKey: host) }
     }
 
     /// 请求体逐字节稳定：键排序后，同样的系统提示词与工具定义每次序列化都一样，服务端前缀缓存才能命中。
@@ -75,6 +105,7 @@ enum ModelClient {
 
     private static func request(config: ModelConfig, url: URL, messages: [[String: Any]], tools: [[String: Any]]?,
                                 timeoutSeconds: Double, stream: Bool, partial: ((String) -> Void)?,
+                                bypassProxy: Bool = false, canRetry: Bool = true,
                                 completion: @escaping (Result<ModelTurn, ModelFailure>) -> Void) {
         guard let body = payload(model: config.model, messages: messages, tools: tools, stream: stream) else {
             completion(.failure(ModelFailure(httpStatus: nil, message: "请求体序列化失败。")))
@@ -88,7 +119,25 @@ enum ModelClient {
         if stream { request.setValue("text/event-stream, application/json", forHTTPHeaderField: "Accept") }
         request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         let provider = url.host ?? "api"
+        let host = url.host ?? ""
         let finish: (Result<ModelTurn, ModelFailure>) -> Void = { result in
+            // 系统代理把 CONNECT 放过去、TLS 握手却被掐（节点不通就是这样）：换另一条路由再试一次。
+            if case .failure(let failure) = result, failure.retryDirect, canRetry {
+                let next = !bypassProxy
+                if bypassProxy { Self.rememberDirect(host, available: false) }
+                Self.request(config: config, url: url, messages: messages, tools: tools, timeoutSeconds: timeoutSeconds,
+                             stream: stream, partial: partial, bypassProxy: next, canRetry: false) { second in
+                    if case .failure(var reason) = second {
+                        let route = next ? "绕开系统代理直连" : "改走系统代理"
+                        reason.message = "\(failure.message)（\(route)也失败：\(reason.message)）"
+                        completion(.failure(reason))
+                    } else {
+                        if next { Self.rememberDirect(host, available: true) }
+                        completion(second)
+                    }
+                }
+                return
+            }
             // 服务端不认 stream/stream_options（400）时，这一请求根本没推理，退回整段模式重发一次是安全的。
             if stream, case .failure(let failure) = result, failure.httpStatus == 400 {
                 Self.request(config: config, url: url, messages: messages, tools: tools, timeoutSeconds: timeoutSeconds,
@@ -103,7 +152,8 @@ enum ModelClient {
             completion(.success(turn))
         }
         let reader = StreamReader(partial: partial, completion: finish)
-        let session = URLSession(configuration: sessionConfiguration(), delegate: reader, delegateQueue: nil)
+        let configuration = bypassProxy ? directSessionConfiguration() : sessionConfiguration()
+        let session = URLSession(configuration: configuration, delegate: reader, delegateQueue: nil)
         session.dataTask(with: request).resume()
         session.finishTasksAndInvalidate()
     }
@@ -178,7 +228,11 @@ enum ModelClient {
         func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
             guard !done else { return }
             done = true
-            if let error { completion(.failure(ModelFailure(httpStatus: nil, message: ModelClient.describe(error)))); return }
+            if let error {
+                var failure = ModelFailure(httpStatus: nil, message: ModelClient.describe(error))
+                failure.retryDirect = ModelClient.retryableDirect(error)
+                completion(.failure(failure)); return
+            }
             if eventStream {
                 if !pending.isEmpty { consume(String(decoding: pending, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) }
                 guard sawEvent else {
@@ -220,6 +274,14 @@ enum ModelClient {
         turn.rawMessage = message
         turn.usage = json["usage"] as? [String: Any]
         return .success(turn)
+    }
+
+    /// 哪些网络错误值得换个路由再试：隧道通了但 TLS 被掐、连接中途丢失、压根连不上主机。
+    fileprivate static func retryableDirect(_ error: Error) -> Bool {
+        let ns = error as NSError
+        guard ns.domain == NSURLErrorDomain else { return false }
+        return [NSURLErrorSecureConnectionFailed, NSURLErrorNetworkConnectionLost,
+                NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost].contains(ns.code)
     }
 
     fileprivate static func describe(_ error: Error) -> String {

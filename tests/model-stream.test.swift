@@ -25,10 +25,21 @@ final class MockModelServer: URLProtocol {
         "data: [DONE]",
     ]
     static var nextTool = false
+    /// 第一次请求直接死在 TLS 握手：模拟系统代理节点不通。
+    static var failOnceTLS = false
+    /// 真正发起过多少次请求（含死在 TLS 上的那次，它没有请求体可记）。
+    static var attempts = 0
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        Self.lock.lock(); Self.attempts += 1; Self.lock.unlock()
+        if Self.failOnceTLS {
+            Self.failOnceTLS = false
+            client?.urlProtocol(self, didFailWithError: NSError(domain: NSURLErrorDomain,
+                                                               code: NSURLErrorSecureConnectionFailed))
+            return
+        }
         var body = Data()
         if let stream = request.httpBodyStream {
             stream.open(); defer { stream.close() }
@@ -159,6 +170,29 @@ final class MockModelServer: URLProtocol {
         MockModelServer.lock.lock(); let after = Array(MockModelServer.requests.dropFirst(before)); MockModelServer.lock.unlock()
         check(whole.content == "整段回答" && after.count == 2 && after[1]["stream"] == nil, "400 后不带流式参数重发一次")
         check(TaskUsage.parse(whole.usage).cachedPromptTokens == 8, "整段回包的缓存命中也解析")
+
+        // ---------- 系统代理节点挂了：TLS 被掐一次，绕开代理直连照常回答 ----------
+        let directConfiguration = URLSessionConfiguration.ephemeral
+        directConfiguration.protocolClasses = [MockModelServer.self]
+        var directUsed = false
+        ModelClient.directSessionConfiguration = { directUsed = true; return directConfiguration }
+        MockModelServer.failOnceTLS = true
+        MockModelServer.lock.lock(); let beforeTLS = MockModelServer.attempts; MockModelServer.lock.unlock()
+        guard case .success(let retried) = send() else { fatalError("代理掐断 TLS 后没有直连重试") }
+        check(directUsed, "失败后换用绕开系统代理的会话")
+        check(retried.content?.contains("明天两个日程") == true, "直连重试拿回正常回答")
+        MockModelServer.lock.lock(); let tlsCount = MockModelServer.attempts - beforeTLS; MockModelServer.lock.unlock()
+        check(tlsCount == 2, "同一次请求先走系统代理，失败后直连重发一次")
+        // 记住直连能通之后，下一块先直连，不再为挂掉的代理白等一次握手。
+        MockModelServer.lock.lock(); let beforeRemembered = MockModelServer.attempts; MockModelServer.lock.unlock()
+        guard case .success = send() else { fatalError("记住直连后请求失败") }
+        MockModelServer.lock.lock(); let rememberedCount = MockModelServer.attempts - beforeRemembered; MockModelServer.lock.unlock()
+        check(rememberedCount == 1, "直连验证过就记住，后面不再先撞代理")
+        ModelClient.directSessionConfiguration = {
+            let config = URLSessionConfiguration.ephemeral
+            config.connectionProxyDictionary = [:]
+            return config
+        }
 
         // ---------- 提示词布局：静态系统提示词 + 独立事实消息 + 用户原话；口播拆出 ----------
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pd-model-stream-" + UUID().uuidString)
