@@ -319,8 +319,29 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         silence.testReceive("帮我记一条明天整理资料的待办", at: 601)
         silence.testAdvance(to: 602.5)
         precondition(finishCalls == 0, "停顿不够长不松手")
-        silence.testAdvance(to: 603.5)
+        silence.testAdvance(to: 604.5)
         precondition(finishCalls == 1, "本地听出说完了就让它松手收尾")
+
+        // 播报还没停就喊名字：按字数估的静音额度不能把声学时钟冻住。本地这一路听不到声、
+        // 豆包面板却还在出字，就仍然是“人还在说”，不能在两秒时松手把后半句吃掉。
+        var mutedFinish = 0
+        var panel = 0
+        let muted = DesktopVoice(); muted.submitUnlocked = submit
+        muted.speaking = { true }
+        muted.dictationAvailable = { true }
+        muted.dictationBegin = { true }
+        muted.dictationCharacters = { panel }
+        muted.dictationFinishTurn = { mutedFinish += 1 }
+        muted.testReceive("小E", at: 800)
+        panel = 4; muted.testAdvance(to: 801)
+        muted.testAdvance(to: 803)
+        precondition(mutedFinish == 0, "播报静音期内不听声音，豆包还在出字就是还在说")
+        panel = 9; muted.testAdvance(to: 805)
+        precondition(mutedFinish == 0, "豆包继续出字就不松手")
+        muted.testAdvance(to: 806.5)
+        precondition(mutedFinish == 0, "面板刚停一秒多，再等他一句")
+        muted.testAdvance(to: 808.5)
+        precondition(mutedFinish == 1, "面板也不出字了才替它松手")
 
         // 唤醒后一直没人说话：不抱着麦克风干等，直接回到待唤醒。
         let idle = DesktopVoice(); idle.submitUnlocked = submit

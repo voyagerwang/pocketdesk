@@ -1,6 +1,6 @@
 /**
  * [INPUT]: EasyInputAudio绑定PCM与SystemMicrophoneAudio兜底PCM、本地Speech识别、DesktopVoiceTurn纯规则、唤醒应答发声、豆包接管正文的注入入口与既有任务入口。
- * [OUTPUT]: 唤醒回应与同段转写去重；锁屏也能跑完整任务、需解锁屏幕的工具在工具层拒；只喊名字时把正文交给豆包（只能用系统默认输入设备，本地识别并行听同一段、失败/无字/超时回落本地那份），一口气说完仍走本地；锁屏没有豆包也没有屏幕：识别改用系统云端（失败一次退回本机）、应答只给短提示音不吞后续正文；重喊保留旧输入并重开，播报期间仍可唤醒打断；纯本机模式下键盘优先、断开自动换电脑麦克风、键盘回来自动切回；长停顿自愈、后台任务分别收尾。
+ * [OUTPUT]: 唤醒回应与同段转写去重；锁屏也能跑完整任务、需解锁屏幕的工具在工具层拒；只喊名字时把正文交给豆包（只能用系统默认输入设备，本地识别并行听同一段、失败/无字/超时回落本地那份），一口气说完仍走本地；豆包按住说话时“说完了”只看两个证据——麦克风还有声、或接收框还在出字，喊名字会掐掉剩余播报静音额度只剩回采尾巴，不让人半句话被两秒松手截断；锁屏没有豆包也没有屏幕：识别改用系统云端（失败一次退回本机）、应答只给短提示音不吞后续正文；重喊保留旧输入并重开，播报期间仍可唤醒打断；纯本机模式下键盘优先、断开自动换电脑麦克风、键盘回来自动切回；长停顿自愈、后台任务分别收尾。
  * [POS]: 自动语音生命周期协调器；不注入按键、不解锁电脑、不保存原始音频、不上传待唤醒转写。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -49,6 +49,9 @@ final class DesktopVoice: NSObject {
     private var fallbackText = "", fallbackPrefix = ""
     private(set) var dictationActive = false
     private var dictationAt: TimeInterval = 0
+    /// 豆包接收框上次变多的字数和时刻：它还在出字，就是人还在说。
+    private var dictationHeard = 0
+    private var dictationHeardAt: TimeInterval = 0
     /// 豆包本该接下这轮但没接时的原因；只在状态行上说一句，不拦本地识别。
     private var dictationHint: String?
     private(set) var settings = DesktopVoiceSettings.load()
@@ -230,7 +233,7 @@ final class DesktopVoice: NSObject {
          "source": sourceLabel, "bound": settings.peripheralID != nil,
          "keyboardLinked": keyboardLinked, "fallback": source == .system,
          "dictation": ["enabled": settings.dictationEnabled, "active": dictationActive,
-                       "fallbackCharacters": fallbackText.count],
+                       "fallbackCharacters": fallbackText.count, "panelCharacters": dictationHeard],
          "deviceCapabilities": audio.deviceCapabilities, "deviceFirmware": audio.deviceFirmware,
          "status": status, "audioDebug": audio.diagnostics, "micDebug": systemMic.diagnostics,
          "voiceDebug": ["running": running, "capturing": capturing, "finishing": finishing,
@@ -448,6 +451,9 @@ final class DesktopVoice: NSObject {
         }
         // 上一句反馈还在说就掐掉：用户已经开口了，不能让它接着念。
         stopSpeaking()
+        // 剩下的静音额度只留回采尾巴：播报按字数估的静音会把人正说着的声学时钟冻住，
+        // 唤醒两秒后就被当成“说完了”，豆包一松手后半句就没了。
+        muteUntil = min(muteUntil, now + echoTail)
         if body.isEmpty { if beginDictation() { ackPending = false; ackAt = 0; return } } else { cancelDictation() }
         status = dictationHint ?? "正在听"
         present("正在听", body)
@@ -460,6 +466,7 @@ final class DesktopVoice: NSObject {
         guard dictationAvailable() else { dictationHint = "正在听 · 本机（豆包未就绪）"; return false }
         guard let dictationBegin, dictationBegin() else { dictationHint = "正在听 · 本机（接收框没起来）"; return false }
         dictationActive = true; dictationAt = now; fallbackText = ""; fallbackPrefix = ""
+        dictationHeard = 0; dictationHeardAt = now
         ackPending = false; ackAt = 0
         status = "正在听 · 豆包"
         return true
@@ -478,7 +485,9 @@ final class DesktopVoice: NSObject {
         // 豆包从按下那一声就开始收，名字可能还在它或本地那份里；进正文前统一剥掉。
         let dictated = DesktopVoiceTurn.dictated(text ?? "", wake: settings.wakeWord)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        dictationHeard = 0
         if !dictated.isEmpty {
+            fallbackText = ""; fallbackPrefix = ""
             body = dictated; prefix = dictated; partial = ""; bodyAt = now; lastVoice = now
             status = "正在听"
             commitFinal(); return
@@ -617,12 +626,18 @@ final class DesktopVoice: NSObject {
         // 豆包在收正文：它自己不会因为停顿就停，本地声学停顿判“说完了”再让它松手。
         if dictationActive {
             if now - dictationAt > DesktopVoiceTurn.dictationBudget { finishDictation(nil); return }
-            let heard = max(fallbackText.trimmingCharacters(in: .whitespacesAndNewlines).count, dictationCharacters())
+            let panel = dictationCharacters()
+            if panel > dictationHeard { dictationHeard = panel; dictationHeardAt = now }
+            let heard = max(fallbackText.trimmingCharacters(in: .whitespacesAndNewlines).count, panel)
+            // “还在说”有两个证据：麦克风还有声音，或豆包接收框还在出字，任一个在动就不算说完。
+            // 播报静音期掐掉声学那一路，豆包接管时本地也可能听不到同一只麦克风，
+            // 只盯声音的话，人正说着也会被当成静默、两秒就被松手截断。
+            let spokeAt = max(lastVoice, dictationHeardAt)
             // 一个字都没听到（可能还在想）就给足宽限；已经开口了就按同一套停顿规则。
-            let tolerance = heard == 0 ? 6 : DesktopVoiceTurn.silence(String(repeating: "字", count: heard))
+            let tolerance = heard == 0 ? 6 : DesktopVoiceTurn.dictationPause(String(repeating: "字", count: heard))
             // 唤醒后一直没人说话：不抱着麦克风干等，直接回到待唤醒。
             if heard == 0, now - dictationAt > 8 { finishDictation(nil); return }
-            if heard > 0, now - lastVoice >= tolerance { dictationFinishTurn() }
+            if heard > 0, now - spokeAt >= tolerance { dictationFinishTurn() }
             return
         }
         if finishing {

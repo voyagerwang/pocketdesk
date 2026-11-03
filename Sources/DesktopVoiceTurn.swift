@@ -462,11 +462,19 @@ enum DesktopVoiceTurn {
     }
     /// 说完后的停顿容忍：句子越长越宽容，避免长口述中途被当成说完。
     static func silence(_ body: String) -> TimeInterval {
+        pause(body, floor: 2.0, ceiling: 3.5)
+    }
+    /// 豆包接管正文时的停顿容忍：它按住才收、松手就吃掉后半句，宁可比本地多等一秒。
+    static func dictationPause(_ body: String) -> TimeInterval {
+        pause(body, floor: 3.0, ceiling: 5.0)
+    }
+    /// 换气、想词和句尾连接词都留余量；只有“执行吧”这种明说要发才提前收。
+    private static func pause(_ body: String, floor: TimeInterval, ceiling: TimeInterval) -> TimeInterval {
         let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
         if ["等一下", "等一等", "先别执行", "稍等一下"].contains(text) { return 30 }
         if text.hasSuffix("执行吧") || text.hasSuffix("开始执行") { return 0.8 }
         if ["然后", "还有", "以及", "帮我", "把", "和", "给"].contains(where: text.hasSuffix) { return 8 }
-        return min(3.5, 2.0 + Double(max(0, text.count - 16)) / 40)
+        return min(ceiling, floor + Double(max(0, text.count - 16)) / 40)
     }
     /// 收尾等待：识别服务迟迟不给最终结果时的兜底上界，到点按已听内容处理。
     static let finalizeTimeout: TimeInterval = 2.5
