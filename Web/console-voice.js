@@ -79,6 +79,7 @@
       $('voiceWake').value = state.wakeWord;
       $('voiceAckPhrase').value = state.ackPhrase || '';
       $('voiceAck').checked = state.ackEnabled !== false;
+      $('voiceFollowUp').checked = state.followUpEnabled !== false;
       $('voiceEnabled').checked = state.enabled;
       $('voiceLocked').checked = state.allowLocked;
       $('voiceRate').value = typeof state.ttsRate === 'number' ? state.ttsRate : 4;
@@ -117,6 +118,7 @@
         const engine = picked[0], id = picked.slice(1).join(':');
         body = { action, enabled: $('voiceEnabled').checked, wakeWord: $('voiceWake').value.trim(), allowLocked: $('voiceLocked').checked,
           ackEnabled: $('voiceAck').checked, ackPhrase: $('voiceAckPhrase').value.trim(),
+          followUp: $('voiceFollowUp').checked,
           ttsEngine: engine, ttsVoice: engine === 'neural' ? id : '', voice: engine === 'system' ? id : '',
           ttsRate: Number($('voiceRate').value) };
       }

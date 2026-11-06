@@ -377,6 +377,8 @@ a.url-link.is-empty{text-decoration:none;cursor:default;pointer-events:none}
       <label class="field"><span>唤醒应答</span><input id="voiceAckPhrase" value="嗯，我在|在呢|哎，听着呢|嗯？你说" maxlength="120" autocomplete="off" style="max-width:420px"></label>
       <p class="hint">多句用竖线「|」隔开，每次唤醒轮换一句，不会每次都同一句。</p>
       <p><label><input id="voiceAck" type="checkbox" checked> 听到唤醒词先回一句再收音</label></p>
+      <p><label><input id="voiceFollowUp" type="checkbox" checked> 连续对话：办完一件事后再听 8 秒，接着说不用重喊名字</label></p>
+      <p class="hint">像在跟旁人聊天、只是应声的话会被忽略并结束这轮；说“谢谢”“退下”也会结束。锁屏时不开。</p>
       <label class="field"><span>音色</span><select id="voiceTone" style="max-width:320px"></select></label>
       <p id="voiceToneHint" class="hint">读取中…</p>
       <label class="field"><span>语速</span><input id="voiceRate" type="range" min="-20" max="20" step="2" value="4" style="max-width:240px"><span id="voiceRateLabel" class="hint">正常</span></label>

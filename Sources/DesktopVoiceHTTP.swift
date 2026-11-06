@@ -9,7 +9,7 @@ import CoreFoundation
 
 enum DesktopVoiceHTTP {
     private static let required: Set<String> = ["action", "enabled", "wakeWord", "allowLocked"]
-    private static let accepted: Set<String> = required.union(["ackEnabled", "ackPhrase", "voice", "ttsEngine", "ttsVoice", "ttsRate", "dictation"])
+    private static let accepted: Set<String> = required.union(["ackEnabled", "ackPhrase", "voice", "ttsEngine", "ttsVoice", "ttsRate", "dictation", "followUp"])
 
     private static func flag(_ value: Any?) -> Bool? {
         guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
@@ -39,6 +39,7 @@ enum DesktopVoiceHTTP {
                     var ttsVoice = voice.settings.ttsVoice
                     var ttsRate = voice.settings.ttsRate
                     var dictation: Bool? = nil
+                    var followUp: Bool? = nil
                     if v.keys.contains("ackEnabled") {
                         guard let value = flag(v["ackEnabled"]) else { reply(400, ["error": "唤醒应答开关无效。"]); return }
                         ackEnabled = value
@@ -76,9 +77,13 @@ enum DesktopVoiceHTTP {
                         guard let text = flag(value) else { reply(400, ["error": "转写方式开关无效。"]); return }
                         dictation = text
                     }
+                    if let value = v["followUp"] {
+                        guard let on = flag(value) else { reply(400, ["error": "连续对话开关无效。"]); return }
+                        followUp = on
+                    }
                     try voice.configure(enabled: enabled, wake: wake, allowLocked: locked,
                                         ack: ack, ackEnabled: ackEnabled, voice: identifier,
-                                        engine: engine, ttsVoice: ttsVoice, rate: ttsRate, dictation: dictation)
+                                        engine: engine, ttsVoice: ttsVoice, rate: ttsRate, dictation: dictation, followUp: followUp)
                 case "retry", "sendDraft", "discardDraft", "sendParked", "discardParked", "preview":
                     guard Set(v.keys) == Set(["action"]) else { reply(400, ["error": "请求无效。"]); return }
                     switch action {

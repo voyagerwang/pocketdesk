@@ -315,6 +315,50 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         TaskStore.tasks[briefIDs[1]]!.spoken = "这周三条待办，最急的是写周报"
         brief.testAdvance(to:925)
         precondition(briefHeard.last=="这周三条待办，最急的是写周报","没提前念的收尾时念总括，而不是正文第一句")
+        // 连续对话：上一句刚派出去，紧接着说下一件不用重喊名字；像闲聊的话丢掉并立刻关窗；窗口过期、锁屏、关掉开关都不接。
+        let chat=DesktopVoice()
+        var chatIDs:[String]=[]
+        chat.submitUnlocked={_,request in
+            var t=AgentTask(id:UUID().uuidString,requestId:request,controlSession:"native")
+            t.status = .running;TaskStore.tasks[t.id]=t;chatIDs.append(t.id);return t
+        }
+        chat.testReceive("小E，帮我记一个明天开会的待办",at:1000)
+        chat.testAdvance(to:1002.1);chat.testAdvance(to:1004.7)
+        precondition(chatIDs.count==1,"第一句照常派单")
+        chat.testAdvance(to:1004.8)
+        precondition(chat.status.contains("直接说"),"窗口开着时提示不用喊名字")
+        chat.testSegment();chat.testReceive("再帮我查一下明天的天气",at:1005)
+        chat.testAdvance(to:1007.1);chat.testAdvance(to:1009.7)
+        precondition(chatIDs.count==2,"紧接着的下一句不喊名字也派单")
+        chat.testSegment();chat.testReceive("哈哈哈哈太好笑了",at:1010)
+        chat.testAdvance(to:1012.1);chat.testAdvance(to:1014.7)
+        precondition(chatIDs.count==2 && ((chat.snapshot()["voiceDebug"] as! [String:Any])["followRejects"] as? Int)==1,"像闲聊的话不派单")
+        chat.testSegment();chat.testReceive("打开微信",at:1015)
+        chat.testAdvance(to:1017.1);chat.testAdvance(to:1019.7)
+        precondition(chatIDs.count==2,"误接一次就关窗，后面的话不再接")
+        chat.testSegment();chat.testReceive("小E，打开微信",at:1030)
+        chat.testAdvance(to:1032.1);chat.testAdvance(to:1034.7)
+        precondition(chatIDs.count==3,"重喊名字照常")
+        chat.testSegment();chat.testReceive("那后天呢",at:1060)
+        chat.testAdvance(to:1062.1);chat.testAdvance(to:1064.7)
+        precondition(chatIDs.count==3,"窗口过期后不喊名字不接")
+        chat.testSegment();chat.testReceive("小E，帮我记一条待办",at:1070)
+        chat.testAdvance(to:1072.1);chat.testAdvance(to:1074.7)
+        chat.testSegment();chat.testReceive("谢谢",at:1075)
+        chat.testAdvance(to:1077.1);chat.testAdvance(to:1079.7)
+        chat.testSegment();chat.testReceive("帮我把灯关了",at:1080)
+        chat.testAdvance(to:1082.1);chat.testAdvance(to:1084.7)
+        precondition(chatIDs.count==4,"说“谢谢”结束这轮，之后不再免唤醒")
+        var noFollow=DesktopVoiceSettings();noFollow.dictationEnabled=false;noFollow.followUpEnabled=false;try noFollow.save()
+        let off=DesktopVoice()
+        var offIDs=0
+        off.submitUnlocked={_,request in offIDs+=1;var t=AgentTask(id:UUID().uuidString,requestId:request,controlSession:"native");t.status = .running;TaskStore.tasks[t.id]=t;return t}
+        off.testReceive("小E，帮我记一个待办",at:1100)
+        off.testAdvance(to:1102.1);off.testAdvance(to:1104.7)
+        off.testSegment();off.testReceive("再帮我查一下天气",at:1105)
+        off.testAdvance(to:1107.1);off.testAdvance(to:1109.7)
+        precondition(offIDs==1,"关掉连续对话就每次都要喊名字")
+        try local.save()
         print("Desktop voice lifecycle: short command submitted once without native final; negation, rewake recovery and finalize timeout handled")
         #endif
         // ---------- 唤醒后的正文交给豆包：本地只做并行兜底 ----------
@@ -326,6 +370,8 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         handoff.dictationCancel = { cancelCalls += 1 }
         var before = writes
         handoff.testReceive("小E", at: 300)
+        precondition(beginCalls == 0, "只喊名字先等一下，看名字后面是不是紧接着有话")
+        handoff.testAdvance(to: 300.7)
         let handedState = handoff.snapshot()["dictation"] as? [String: Any]
         precondition(beginCalls == 1 && handedState?["active"] as? Bool == true, "只喊名字就交给豆包接管")
         handoff.testReceive("帮我记一条明天整理资料的待办", at: 301)
@@ -344,6 +390,7 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         named.dictationBegin = { true }
         before = writes
         named.testReceive("小E", at: 600)
+        named.testAdvance(to: 600.7)
         named.testReceive("小E开灯", at: 601)
         named.finishDictation(nil)
         named.testAdvance(to: 610); named.testAdvance(to: 613)
@@ -354,6 +401,7 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         dictatedAgain.dictationBegin = { true }
         before = writes
         dictatedAgain.testReceive("小E", at: 400)
+        dictatedAgain.testAdvance(to: 400.7)
         dictatedAgain.testReceive("开个会", at: 401)
         dictatedAgain.finishDictation("把明天的周会推迟到下午三点")
         precondition(writes == before + 1, "豆包出字就按它派单")
@@ -363,6 +411,7 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         unavailable.dictationBegin = { beginCalls += 1; return true }
         before = writes
         unavailable.testReceive("小E", at: 500)
+        unavailable.testAdvance(to: 500.7)
         let unavailableState = unavailable.snapshot()["dictation"] as? [String: Any]
         precondition(unavailableState?["active"] as? Bool == false, "豆包没就绪不接管")
         unavailable.testReceive("帮我记一条待办", at: 501)
@@ -378,6 +427,7 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         silence.dictationCharacters = { 0 }
         silence.dictationFinishTurn = { finishCalls += 1 }
         silence.testReceive("小E", at: 600)
+        silence.testAdvance(to: 600.7)
         silence.testDictationAudio([Float](repeating: 0.5, count: 160), at: 601)
         silence.testReceive("帮我记一条明天整理资料的待办", at: 601)
         silence.testAdvance(to: 602.5)
@@ -390,10 +440,26 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         idle.dictationAvailable = { true }
         idle.dictationBegin = { true }
         idle.testReceive("小E", at: 700)
+        idle.testAdvance(to: 700.7)
         idle.testAdvance(to: 707)
         precondition((idle.snapshot()["dictation"] as! [String: Any])["active"] as? Bool == true, "八秒内仍等人开口")
         idle.testAdvance(to: 709)
         precondition((idle.snapshot()["dictation"] as! [String: Any])["active"] as? Bool == false, "一直没人说话就交回待唤醒")
+
+        // 一句话唤醒：识别先吐出“小E”、紧接着修订成“小E开灯”——不能在名字那一刻就把麦克风交给豆包，
+        // 否则豆包只听到半句“灯”并以它为准；整句由本机听完，按“开灯”走固定短口令。
+        var oneShotBegins = 0
+        let oneShot = DesktopVoice(); oneShot.submitUnlocked = submit
+        oneShot.dictationAvailable = { true }
+        oneShot.dictationBegin = { oneShotBegins += 1; return true }
+        before = writes
+        oneShot.testReceive("小E", at: 800)
+        oneShot.testReceive("小E开灯", at: 800.3)
+        oneShot.testAdvance(to: 800.8)
+        precondition(oneShotBegins == 0, "名字后面紧接着有话就不交给豆包")
+        oneShot.testAdvance(to: 802.4)
+        precondition(writes == before + 1 && submitted.last == "开灯", "小E开灯一句话执行")
+        precondition((oneShot.snapshot()["voiceDebug"] as! [String: Any])["oneShots"] as? Int == 1, "一句话唤醒计数")
 
         print("Desktop voice draft: accepted receipt, cleanup failure, restart dedupe and locked preservation passed")
     }

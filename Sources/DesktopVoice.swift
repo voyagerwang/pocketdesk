@@ -119,6 +119,15 @@ final class DesktopVoice: NSObject {
     /// 提交时消费：这句回答要接到哪件任务上。
     private var answering: String?
     private var replyCount = 0
+    /// 只喊了名字：先等一小会儿看名字后面有没有接着说，再决定交给豆包还是本机一口气听完。
+    private var handoffPending = false
+    private var handoffAt: TimeInterval = 0
+    /// 连续对话：到这个时刻之前，不喊名字直接说也算在跟它说话。
+    private var continueUntil: TimeInterval = 0
+    private var conversationShown = false
+    /// 这一轮是在连续对话窗口里、没喊名字开始的；提交前要先过“是不是在跟我说”这一关。
+    private var following = false
+    private var followCount = 0, followRejects = 0, oneShotCount = 0
     /// 流式口播已经提前念过的任务：收尾时同一句就不再念第二遍。
     private var previewed: [String: String] = [:]
     private var previewCount = 0
@@ -128,7 +137,8 @@ final class DesktopVoice: NSObject {
     private var deferredTasks: [AgentTask] = []
     private var timer: Timer?
     private var waiting: String {
-        source == .system ? "等待“\(settings.wakeWord)” · 电脑麦克风" : "等待“\(settings.wakeWord)”"
+        if conversationOpen { return "还在听 · 直接说，不用喊“\(settings.wakeWord)”" }
+        return source == .system ? "等待“\(settings.wakeWord)” · 电脑麦克风" : "等待“\(settings.wakeWord)”"
     }
     /// 电脑麦克风直接收扬声器回音，比键盘多留一段余音，不把自己的播报听成用户说话。
     private var echoTail: TimeInterval { source == .system ? 0.5 : 0.12 }
@@ -193,7 +203,7 @@ final class DesktopVoice: NSObject {
         if settings.enabled { start(requestPermission: false) }
     }
     func configure(enabled: Bool, wake: String, allowLocked: Bool, ack: String, ackEnabled: Bool, voice: String?,
-                   engine: String? = nil, ttsVoice: String? = nil, rate: Int? = nil, dictation: Bool? = nil) throws {
+                   engine: String? = nil, ttsVoice: String? = nil, rate: Int? = nil, dictation: Bool? = nil, followUp: Bool? = nil) throws {
         guard DesktopVoiceSettings.valid(wake: wake), DesktopVoiceSettings.valid(ack: ack),
               DesktopVoiceSettings.valid(voice: voice ?? "") else { throw CocoaError(.fileWriteInvalidFileName) }
         var next = settings
@@ -204,6 +214,7 @@ final class DesktopVoice: NSObject {
         if let ttsVoice { next.ttsVoice = ttsVoice.isEmpty ? nil : ttsVoice }
         if let rate, (-25...25).contains(rate) { next.ttsRate = rate }
         if let dictation { next.dictationEnabled = dictation }
+        if let followUp { next.followUpEnabled = followUp }
         guard DesktopVoiceSettings.valid(tts: next) else { throw CocoaError(.fileWriteInvalidFileName) }
         try next.save()
         let wasCapturing = capturing
@@ -234,7 +245,7 @@ final class DesktopVoice: NSObject {
     }
     func snapshot() -> [String: Any] {
         ["enabled": settings.enabled, "wakeWord": settings.wakeWord, "allowLocked": settings.allowLocked,
-         "ackEnabled": settings.ackEnabled, "ackPhrase": settings.ackPhrase,
+         "ackEnabled": settings.ackEnabled, "ackPhrase": settings.ackPhrase, "followUpEnabled": settings.followUpEnabled,
          "voice": settings.voiceIdentifier ?? "", "voices": voices(),
          "ttsEngine": settings.ttsEngine, "ttsVoice": settings.ttsVoice ?? "", "ttsRate": settings.ttsRate,
          "speech": speechDebug(),
@@ -246,7 +257,8 @@ final class DesktopVoice: NSObject {
          "status": status, "audioDebug": audio.diagnostics, "micDebug": systemMic.diagnostics,
          "voiceDebug": ["running": running, "capturing": capturing, "finishing": finishing,
              "bodyCharacters": body.count, "committedCharacters": prefix.count, "partialCharacters": partial.count,
-             "quickSubmissions": quickCount, "rewakes": rewakeCount, "replies": replyCount, "previews": previewCount, "recoveries": recoverCount,
+             "quickSubmissions": quickCount, "rewakes": rewakeCount, "replies": replyCount, "previews": previewCount,
+             "follows": followCount, "followRejects": followRejects, "oneShots": oneShotCount, "conversationOpen": conversationOpen, "recoveries": recoverCount,
              "wakes": wakeCount, "finals": finalCount, "emptyFinals": emptyFinalCount, "submitted": submittedCount, "lastTaskId": lastTaskID,
              "mutedDrops": mutedDrops, "asr": asrMode, "adapted": adaptCount,
              "verify": ["pass": verifyPass, "refuse": verifyRefuse, "short": verifyShort, "fail": verifyFail]], "receivingAudio": receivedAudio && running, "draft": draft, "parked": parked,
@@ -424,8 +436,8 @@ final class DesktopVoice: NSObject {
         if newWake, let part = parts.last {
             guard canWake() else { if final { stopRecognition() }; return }
             guard !LockScreenInput.locked || settings.allowLocked else { return }
-            // 重新喊了名字就是开新话题，刚才那个问题的免唤醒窗口作废。
-            closeReplyWindow()
+            // 重新喊了名字就是开新话题，刚才那个问题的免唤醒窗口作废；这一轮也不再算“没喊名字”。
+            closeReplyWindow(); following = false
             segmentWakeCount = parts.count
             stopSpeaking(); muteUntil = 0; playbackListening = false
             if capturing { rewoke(part.body, previous: parts.count > 1 ? part.before : nil) }
@@ -435,7 +447,28 @@ final class DesktopVoice: NSObject {
             append(parts.last?.body ?? text, final: final)
         } else if replyOpen, startReply(text) {
             if final && capturing { append(text, final: true) }
+        } else if conversationOpen, startFollow(text) {
+            if final && capturing { append(text, final: true) }
         } else if final { stopRecognition() }
+    }
+    /// 连续对话窗口：自己的播报已经结束、不在锁屏、开关打开，且还没过期。
+    private var conversationOpen: Bool {
+        settings.followUpEnabled && now < continueUntil && now >= muteUntil && !speaking() && !LockScreenInput.locked
+    }
+    /// 把窗口延到“从现在（或这句播报说完）起再留几秒”；锁屏或开关关闭时不开。
+    private func extendConversation(from start: TimeInterval) {
+        guard settings.followUpEnabled, !LockScreenInput.locked else { return }
+        continueUntil = max(continueUntil, start + DesktopVoiceTurn.continueWindow)
+    }
+    private func closeConversation() { continueUntil = 0 }
+    /// 窗口里没喊名字就开口：像喊过名字一样开一轮（不应答、不交给豆包），提交前再判断是不是在跟它说。
+    private func startFollow(_ raw: String) -> Bool {
+        let text = DesktopVoiceTurn.normalize(raw, wake: settings.wakeWord).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, canWake() else { return false }
+        wake(text)
+        guard capturing else { return false }
+        following = true; followCount += 1
+        return true
     }
     /// 念完问题后的几秒：播报已经结束、没有新任务在跑、也不在锁屏，才把这段话当成回答。
     private var replyOpen: Bool {
@@ -480,8 +513,14 @@ final class DesktopVoice: NSObject {
         }
         // 上一句反馈还在说就掐掉：用户已经开口了，不能让它接着念。
         stopSpeaking()
-        if body.isEmpty { if beginDictation() { ackPending = false; ackAt = 0; return } } else { cancelDictation() }
-        status = dictationHint ?? "正在听"
+        handoffPending = false
+        if body.isEmpty, settings.dictationEnabled, !LockScreenInput.locked {
+            // 先不急着交给豆包：名字后面紧接着还有话（“小E开灯”）就由本机一口气听完，
+            // 停顿了才交接。豆包接手时不出声，所以这段等待里也先不应答。
+            handoffPending = true; handoffAt = now + DesktopVoiceTurn.oneShotGrace
+            ackPending = false
+        } else if !body.isEmpty { cancelDictation() }
+        status = "正在听"
         present("正在听", body)
     }
     /// 只喊了名字那一声之后，正文交给豆包：它按下才开，名字那句话它听不全。
@@ -641,11 +680,29 @@ final class DesktopVoice: NSObject {
         if !capturing && !speaking() && !deferredTasks.isEmpty {
             let task = deferredTasks.removeFirst(); presentTask(task); announce(task)
         }
+        // 窗口开合时刷新待机提示：开着写“直接说就行”，过期回到“等待小E”，不留过时的状态。
+        let open = conversationOpen
+        if open != conversationShown, !capturing {
+            conversationShown = open
+            if draft.isEmpty { status = waiting }
+        }
         guard capturing else {
             if request != nil && now - idleAt > 40 { stopRecognition() }
             return
         }
         if now - turnAt > 90 { if dictationActive { finishDictation(nil) } else { commitFinal() }; return }
+        if handoffPending {
+            if !body.isEmpty {
+                // 名字后面接着说了：一句话唤醒，本机识别听完整句，不再交给豆包。
+                handoffPending = false; oneShotCount += 1
+            } else if now >= handoffAt && now - lastVoice >= DesktopVoiceTurn.oneShotGrace {
+                handoffPending = false
+                if beginDictation() { return }
+                // 豆包没就绪：本机接着听，补上那声应答。
+                ackPending = settings.ackEnabled; ackAt = now
+                status = dictationHint ?? "正在听"
+            }
+        }
         // 豆包在收正文：它自己不会因为停顿就停，本地声学停顿判“说完了”再让它松手。
         if dictationActive {
             if now - dictationAt > DesktopVoiceTurn.dictationBudget { finishDictation(nil); return }
@@ -675,6 +732,7 @@ final class DesktopVoice: NSObject {
     private func returnToWake() {
         cancelDictation()
         if replying { replying = false; replyTaskID = nil }
+        handoffPending = false; following = false
         stopRecognition(); capturing = false; finishing = false; body = ""; prefix = ""; partial = ""; turnAudio.removeAll()
         ackPending = false
         status = waiting; present("", ""); applyHandback()
@@ -697,8 +755,14 @@ final class DesktopVoice: NSObject {
         let audio = turnAudio
         stopRecognition(); capturing = false; finishing = false; body = ""; prefix = ""; partial = ""; turnAudio = []
         let reply = replying ? replyTaskID : nil
-        replying = false; replyTaskID = nil
+        let followed = following && reply == nil
+        replying = false; replyTaskID = nil; following = false; handoffPending = false
         guard !text.isEmpty else { returnToWake(); return }
+        // 连续对话窗口里没喊名字听到的话：不像在跟它说（闲聊、旁人说话、只是应声）就当没听见，并且立刻关窗，
+        // 免得一屋子人说话时它一句接一句地误接。
+        if followed && !DesktopVoiceTurn.addressed(text) {
+            followRejects += 1; closeConversation(); returnToWake(); return
+        }
         applyHandback()
         // 正在等他回答时，“好的”“嗯”就是答案，不能当成闲聊吞掉；退下、别说了照常就地处理。
         if let local = DesktopVoiceTurn.local(text), reply == nil || !DesktopVoiceTurn.casual(local) {
@@ -721,6 +785,8 @@ final class DesktopVoice: NSObject {
             muteUntil = now + duration + echoTail
         }
         if kind == .hush { stopSpeaking() }
+        // “谢谢”“退下”“好的”是这轮对话的结束；打招呼、问它是谁则多半还有下文，留着麦克风。
+        if DesktopVoiceTurn.endsConversation(kind) { closeConversation() } else { extendConversation(from: muteUntil) }
         returnToWake()
     }
     private func submit(_ text: String) {
@@ -743,6 +809,8 @@ final class DesktopVoice: NSObject {
                 }
             } else { task = try submitUnlocked(text, requestID) }
             taskID = task.id; pendingTasks.insert(task.id); lastTaskID = task.id; lastTaskAt = now; submittedCount += 1
+            // 刚说完一件事，很可能紧接着说下一件：不用等这件办完，现在起就不必重喊名字。
+            extendConversation(from: now)
             // 多数任务不会一提交就完；一秒多还没结果就先说一声，不让人干等。
             receiptPending = settings.ackEnabled
             receiptAt = now + DesktopVoiceTurn.receiptDelay
@@ -773,10 +841,13 @@ final class DesktopVoice: NSObject {
         stopSpeaking()
         let said = feedback(phrase)
         muteUntil = max(muteUntil, now + max(said + echoTail, Double(phrase.count) / 4.6 + 0.6 + (source == .system ? 0.4 : 0)))
+        extendConversation(from: muteUntil)
     }
     /// 任务收尾时一句话反馈，像有人应了一声；有总括念总括，要他定夺就把问题问出来，没办成就说卡在哪。
     private func announce(_ task: AgentTask) {
         let early = previewed.removeValue(forKey: task.id)
+        // 刚用语音说的那件事有了结果（念完或安静收尾）：从这句说完起再留几秒，接着说下一件不用重喊名字。
+        defer { if task.id == lastTaskID { extendConversation(from: max(now, muteUntil)) } }
         guard settings.ackEnabled else { return }
         receiptPending = false
         // “已请求但还没确认”不是失败：用户看到应用关了，我却在报“没办成”，比不说还糟。
@@ -1036,7 +1107,7 @@ final class DesktopVoice: NSObject {
     func discardDraft() throws { guard taskID == nil else { throw CocoaError(.userCancelled) }; try keep(""); if settings.enabled { retry() } }
     @objc private func willSleep() { stop(preserve: true); status = "电脑睡眠期间已暂停" }
     @objc private func didWake() { if settings.enabled { start(requestPermission: false) } }
-    @objc private func locked() { if !settings.allowLocked { stop(preserve: true); status = "锁屏期间已暂停" } }
+    @objc private func locked() { closeConversation(); closeReplyWindow(); if !settings.allowLocked { stop(preserve: true); status = "锁屏期间已暂停" } }
     @objc private func unlocked() { if !running && settings.enabled { start(requestPermission: false) } }
     @objc private func willTerminate() { stop(preserve: true) }
 }

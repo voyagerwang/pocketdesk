@@ -70,6 +70,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(saved.enabled, true); assert.equal(saved.wakeWord, '小伊'); assert.equal(saved.ackPhrase, '嗯|诶'); assert.equal(saved.ackEnabled, false);
   assert.equal(saved.ttsEngine, 'system'); assert.equal(saved.ttsVoice, ''); assert.equal(saved.voice, 'com.apple.voice.compact.zh-CN.Tingting');
   assert.equal(saved.ttsRate, -6);
+  assert.equal(saved.followUp, true, '连续对话开关随保存提交');
   assert.equal(node('voiceAckPhrase').disabled, true);
 
   node('voicePreview').onclick(); await flush(); assert.equal(calls.filter(x => x.body?.action === 'preview').length, 1);
