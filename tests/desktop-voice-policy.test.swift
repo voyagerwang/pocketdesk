@@ -178,6 +178,15 @@ import Darwin
         check(DesktopVoiceTurn.summary("明天两个日程（11月3日），下午的撞了。") == "明天两个日程，下午的撞了", "口播总括洗掉括号与句末标点照念")
         check(DesktopVoiceTurn.summary(String(repeating: "长", count: 90)) == nil && DesktopVoiceTurn.summary(nil) == nil && DesktopVoiceTurn.summary("  ") == nil, "空的或过长的总括不念")
         check(DesktopVoiceTurn.receiptDelay >= 2, "“这就去办”不抢在快速结果前面")
+        // 连续对话窗口里“是不是在跟我说”：指令、追问、问句、对助手本人的话接；应声、闲聊、太短不接。
+        for text in ["再帮我查一下天气", "关灯", "打开微信", "那后天呢", "明天有什么日程", "北京明天会下雨吗", "谢谢", "退下", "把空调关了", "给张三发消息说我晚点到", "提醒我五点开会"] {
+            check(DesktopVoiceTurn.addressed(text), "连续对话接住：" + text)
+        }
+        for text in ["嗯", "哈哈哈", "对对", "哈哈哈哈太好笑了", "我跟你说那个人真的很离谱", "是的", "啊", String(repeating: "很长的一段话", count: 12)] {
+            check(!DesktopVoiceTurn.addressed(text), "连续对话不接：" + text)
+        }
+        check(DesktopVoiceTurn.endsConversation(.thanks) && DesktopVoiceTurn.endsConversation(.dismiss) && !DesktopVoiceTurn.endsConversation(.greet), "谢谢/退下结束这轮，打招呼不结束")
+        check(DesktopVoiceTurn.oneShotGrace >= 0.4 && DesktopVoiceTurn.oneShotGrace <= 1, "名字后的交接等待足够连读又不拖沓")
         for text in ["是多少", "那后天呢", "还有呢", "换成卧室", "几点", "那湿度呢"] {
             check(DesktopVoiceTurn.followUp(text), "短追问认出来：" + text)
         }

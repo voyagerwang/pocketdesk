@@ -12,13 +12,14 @@ final class DesktopVoice {
     var settings = DesktopVoiceSettings()
     func snapshot() -> [String:Any] { ["wakeWord":wake,"enabled":enabled,"ackPhrase":settings.ackPhrase] }
     func configure(enabled:Bool,wake:String,allowLocked:Bool,ack:String,ackEnabled:Bool,voice:String?,
-                   engine:String? = nil,ttsVoice:String? = nil,rate:Int? = nil,dictation:Bool? = nil) throws {
+                   engine:String? = nil,ttsVoice:String? = nil,rate:Int? = nil,dictation:Bool? = nil,followUp:Bool? = nil) throws {
         writes += 1; self.wake = wake; self.enabled = enabled
         settings.ackPhrase = ack; settings.ackEnabled = ackEnabled; settings.voiceIdentifier = voice
         if let engine { settings.ttsEngine = engine }
         if let ttsVoice { settings.ttsVoice = ttsVoice.isEmpty ? nil : ttsVoice }
         if let rate { settings.ttsRate = rate }
         if let dictation { settings.dictationEnabled = dictation }
+        if let followUp { settings.followUpEnabled = followUp }
     }
     func retry() { retries += 1 }; func sendDraft() throws { sent += 1 }; func discardDraft() throws { dropped += 1 }
     func sendParked() throws { parkedSent += 1 }; func discardParked() throws { parkedDropped += 1 }
@@ -71,6 +72,10 @@ final class DesktopVoice {
         check(call("POST",rate)==400,"语速越界拒绝")
         var numeric=save;numeric["ttsRate"]=true
         check(call("POST",numeric)==400,"布尔不冒充语速")
+        var follow=save;follow["followUp"]=false
+        check(call("POST",follow)==200 && !runtime.settings.followUpEnabled,"连续对话可显式关闭")
+        var followNumber=save;followNumber["followUp"]=0
+        check(call("POST",followNumber)==400,"数字不冒充连续对话开关")
         var system=save;system["ttsEngine"]="system";system["voice"]="com.apple.voice.compact.zh-CN.Tingting"
         check(call("POST",system)==200 && !runtime.settings.usesNeural,"可切回本机音色")
         check(call("POST",["action":"preview"])==200 && runtime.previews==1,"试听只朗读应答")

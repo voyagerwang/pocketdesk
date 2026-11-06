@@ -364,6 +364,38 @@ enum DesktopVoiceTurn {
         let text = spokenClean(raw, now: now).trimmingCharacters(in: CharacterSet(charactersIn: " 。.；;"))
         return text.isEmpty || text.count > SpokenSummary.maxLength ? nil : text
     }
+    // MARK: - 一句话唤醒与连续对话
+    //
+    // 参照智能音箱的通行做法：唤醒词后面直接带指令（“小E开灯”）就一口气办完；办完一件事后
+    // 麦克风再留几秒，接着说下一件不用重喊名字（小爱同学“连续对话”、Alexa Follow-Up Mode）。
+    // 防误触靠四道门：窗口只在自己播报结束后才开、几秒没人说就关；锁屏不开；
+    // 窗口里听到的话先过“是不是在跟我说”这一关，像闲聊或旁人说话就丢掉并立刻关窗；控制台可整体关掉。
+
+    /// 只喊了名字之后，等这么久的静音才把正文交给豆包；期间名字后面接着有话，就由本机识别一口气听完。
+    /// 太短会在“小E……开灯”的自然连读里提前交接，豆包只听到半句“灯”。
+    static let oneShotGrace: TimeInterval = 0.6
+    /// 连续对话：上一句办完（或播报完）之后，再留多久不用喊名字。
+    static let continueWindow: TimeInterval = 8
+    /// 只是应声或语气，不是新的指令。
+    static let fillerOnly: Set<String> = ["嗯", "嗯嗯", "啊", "啊啊", "哦", "噢", "哈", "哈哈", "哈哈哈", "呵呵", "额", "呃", "唉", "哎", "嘿嘿", "嘻嘻", "对", "对对", "是", "是的", "没有", "不是"]
+    static let commandLeads = ["帮我", "帮忙", "请", "麻烦", "给我", "把", "将", "打开", "关", "开", "查", "看看", "看一下", "搜", "找", "记", "提醒", "设", "定", "叫", "发", "告诉", "通知", "播放", "放", "暂停", "停", "调", "切", "锁", "退出", "隐藏", "新建", "创建", "安排", "取消", "删", "改", "换", "再", "还有", "那", "然后", "接着", "继续", "算了", "不用", "今天", "明天", "后天", "现在", "这周", "下周", "几点", "多少", "什么", "怎么", "为什么", "有没有", "是不是", "能不能", "可以", "帮"]
+    static let intentWords = ["灯", "空调", "插座", "开关", "温度", "湿度", "待办", "日程", "会议", "开会", "提醒", "闹钟", "叫醒", "消息", "飞书", "微信", "群", "天气", "文件", "窗口", "网页", "浏览器", "应用", "派", "任务", "项目", "Codex", "WorkBuddy", "Cola", "Cue", "笔记", "知识库", "锁屏"]
+    /// 连续对话窗口里听到的话是不是在跟助手说：指令句式、追问、问句、对助手本人的话才算；
+    /// 太短、只是应声、或像在跟旁人闲聊的不算——宁可漏接一句让他重喊名字，也不把旁人的话当命令。
+    static func addressed(_ raw: String) -> Bool {
+        let text = bare(raw)
+        guard text.count >= 2, text.count <= 60 else { return false }
+        if local(text) != nil { return true }
+        if fillerOnly.contains(text) { return false }
+        if followUp(text) { return true }
+        if commandLeads.contains(where: { text.hasPrefix($0) }) { return true }
+        if intentWords.contains(where: { text.localizedCaseInsensitiveContains($0) }) { return true }
+        // 问句也算：“北京明天会下雨吗”。
+        return ["吗", "呢", "？", "?"].contains(where: { text.hasSuffix($0) })
+    }
+    /// 这几句意味着这轮对话结束了：不再留麦克风。
+    static func endsConversation(_ kind: Local) -> Bool { [.dismiss, .hush, .thanks, .okay].contains(kind) }
+
     /// 念完一个问题后，给多久不用喊名字就能直接回答。
     static let replyWindow: TimeInterval = 8
 
