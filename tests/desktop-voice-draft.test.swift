@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 真实DesktopVoice草稿提交/私有存储与任务/锁屏替身；临时只读目录制造清理失败。
- * [OUTPUT]: 追问念出问题与候选、念完前的声音不当回答、8秒内免唤醒回答接回原任务且不另开、窗口过期不接；验证字幕修订不重唤醒、新呼叫保留旧半句而不提交、播报可打断、旧输入队列及故障去重；固定口令仍单次提交；豆包接管时正文不用、转交给它，它没接上就回落到本地并行听到的那份且剥掉唤醒名，它出字也剥。
+ * [OUTPUT]: 锁屏短句无声纹依赖且单次提交；追问念出问题与候选、念完前的声音不当回答、8秒内免唤醒回答接回原任务且不另开、窗口过期不接；验证字幕修订不重唤醒、新呼叫保留旧半句而不提交、播报可打断、旧输入队列及故障去重；固定口令仍单次提交；豆包接管时正文不用、转交给它，它没接上就回落到本地并行听到的那份且剥掉唤醒名，它出字也剥。
  * [POS]: 自动语音接收与草稿持久化故障回归；不启动蓝牙、识别或实际用户任务。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -30,28 +30,7 @@ enum TaskService {
     }
 }
 enum MijiaQuickControl { static func resolve(_ text:String)->Bool? { ["关灯","开灯"].contains(text) ? true : nil } }
-/// 声纹桥替身：真实模型不参与回归，只控制“像不像”的结论。
-enum DesktopVoiceVoiceprint {
-    static var match = true
-    static var broken = false
-    static var verifications = 0
-    static var enrollments: [String] = []
-    static var ready = true
-    static var hasProfile = false
-    static var diagnostics: [String: Any] { ["ready": ready] }
-    static func health() -> [String: Any]? { ["ok": true, "enrolled": false, "samples": 0, "threshold": 0.72] }
-    static func verify(_ samples: [Float]) -> [String: Any]? {
-        verifications += 1
-        if broken { return nil }
-        return ["ok": true, "score": match ? 0.86 : 0.31, "match": match, "threshold": 0.72]
-    }
-    static func enroll(_ samples: [Float], label: String) -> [String: Any]? {
-        enrollments.append(label)
-        return ["ok": true, "samples": 1, "threshold": 0.72]
-    }
-    static func clear() -> Bool { true }
-}
-/// 声纹校验是异步的：等主线程把结果接回来再断言，不靠固定 sleep。
+/// 等待主线程任务回执。
 func pump(_ condition: () -> Bool) {
     let deadline = Date().addingTimeInterval(5)
     while !condition() && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
@@ -110,42 +89,20 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         precondition(TaskService.lockedSessions == [DesktopVoice.testLockedSession],"锁屏任务走锁定会话")
         precondition(lockedQuery.draft.isEmpty,"任务已接收，草稿不残留")
 
-        // 注册过声纹之后，锁屏这一句要先认人：不像就留稿、不派单；像才照常执行。
+        // 锁屏短句直接派单，不要求一秒声纹样本，也不依赖任何声纹桥。
         try DesktopVoiceSettings.saveDraft("")
-        let owner=DesktopVoice();owner.submitUnlocked=submit
-        var ownerSaid:[String]=[]
-        owner.say={ phrase in ownerSaid.append(phrase);return 0.3 }
-        owner.testVoiceprintEnrolled(true)
-        DesktopVoiceVoiceprint.match=false
-        owner.testReceive("小E，开灯",at:30);owner.testAudio([Float](repeating:0.4,count:24000),at:30)
-        owner.testAdvance(to:32.1);owner.testAdvance(to:35)
-        pump { !owner.draft.isEmpty }
-        precondition(DesktopVoiceVoiceprint.verifications==1 && owner.draft=="开灯","不像的声音不派单，原话留稿")
-        precondition(ownerSaid.contains { $0.contains("只认你") },"认不上要说清原因")
-        DesktopVoiceVoiceprint.match=true
-        try DesktopVoiceSettings.saveDraft("")
-        let ownerOk=DesktopVoice();ownerOk.submitUnlocked=submit
-        ownerOk.testVoiceprintEnrolled(true)
-        ownerOk.testReceive("小E，开灯",at:40);ownerOk.testAudio([Float](repeating:0.4,count:24000),at:40)
-        ownerOk.testAdvance(to:42.1);ownerOk.testAdvance(to:45)
-        pump { accept("开灯") }
-        precondition(DesktopVoiceVoiceprint.verifications==2 && accept("开灯"),"本人声音照常执行")
-        DesktopVoiceVoiceprint.broken=true
-        try DesktopVoiceSettings.saveDraft("")
-        let noVerify=DesktopVoice();noVerify.submitUnlocked=submit
-        noVerify.testVoiceprintEnrolled(true)
-        noVerify.testReceive("小E，开灯",at:50);noVerify.testAudio([Float](repeating:0.4,count:24000),at:50)
-        noVerify.testAdvance(to:52.1);noVerify.testAdvance(to:55)
-        pump { !noVerify.draft.isEmpty }
-        precondition(noVerify.draft=="开灯","声纹验不了时不放行，原话留稿")
-        DesktopVoiceVoiceprint.broken=false;DesktopVoiceVoiceprint.match=true
+        let direct=DesktopVoice();direct.submitUnlocked=submit
+        let lockedCountBefore=TaskService.lockedSubmissions.count
+        direct.testReceive("小E，开灯",at:30)
+        direct.testAdvance(to:32.1);direct.testAdvance(to:35)
+        precondition(TaskService.lockedSubmissions.count==lockedCountBefore+1 && accept("开灯"),"锁屏无声纹音频也只提交一次")
+        precondition(direct.draft.isEmpty,"锁屏短句已接收后清理草稿")
         // 锁屏唤醒只给提示音：念一句“在呢”会把紧接着说的正文当自己的回声丢掉（mutedDrops 就是这么涨的）。
         try DesktopVoiceSettings.saveDraft("")
         LockScreenInput.locked = true
         let cue=DesktopVoice();cue.submitUnlocked=submit
         var cueSaid:[String]=[]
         cue.say={ phrase in cueSaid.append(phrase);return 0.3 }
-        cue.testVoiceprintEnrolled(true)
         precondition(cue.testASR=="-","未收音时不声称识别模式")
         cue.testReceive("小E",at:300, final:false)
         precondition(cue.testASR=="cloud","锁屏优先走云端识别，长句才听得准")
@@ -156,20 +113,6 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         cue.testAdvance(to:303.5);cue.testAdvance(to:306.2);cue.testAdvance(to:310)
         pump { accept("明天我有几个日程") }
         precondition(accept("明天我有几个日程") && cue.testMutedDrops==0,"锁屏接着说的话不被自己的应答吞掉")
-        LockScreenInput.locked=false
-        // 注册按 2 秒切段：一段音频只能算一个样本，锁屏上就会在阈值边上抖。
-        try DesktopVoiceSettings.saveDraft("")
-        DesktopVoiceVoiceprint.enrollments=[]
-        let learn=DesktopVoice();learn.submitUnlocked=submit
-        learn.say={ _ in 0.2 }
-        learn.testReceive("小E，记住我的声音",at:400)
-        learn.testAudio([Float](repeating:0.3,count:32000),at:400.6)
-        learn.testAdvance(to:404);learn.testAdvance(to:407)
-        let burst=[Float](repeating:0.3,count:24000),gap=[Float](repeating:0,count:9600)
-        learn.testAudio(burst+gap+burst+gap+burst,at:408)
-        learn.testAdvance(to:430)
-        pump { DesktopVoiceVoiceprint.enrollments.count >= 3 }
-        precondition(DesktopVoiceVoiceprint.enrollments.count==3,"念三句注册就得到三个样本，画像不再靠单一样本")
         LockScreenInput.locked=false
         let revised=DesktopVoice();revised.submitUnlocked=submit
         revised.testReceive("小E，关灯",at:30)

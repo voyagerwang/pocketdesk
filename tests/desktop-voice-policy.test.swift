@@ -54,13 +54,8 @@ import Darwin
         }
         for text in ["别说了", "闭嘴", "安静点"] { check(DesktopVoiceTurn.local(text) == .hush, "止声就地回应：" + text) }
         check(DesktopVoiceTurn.local("谢谢") == .thanks, "道谢就地回应")
-        // 声纹注册/取消必须能用嘴说：锁屏放开之后，这是机主守住“只认我”的闸门。
-        for text in ["记住我的声音", "记住我的声音吧", "小艺记住我的声音", "记一下我的声音", "注册我的声音"] {
-            check(DesktopVoiceTurn.local(text) == .remember, "声纹注册就地识别：" + text)
-        }
-        for text in ["忘掉我的声音", "忘掉我的声音吧", "小E忘掉我的声音", "取消声纹", "别认我的声音"] {
-            check(DesktopVoiceTurn.local(text) == .forget, "声纹取消就地识别：" + text)
-        }
+        let legacyVoiceprint = try JSONDecoder().decode(DesktopVoiceSettings.self, from: Data("{\"voiceprintEnabled\":true}".utf8))
+        check(legacyVoiceprint.wakeWord == DesktopVoiceSettings().wakeWord, "旧声纹配置不影响现有设置解码")
         for text in ["帮我记一个待办", "开灯", "退下以后再说", "把灯关掉然后退下"] {
             check(DesktopVoiceTurn.local(text) == nil, "不是当面话的不劫持：" + text)
         }
@@ -291,16 +286,6 @@ import Darwin
         check(!DesktopVoiceSettings.load().enabled, "损坏唤醒配置不监听所有话语")
         try Data("corrupt".utf8).write(to: DesktopVoiceSettings.draftFile)
         check(DesktopVoiceSettings.draftIsCorrupt, "损坏草稿必须保留且停用")
-        // 注册按“句子”切：中间停顿就断开，一句话一个样本。
-        let burst = [Float](repeating: 0.3, count: 24000)
-        let gap = [Float](repeating: 0, count: 9600)
-        let read = DesktopVoiceTurn.enrollmentSegments(burst + gap + burst + gap + burst)
-        check(read.count == 3, "念三句就得到三个样本")
-        check(read.allSatisfy { $0.count >= 16000 }, "每段都不低于声纹桥的一秒下限")
-        let continuous = DesktopVoiceTurn.enrollmentSegments([Float](repeating: 0.3, count: 96000))
-        check(continuous.count >= 2 && continuous.count <= DesktopVoiceTurn.enrollMaxSegments, "一口气念完也切成多段")
-        check(DesktopVoiceTurn.enrollmentSegments([Float](repeating: 0.3, count: 8000)).isEmpty, "半秒音频不冒充注册样本")
-        check(DesktopVoiceTurn.enrollmentSegments([Float](repeating: 0.3, count: 16000 * 40)).count <= DesktopVoiceTurn.enrollMaxSegments, "念太久也不会堆样本")
         print("Desktop voice policy: \(count) checks passed")
     }
 }

@@ -44,12 +44,7 @@ cp "$ROOT_DIR/scripts/setup-mijia.sh" "$BUILD_APP/Contents/Resources/Mijia/setup
 # 声音会静默退回系统音色（机械感），而且在控制台只表现为一句“音色服务不可用”。
 mkdir -p "$BUILD_APP/Contents/Resources/TTS"
 cp "$ROOT_DIR/scripts/tts-say.py" "$BUILD_APP/Contents/Resources/TTS/tts-say.py"
-# 声纹桥随包走：脚本在，运行时环境与模型在 ~/Library/Application Support/VoiceDeck/voiceprint（scripts/setup-voiceprint.sh 一次装好）。
-if [ -f "$ROOT_DIR/scripts/voiceprint.py" ]; then
-  mkdir -p "$BUILD_APP/Contents/Resources/Voiceprint"
-  cp "$ROOT_DIR/scripts/voiceprint.py" "$BUILD_APP/Contents/Resources/Voiceprint/voiceprint.py"
-fi
-# 打包自检：缺一个随包脚本就是一次“功能静默降级”（音色退回系统音色、声纹桥起不来），必须当场失败。
+# 打包自检：缺少随包 TTS 脚本必须当场失败。
 [ -f "$BUILD_APP/Contents/Resources/TTS/tts-say.py" ] || { echo "打包缺少 TTS 脚本，音色会退回系统音色" >&2; exit 1; }
 # 固定 designated requirement，避免每次本地重编译都因 CDHash 改变而丢失辅助功能授权。
 # 这是本机开发签名策略；正式分发时应替换为 Apple Developer ID 签名。

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 配置唤醒词、单轮转写、单调时间和声学活动；不访问设备或任务。
- * [OUTPUT]: 追问/失败原因/长回答要点的口语挑句与闲聊就地回应（招呼按时段、自我介绍、夸奖、应一声不回）；唤醒分段/同段重复识别去重、转写入口的唤醒名剥离、自适应停顿、麦克风兜底时机与文案策略；仅新唤醒片段可重开输入，不把转写修订当作再次呼叫。
+ * [OUTPUT]: 仅语音对话策略，不提供声纹注册或分段； 追问/失败原因/长回答要点的口语挑句与闲聊就地回应（招呼按时段、自我介绍、夸奖、应一声不回）；唤醒分段/同段重复识别去重、转写入口的唤醒名剥离、自适应停顿、麦克风兜底时机与文案策略；仅新唤醒片段可重开输入，不把转写修订当作再次呼叫。
  * [POS]: 自动语音的纯判定层；麦克风只供样本、识别只供转写，发声、提交与锁屏授权由 DesktopVoice 管理。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -519,7 +519,7 @@ enum DesktopVoiceTurn {
 
     /// 对助手本人说的话，不是任务：说一句就回，不派单、不走模型。
     /// “退下”派给任务，收回来的当然是“搞定了”——这种回复很诡异。
-    enum Local { case dismiss, hush, thanks, remember, forget, greet, identity, praise, okay }
+    enum Local { case dismiss, hush, thanks, greet, identity, praise, okay }
     /// 闲聊类：只在没有待回答的问题时就地回应；正在等他回答时，“好的”“嗯”就是答案，必须交给任务。
     static let casualKinds: Set<Local> = [.greet, .identity, .praise, .okay]
     static func casual(_ kind: Local) -> Bool { casualKinds.contains(kind) }
@@ -527,9 +527,6 @@ enum DesktopVoiceTurn {
         (.dismiss, ["退下", "退下吧", "退下退下", "退下吧退下", "你退下", "下去吧", "你下去吧", "你走吧", "走吧", "你可以走了", "没事了", "没事了退下", "没你事了", "你可以退下了"]),
         (.hush, ["别说了", "不要说了", "闭嘴", "安静", "安静点", "别吵", "别念了", "停一下", "停下来"]),
         (.thanks, ["谢谢", "谢谢你", "谢谢啦", "多谢", "好的谢谢", "好谢谢"]),
-        // 声纹注册与取消：锁屏放开之后，这两句是机主守住“只认我”的闸门，必须能直接用嘴说。
-        (.remember, ["记住我的声音", "记一下我的声音", "记下我的声音", "记住这个声音", "记住我的声纹", "注册我的声音", "认识我的声音"]),
-        (.forget, ["忘掉我的声音", "忘掉这个声音", "忘掉我的声纹", "清掉我的声音", "取消声纹", "别认我的声音", "忘了我"]),
         // 打个招呼、问它是谁、夸一句、应一声：真人不会把这些当成“任务”去办，回一句就好。
         (.greet, ["你好", "您好", "你好呀", "在吗", "在不在", "早", "早上好", "早安", "中午好", "下午好", "晚上好", "哈喽", "哈啰"]),
         (.identity, ["你是谁", "你叫什么", "你叫什么名字", "你是干嘛的", "你能干什么", "你会什么", "你能做什么", "你会干什么", "你都会什么"]),
@@ -573,9 +570,6 @@ enum DesktopVoiceTurn {
         .dismiss: ["好，我退下了", "嗯，有需要再叫我", "行，我先退下"],
         .hush: [],
         .thanks: ["不客气", "嗯，有事叫我"],
-        // 注册/取消由 DesktopVoice 自己说（要先等对方开口再收音），这里留空避免抢话。
-        .remember: [],
-        .forget: [],
         .greet: [],
         .identity: [],
         .praise: ["嘿嘿，应该的", "能帮上就好", "不辛苦，还有事就叫我"],
@@ -597,53 +591,6 @@ enum DesktopVoiceTurn {
     /// “你是谁 / 你能干什么”：一句话说清名字和三五样常用本事，不背功能清单。
     static func introduction(wake: String) -> String {
         "我是" + wake + "，能帮你开关灯、记待办、查日程、发飞书、开应用，直接跟我说就行"
-    }
-    /// 记声纹时收多久：够人磎慢念两三句并停顿，又不至于让人干站着。
-    static let enrollSeconds: TimeInterval = 20
-    static let enrollMinimumSampleCount = 32000
-    static let enrollMaxSamples = 320_000
-    /// 一口气念完没有停顿时按 2 秒机械切，至少也能得到几段。
-    static let enrollChunkSamples = 32000
-    static let enrollMaxSegments = 8
-    /// 分数明显高于阈值才把这一句并进画像；不是每次通过都学，免得一次误收把陌生人越学越像。
-    static let adaptScoreFloor = 0.86
-    static let adaptEvery = 10
-    /// 把注册音频按“句子”切段：中间停顿就算一句，短于 1.2 秒的丢掉，长于 6 秒的截开。
-    /// 一句话一个样本，比固定 2 秒机械切更接近人的音素分布。
-    static func enrollmentSegments(_ samples: [Float], rate: Double = 16000) -> [[Float]] {
-        let frame = 320
-        guard samples.count >= Int(rate) else { return [] }
-        let minSamples = Int(1.2 * rate), maxSamples = Int(6 * rate)
-        let silenceFrames = max(1, Int(0.35 * rate / Double(frame)))
-        var spans: [(Int, Int)] = []
-        var start: Int? = nil, quiet = 0, index = 0
-        while index + frame <= samples.count {
-            let energy = samples[index..<(index + frame)].reduce(Float(0)) { $0 + $1 * $1 } / Float(frame)
-            if energy > 0.000225 { if start == nil { start = index }; quiet = 0 }
-            else if start != nil { quiet += 1 }
-            if let begin = start, quiet >= silenceFrames {
-                let end = index - quiet * frame
-                if end - begin >= minSamples { spans.append((begin, end)) }
-                start = nil; quiet = 0
-            }
-            index += frame
-        }
-        if let begin = start, samples.count - begin >= minSamples { spans.append((begin, samples.count)) }
-        var segments: [[Float]] = []
-        for (begin, end) in spans {
-            var offset = begin
-            while offset < end, segments.count < enrollMaxSegments {
-                let stop = min(offset + maxSamples, end)
-                if stop - offset >= minSamples { segments.append(Array(samples[offset..<stop])) }
-                offset = stop
-            }
-        }
-        if segments.count >= 2 { return Array(segments.prefix(enrollMaxSegments)) }
-        // 一口气念完没有停顿：固定切，至少给两段，总比一段窄画像强。
-        let chunks = stride(from: 0, to: samples.count, by: enrollChunkSamples)
-            .map { Array(samples[$0..<min($0 + enrollChunkSamples, samples.count)]) }
-            .filter { $0.count >= enrollMinimumSampleCount }
-        return Array(chunks.prefix(enrollMaxSegments))
     }
     static func reply(_ kind: Local, avoiding previous: String? = nil, roll: Int = 0,
                       hour: Int = Calendar.current.component(.hour, from: Date()), wake: String = "小E") -> String {

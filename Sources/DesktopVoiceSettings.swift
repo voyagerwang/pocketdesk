@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 本机控制台显式配置及私有 Application Support 文件；不读取第三方账号或Wi-Fi凭据。
- * [OUTPUT]: 当前草稿及旧输入队列各携稳定票据；旧单槽兼容迁移且不覆盖更早内容；小E、应答、音色、锁屏和设备绑定的私有原子存储。
- * [POS]: 自动语音的配置边界；损坏文件不自动启用，设备缺失不替换为系统麦克风。
+ * [OUTPUT]: 当前草稿及旧输入队列各携稳定票据；旧单槽兼容迁移且不覆盖更早内容；小E、应答、音色、锁屏、连续对话和设备绑定的私有原子存储。
+ * [POS]: 自动语音的配置边界；旧声纹字段解码时忽略；损坏文件不自动启用，设备缺失不替换为系统麦克风。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import Foundation
@@ -25,8 +25,6 @@ struct DesktopVoiceSettings: Codable {
     var ttsVoice: String? = "zh-CN-XiaoxiaoNeural"
     /// 基准语速（百分比，正数更快）；实际播报会在它上下浮动 2%。
     var ttsRate = 4
-    /// 声纹：注册过之后，锁屏语音只执行机主本人的声音；没注册时不做任何限制。
-    var voiceprintEnabled = true
     /// 连续对话：办完一件事后麦克风再留几秒，接着说下一件不用重喊名字；锁屏时始终不开。
     var followUpEnabled = true
     var usesNeural: Bool { ttsEngine == "neural" }
@@ -118,7 +116,7 @@ struct DesktopVoiceSettings: Codable {
 
 extension DesktopVoiceSettings {
     private enum CodingKeys: String, CodingKey {
-        case enabled, wakeWord, allowLocked, peripheralID, ackEnabled, ackPhrase, voiceIdentifier, ttsEngine, ttsVoice, ttsRate, dictationEnabled, voiceprintEnabled, followUpEnabled
+        case enabled, wakeWord, allowLocked, peripheralID, ackEnabled, ackPhrase, voiceIdentifier, ttsEngine, ttsVoice, ttsRate, dictationEnabled, followUpEnabled
     }
     // 旧配置文件缺字段时按默认值补齐，不能因为新增设置就整份回落到默认并静默关掉监听。
     init(from decoder: Decoder) throws {
@@ -135,7 +133,6 @@ extension DesktopVoiceSettings {
         ttsVoice = try box.decodeIfPresent(String.self, forKey: .ttsVoice) ?? ttsVoice
         ttsRate = try box.decodeIfPresent(Int.self, forKey: .ttsRate) ?? ttsRate
         dictationEnabled = try box.decodeIfPresent(Bool.self, forKey: .dictationEnabled) ?? dictationEnabled
-        voiceprintEnabled = try box.decodeIfPresent(Bool.self, forKey: .voiceprintEnabled) ?? voiceprintEnabled
         followUpEnabled = try box.decodeIfPresent(Bool.self, forKey: .followUpEnabled) ?? followUpEnabled
     }
 }

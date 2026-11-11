@@ -1,6 +1,6 @@
 /**
  * [INPUT]: EasyInputAudio绑定PCM与SystemMicrophoneAudio兜底PCM、本地Speech识别、DesktopVoiceTurn纯规则、唤醒应答发声、豆包接管正文的注入入口与既有任务入口。
- * [OUTPUT]: 唤醒回应与同段转写去重；锁屏也能跑完整任务、需解锁屏幕的工具在工具层拒；只喊名字时把正文交给豆包（只能用系统默认输入设备，本地识别并行听同一段、失败/无字/超时回落本地那份），一口气说完仍走本地；豆包按住说话时“说完了”只看两个证据——麦克风还有声、或接收框还在出字，喊名字会掐掉剩余播报静音额度只剩回采尾巴，不让人半句话被两秒松手截断；锁屏没有豆包也没有屏幕：识别改用系统云端（失败一次退回本机）、应答只给短提示音不吞后续正文；重喊保留旧输入并重开，播报期间仍可唤醒打断；纯本机模式下键盘优先、断开自动换电脑麦克风、键盘回来自动切回；长停顿自愈、后台任务分别收尾；收尾有结论念结论、追问把问题与两三个短候选念出来并开 8 秒免唤醒回答窗口（回答接回原任务，锁屏不开）、失败念第一句人话原因，闲聊/打招呼就地回应。
+ * [OUTPUT]: 无声纹采集或身份校验；一句话唤醒优先保留同段正文；解锁时可按配置开启连续对话窗口；唤醒回应与同段转写去重；锁屏也能跑完整任务、需解锁屏幕的工具在工具层拒；只喊名字时把正文交给豆包（只能用系统默认输入设备，本地识别并行听同一段、失败/无字/超时回落本地那份），一口气说完仍走本地；豆包按住说话时“说完了”只看两个证据——麦克风还有声、或接收框还在出字，喊名字会掐掉剩余播报静音额度只剩回采尾巴，不让人半句话被两秒松手截断；锁屏没有豆包也没有屏幕：识别改用系统云端（失败一次退回本机）、应答只给短提示音不吞后续正文；重喊保留旧输入并重开，播报期间仍可唤醒打断；纯本机模式下键盘优先、断开自动换电脑麦克风、键盘回来自动切回；长停顿自愈、后台任务分别收尾；收尾有结论念结论、追问把问题与两三个短候选念出来并开 8 秒免唤醒回答窗口（回答接回原任务，锁屏不开）、失败念第一句人话原因，闲聊/打招呼就地回应。
  * [POS]: 自动语音生命周期协调器；不注入按键、不解锁电脑、不保存原始音频、不上传待唤醒转写。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -100,19 +100,8 @@ final class DesktopVoice: NSObject {
     private var wakeCount = 0, finalCount = 0, emptyFinalCount = 0, submittedCount = 0, rewakeCount = 0, recoverCount = 0
     /// 播报静音窗口里被丢掉的最终转写：锁屏感觉“喊了没反应”时，先看这个数是不是在涨。
     private var mutedDrops = 0
-    private var verifyPass = 0, verifyRefuse = 0, verifyShort = 0, verifyFail = 0
-    /// 高置信通过后慢慢把新样本并进画像的次数计数（不是每次都学）。
-    private var adaptCount = 0
     /// 锁屏优先走云端识别；这条路过一次失败就退回本机，解锁后再恢复重试。
     private var cloudBroken = false
-    /// 声纹：本轮音频累计（认人）、注册采集窗口与已注册状态。
-    private var turnAudio: [Float] = []
-    private var enrollAudio: [Float] = []
-    /// 大于 0 表示正在采集注册样本，到这个时刻收工。
-    private var enrollUntil: TimeInterval = 0
-    private var voiceprintEnrolled = false
-    private var voiceprintScore: Double?
-    private var voiceprintThreshold: Double?
     private var lastTaskID = ""
     /// 刚念完一个问题：这几秒里不用喊名字，直接说就是在回答它。
     private var replyTaskID: String?
@@ -167,8 +156,6 @@ final class DesktopVoice: NSObject {
     var testMicStops = 0
     func testPark(_ text: String) throws { try keep(text); park() }
     static var testLockedSession: String { lockedSession }
-    func testVoiceprintEnrolled(_ enrolled: Bool) { voiceprintEnrolled = enrolled }
-    var testVoiceprintScore: Double? { voiceprintScore }
     var testCapturing: Bool { capturing }
     var testMutedDrops: Int { mutedDrops }
     var testASR: String { asrMode }
@@ -263,13 +250,9 @@ final class DesktopVoice: NSObject {
              "quickSubmissions": quickCount, "rewakes": rewakeCount, "replies": replyCount, "previews": previewCount,
              "follows": followCount, "followRejects": followRejects, "oneShots": oneShotCount, "conversationOpen": conversationOpen, "recoveries": recoverCount,
              "wakes": wakeCount, "finals": finalCount, "emptyFinals": emptyFinalCount, "submitted": submittedCount, "lastTaskId": lastTaskID,
-             "mutedDrops": mutedDrops, "asr": asrMode, "adapted": adaptCount,
-             "verify": ["pass": verifyPass, "refuse": verifyRefuse, "short": verifyShort, "fail": verifyFail]], "receivingAudio": receivedAudio && running, "draft": draft, "parked": parked,
+             "mutedDrops": mutedDrops, "asr": asrMode], "receivingAudio": receivedAudio && running, "draft": draft, "parked": parked,
             "parkedCount": (try? DesktopVoiceSettings.parkedRecords().count) ?? 0,
-            "speechPermission": SFSpeechRecognizer.authorizationStatus() == .authorized,
-            "voiceprint": ["enabled": settings.voiceprintEnabled, "enrolled": voiceprintEnrolled,
-                           "score": voiceprintScore ?? -1, "threshold": voiceprintThreshold ?? -1,
-                           "debug": DesktopVoiceVoiceprint.diagnostics] as [String: Any]]
+            "speechPermission": SFSpeechRecognizer.authorizationStatus() == .authorized]
     }
     private func start(requestPermission: Bool) {
         guard settings.enabled else { return }
@@ -295,7 +278,6 @@ final class DesktopVoice: NSObject {
         if settings.dictationEnabled { useSystem() }
         else { audio.start(binding: settings.peripheralID.flatMap(UUID.init(uuidString:))) }
         timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.tick() }; RunLoop.main.add(timer!, forMode: .common)
-        refreshVoiceprint()
     }
     private func stopRecognition() {
         recognitionGeneration += 1; recognition?.cancel(); recognition = nil; request = nil
@@ -307,7 +289,6 @@ final class DesktopVoice: NSObject {
         stopRecognition(); stopSpeaking(); audio.stop(); stopMic(); running = false; receivedAudio = false
         timer?.invalidate(); timer = nil; capturing = false; finishing = false; body = ""; prefix = ""; partial = ""
         muteUntil = 0; playbackListening = false
-        enrollAudio = []; enrollUntil = 0; turnAudio = []
         source = .none; keyboardLinked = false; handbackPending = false
         // 已接收任务的许可由该任务终态释放，暂停收音不应中断已经获准的动作。
     }
@@ -393,7 +374,6 @@ final class DesktopVoice: NSObject {
         }
         // 只喂当前源：两路同时在线时，键盘优先，不同时收音。
         guard fromKeyboard ? source == .keyboard : source == .system else { return }
-        capture(samples)
         if !receivedAudio, samples.contains(where: { abs($0) > 0.0001 }) {
             receivedAudio = true; status = waiting
         }
@@ -505,7 +485,7 @@ final class DesktopVoice: NSObject {
     private func wake(_ raw: String) {
         let candidate = DesktopVoiceTurn.normalize(raw, wake: settings.wakeWord)
         guard park() else { return }
-        wakeCount += 1; failures = 0; capturing = true; finishing = false; turnAudio.removeAll()
+        wakeCount += 1; failures = 0; capturing = true; finishing = false
         cloudBroken = false
         turnAt = now; lastVoice = now; bodyAt = now
         prefix = ""; partial = candidate; body = candidate
@@ -654,10 +634,6 @@ final class DesktopVoice: NSObject {
            now - lastVoice < 0.6, now - turnAt > 3 {
             cloudBroken = true; stopRecognition(); beginRecognition()
         }
-        if enrollUntil > 0 {
-            if now > enrollUntil { finishEnrollment() }
-            return
-        }
         if DesktopVoiceTurn.wantsSystemFallback(linked: keyboardLinked, usingSystem: source == .system,
                                                 silentFor: now - keyboardLostAt) { useSystem() }
         if ackPending {
@@ -748,7 +724,7 @@ final class DesktopVoice: NSObject {
         cancelDictation()
         if replying { replying = false; replyTaskID = nil }
         handoffPending = false; following = false
-        stopRecognition(); capturing = false; finishing = false; body = ""; prefix = ""; partial = ""; turnAudio.removeAll()
+        stopRecognition(); capturing = false; finishing = false; body = ""; prefix = ""; partial = ""
         ackPending = false
         status = waiting; present("", ""); applyHandback()
     }
@@ -767,8 +743,7 @@ final class DesktopVoice: NSObject {
     }
     private func commitFinal() {
         let text = DesktopVoiceTurn.command(body)
-        let audio = turnAudio
-        stopRecognition(); capturing = false; finishing = false; body = ""; prefix = ""; partial = ""; turnAudio = []
+        stopRecognition(); capturing = false; finishing = false; body = ""; prefix = ""; partial = ""
         let reply = replying ? replyTaskID : nil
         let followed = following && reply == nil
         replying = false; replyTaskID = nil; following = false; handoffPending = false
@@ -784,14 +759,10 @@ final class DesktopVoice: NSObject {
             answer(local); return
         }
         answering = reply
-        // 锁屏已经放开了全部能力，守住“只认机主”的就只剩这道声纹门。
-        guard needsOwnerVoice else { submit(text); return }
-        verifyOwner(text: text, audio: audio)
+        submit(text)
     }
     /// 对助手本人的话（退下、别说了、谢谢）：当场回一句，不派单、不报“搞定”。
     private func answer(_ kind: DesktopVoiceTurn.Local) {
-        if kind == .remember { beginEnrollment(); return }
-        if kind == .forget { forgetVoiceprint(); return }
         let phrase = DesktopVoiceTurn.reply(kind, avoiding: lastAck, roll: Int.random(in: 0..<64), wake: settings.wakeWord)
         if !phrase.isEmpty {
             lastAck = phrase
@@ -906,181 +877,10 @@ final class DesktopVoice: NSObject {
             replyUntil = muteUntil + DesktopVoiceTurn.replyWindow
         }
     }
-    // MARK: - 声纹
-
-    /// 本轮音频按源累计：认人要的是原声，不能用转写文本代替。
-    private func capture(_ samples: [Float]) {
-        turnAudio.append(contentsOf: samples)
-        if turnAudio.count > 192_000 { turnAudio.removeFirst(turnAudio.count - 192_000) }
-        // 注册时连着自己那句应答一起收会污染样本，播报期间的音频一律不算。
-        guard enrollUntil > 0, now >= muteUntil else { return }
-        enrollAudio.append(contentsOf: samples)
-        if enrollAudio.count > DesktopVoiceTurn.enrollMaxSamples {
-            enrollAudio.removeFirst(enrollAudio.count - DesktopVoiceTurn.enrollMaxSamples)
-        }
-    }
-    /// 锁屏 + 声纹开关 + 已经注册过：这一句必须先认人。
-    private var needsOwnerVoice: Bool {
-        settings.voiceprintEnabled && LockScreenInput.locked && voiceprintEnrolled
-    }
-    /// 认人：像就照常执行；不像就把原话留在草稿里；验不了就明说，绝不静默放行。
-    private func verifyOwner(text: String, audio: [Float]) {
-        // 太短的一段算不出稳定画像：与其误判成“陌生人”，不如请他把话说完。
-        guard audio.count >= 16000 else {
-            verifyShort += 1
-            try? self.keep(text)
-            holdForOwner("这句太短，我没认出人；说长一点")
-            return
-        }
-        status = "正在认声音"
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = DesktopVoiceVoiceprint.verify(audio)
-            DispatchQueue.main.async {
-                guard let self else { return }
-                guard let result else {
-                    self.verifyFail += 1
-                    self.voiceprintScore = nil
-                    try? self.keep(text)
-                    self.holdForOwner("声纹这会儿验不了，锁屏先不执行；解锁就能办")
-                    return
-                }
-                self.voiceprintScore = Self.number(result["score"])
-                self.voiceprintThreshold = Self.number(result["threshold"])
-                guard result["match"] as? Bool == true else {
-                    self.verifyRefuse += 1
-                    try? self.keep(text)
-                    self.holdForOwner(Self.replyLocked)
-                    return
-                }
-                self.verifyPass += 1
-                self.submit(text)
-                self.adaptVoiceprint(audio: audio, score: Self.number(result["score"]))
-            }
-        }
-    }
-    private static let replyLocked = "这个声音我不认识，锁屏时只认你"
-    /// 一直说话时画像自己长：只在分数明显高于阈值时才学，且每十次才学一次。
-    /// 不做“通过就学”——一次误收会被越学越像，等于自己把锁磨开。
-    private func adaptVoiceprint(audio: [Float], score: Double?) {
-        guard settings.voiceprintEnabled, let score, score >= DesktopVoiceTurn.adaptScoreFloor,
-              audio.count >= DesktopVoiceTurn.enrollMinimumSampleCount else { return }
-        adaptCount += 1
-        guard adaptCount % DesktopVoiceTurn.adaptEvery == 0 else { return }
-        DispatchQueue.global(qos: .utility).async { _ = DesktopVoiceVoiceprint.enroll(audio, label: "owner") }
-    }
     private var asrMode: String {
         guard running else { return "-" }
         return (LockScreenInput.locked && !cloudBroken) ? "cloud" : "on-device"
     }
-    /// 没放行的一句：说清楚为什么，原文留在草稿里等解锁后显式发送。
-    private func holdForOwner(_ phrase: String) {
-        stopSpeaking()
-        let duration = feedback(phrase)
-        muteUntil = max(muteUntil, now + duration + echoTail)
-        returnToWake()
-        // returnToWake 会把状态归回“等待小E”，这里再落一次保留态，解锁后屏幕上能看见原话。
-        status = "输入已保留，解锁后可发送。"
-        present(status, draft)
-    }
-    /// 喊「记住我的声音」之后：先让人多说几句，再拿这段音频注册。
-    private func beginEnrollment() {
-        // 注册只能在解锁时做：锁屏时谁都能喊一句“记住我的声音”，那就等于把锁交给屋里的人。
-        guard !LockScreenInput.locked else {
-            speakHeld("解锁之后我再记你的声音")
-            status = waiting
-            returnToWake()
-            return
-        }
-        stopSpeaking()
-        if !running { start(requestPermission: false) }
-        enrollAudio = []
-        // 让他多念几句、中间停顿：一句话一个样本，比随便说八秒更像他平时的声音。
-        let phrase = voiceprintEnrolled ? "好，再慢慢念两三句，中间停一下" : "好，慢慢念两三句，中间停一下"
-        let duration = feedback(phrase)
-        muteUntil = max(muteUntil, now + duration + echoTail)
-        // 采集窗口从应答念完才开始算，别把自己那句应答当成他的声音。
-        enrollUntil = muteUntil + DesktopVoiceTurn.enrollSeconds
-        returnToWake()
-        status = "正在记你的声音"
-    }
-    private func finishEnrollment() {
-        let audio = enrollAudio
-        enrollAudio = []; enrollUntil = 0
-        guard audio.count >= DesktopVoiceTurn.enrollMinimumSampleCount else {
-            status = waiting
-            let duration = feedback("没听够，再说一次“记住我的声音”")
-            muteUntil = max(muteUntil, now + duration + echoTail)
-            return
-        }
-        status = "正在记你的声音"
-        // 整段只算一个样本，画像太窄：真到锁屏上分数就在阈值边上抖，稍微变个语气就被当成陌生人。
-        // 按停顿切成一句一段，每段一个样本；一口气念完没有停顿就固定切。
-        let segments = DesktopVoiceTurn.enrollmentSegments(audio)
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            var result: [String: Any]?
-            for segment in segments {
-                if let enrolled = DesktopVoiceVoiceprint.enroll(segment, label: "owner") { result = enrolled }
-            }
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if result != nil {
-                    self.voiceprintEnrolled = true
-                    self.voiceprintThreshold = result.flatMap { Self.number($0["threshold"]) } ?? self.voiceprintThreshold
-                    self.voiceprintScore = nil
-                    self.speakHeld("记住了，锁屏时只认你")
-                } else {
-                    self.speakHeld("没记上，回头再试一次")
-                }
-                self.status = self.waiting
-            }
-        }
-    }
-    private func forgetVoiceprint() {
-        // 忘掉声纹等于把锁打开：只能由解锁状态下的人来做。
-        guard !LockScreenInput.locked else {
-            speakHeld("解锁之后才能忘掉声纹")
-            status = waiting
-            returnToWake()
-            return
-        }
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let cleared = DesktopVoiceVoiceprint.clear()
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if cleared {
-                    self.voiceprintEnrolled = false; self.voiceprintScore = nil
-                    self.speakHeld("忘了，锁屏不再只认你")
-                } else {
-                    self.speakHeld("没清掉，稍后再试")
-                }
-                self.status = self.waiting
-            }
-        }
-    }
-    private func speakHeld(_ phrase: String) {
-        stopSpeaking()
-        let duration = feedback(phrase)
-        muteUntil = max(muteUntil, now + duration + echoTail)
-    }
-    /// 启动时问一次“注册过没有”；桥没起也不影响别的功能。
-    private func refreshVoiceprint() {
-        guard settings.voiceprintEnabled else { voiceprintEnrolled = false; return }
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let health = DesktopVoiceVoiceprint.health()
-            DispatchQueue.main.async {
-                guard let self else { return }
-                // 桥没响应时按画像文件判：注册过就继续要求认人，绝不因为桥坏了就静默放行。
-                self.voiceprintEnrolled = health.map { $0["enrolled"] as? Bool ?? false } ?? DesktopVoiceVoiceprint.hasProfile
-                self.voiceprintThreshold = Self.number(health?["threshold"])
-            }
-        }
-    }
-    private static func number(_ value: Any?) -> Double? {
-        if let number = value as? NSNumber { return number.doubleValue }
-        if let number = value as? Double { return number }
-        return nil
-    }
-
     private func keep(_ text: String) throws { try DesktopVoiceSettings.saveDraft(text); draft = text }
     /// 上一轮失败留下的草稿不再挡住新一轮收音；原文与票据挪到较早未发送槽，仍可幂等发送。
     @discardableResult private func park() -> Bool {

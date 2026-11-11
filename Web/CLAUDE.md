@@ -180,5 +180,5 @@ Android 0.4任务优先：settings.js只读轮询screen/state，locked显示首�
 恢复交互（2026-10-12）：TaskRecovery依据持久事实决定“再试一次/补充信息/调整要求/核对结果”，换件事保持低强调。首页和全屏输入旁明确原目标与新话题，切换保留草稿；未知提交不换票据，核对上次提交不消费新草稿；显式补充沿用原任务，普通耳机输入保留语义关系判断。详见docs/sprite-recovery-interaction.md。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
 
-console-voice.js: 旧输入按队列逐条处理并显示剩余条数； 复用console-actions的pocketdeskConsoleRequest管理小E配置、唤醒应答轮换池、神经/本机音色分组清单、语速档位与试听、EasyInput收音状态与当前输入源、键盘自报能力（扬声器能力只转述不上线）、当前与较早未发送输入；音色下拉按来源分组，定时状态不覆盖配置草稿，发送/丢弃均显式点击。
+console-voice.js: 与 console.html 配合保存小E连续对话开关；旧输入按队列逐条处理并显示剩余条数； 复用console-actions的pocketdeskConsoleRequest管理小E配置、唤醒应答轮换池、神经/本机音色分组清单、语速档位与试听、EasyInput收音状态与当前输入源、键盘自报能力（扬声器能力只转述不上线）、当前与较早未发送输入；音色下拉按来源分组，定时状态不覆盖配置草稿，发送/丢弃均显式点击。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
