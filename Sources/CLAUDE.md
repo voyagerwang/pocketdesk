@@ -65,7 +65,7 @@ AgentAppDispatch.swift: 新建/继续派单编排；默认 new，只有显式 cu
   - 补充：派单焦点恢复：AgentAppDispatch 激活后沿用 InputFocus 的 AX 聚焦；未确认时使用 TargetWindowLocator（排除搜索/下拉）定位可见输入框，再经共享 PointerExecutor 点击并延迟核验。未找到、被遮挡、用户移动鼠标、失去租约或焦点未确认均不清空/提交；不使用窗口底部猜测坐标。派单去重检查与持久标记先于清空，防止重复调用擦除草稿。Server 仅注入已有指针执行器，普通手动选应用保留原定位策略。
   - 补充：Codex 派单身份修订：AgentAppDispatch 除配置名称外识别 com.openai.codex（可安装为 ChatGPT.app），路径的真实 bundle ID 优先于旧配置；多候选仍拒绝。Server 静态白名单新增 recipients.js。
 AgentAppProfile.swift: 应用身份和会话模式的纯策略；真实 bundle ID 优先于名称，兼容 Workbody/z code 别名，定义各应用空白框与新页面证据及 Codex、WorkBuddy 官方深链编码；Cola 的编码侧栏新建动作历次改名为「新建项目」→「新建会话」→1.5.3 的「新建子聊天」（侧栏本身也改称「子聊天/Side chats」），三者都认；新页证据认空会话欢迎句，1.5.3 已从「告诉 Cola，你想在这个项目里做点什么」简化为「告诉 Cola，你想做点什么」，空侧栏启动页另认「开始新聊天」。
-AgentControlAuthority.swift: 运行中任务的来源授权投影，独立核对桌面私有身份/自动语音许可及WS租约；锁屏语音放行完整任务但按lockedBlockedTools逐条拒绝桌面类工具，设备开关仍走零模型快路。
+AgentControlAuthority.swift: 锁屏被拒的任务交 DesktopVoice.noteLockBlocked 记下，resumedAfterUnlock 的同一任务放行桌面工具；运行中任务的来源授权投影，独立核对桌面私有身份/自动语音许可及WS租约；锁屏语音放行完整任务但按lockedBlockedTools逐条拒绝桌面类工具，设备开关仍走零模型快路。
 AgentDesktopActions.swift: 小精灵固定桌面动作协议、运行应用与窗口身份解析、AX 精确关闭及输入框全选/清空事务；应用隐藏/正常退出使用 AppKit，不强退或处理保存提示。输入按键注入复用 InputExecutor，选区与清空结果必须读回核验。
   - 补充：桌面操作扩展：AgentDesktopActions 提供 list_actions/menu_action/arrange_window；窗口身份由有界的进程内 AX 元素注册表维护，重复标题优先使用 id。InputExecutor 入队前固定窗口。AgentRunner 工具 schema 从同一动作目录生成，只读发现不去重，写动作仍持久去重；菜单 sent 直接返回真实回执并停止本轮依赖动作。
 AgentDispatchQueue.swift: 应用投递阶段的 FIFO 短事务调度；只排队投递，不限制模型任务或外部 Agent 并发，重复释放不提前启动下一项；不发键、不读桌面、不持久化。
@@ -148,13 +148,13 @@ MijiaSensorQuery.swift: 完整环境读数单句免模型直达受控Gateway；�
 
 ## 桌面小精灵展示与语音
 
-DesktopVoice.swift: 一句话唤醒与连续对话（2026-11-06）：只喊名字后等 oneShotGrace 静音才交给豆包，名字后紧接着有话就由本机听完整句；派单起、播报/安静收尾后开 continueWindow 秒免唤醒窗口（播报结束后才算、锁屏/开关关闭不开），窗口内未喊名字的话提交前过 addressed，不像在跟它说就丢弃并关窗，谢谢/退下/好的结束本轮；voiceDebug.follows/followRejects/oneShots/conversationOpen。收尾播报先念问题，念完开 8 秒免唤醒回答窗口（播报静音结束后才算、锁屏不开、重喊名字作废），回答经 continueTask 接回原任务，voiceDebug.replies 计数；累计转写只更新正文，新唤醒先保留旧半句再开新轮；豆包接管正文（只喊名字那一声交给输入法系统 ASR，只能用系统默认输入设备，本地识别并行听同一段作兜底；豆包是按住说话，本地按停顿替它松手再走窗关+文字稳定收尾，失败/无字/超时回落本地那份（两份转写进正文前都剥句首唤醒名，名字留在正文里会认不出固定短口令、退回模型多轮），唤醒后无人开口8秒收回），关掉则为纯本机模式（键盘优先、断开超2秒换电脑麦克风兜底、键盘恢复即切回且说话中途不换源，播报静音余量按源放宽）；播报期间仅新唤醒可打断；分别跟踪后台任务，收音中延后结果播报；恢复复用TaskService，锁屏照常派任务（设备开关仍走零模型快路，需解锁屏幕的工具在工具层逐条拒绝），不再整句静默封存；锁屏语音直接复用任务提交，不采集或校验声纹；锁屏这一段单独调过：豆包接管在锁屏时直接返回 false（输入法要有前台焦点），因此锁屏优先走系统云端识别、失败一次退回本机直到解锁重试（voiceDebug.asr 显示 cloud/on-device），唤醒应答改成极短提示音不念句子（念了会把紧接着的正文按回声丢掉，voiceDebug.mutedDrops 记这个数）。
+DesktopVoice.swift: 回执与进度（2026-11-17）：提交时按原话算好回执并预先合成，说过回执的看得见的事结尾也收口，12/40 秒报进度，迟到结果先点名；锁屏被拒的任务收尾说固定句并记下，解锁通知后 15 分钟内最近一件经 continueTask 接回原任务（resumed 仅在屏幕开着时放行桌面工具，再锁即收回），voiceDebug.resumes/unlockDeferred。一句话唤醒与连续对话（2026-11-06）：只喊名字后等 oneShotGrace 静音才交给豆包，名字后紧接着有话就由本机听完整句；派单起、播报/安静收尾后开 continueWindow 秒免唤醒窗口（播报结束后才算、锁屏/开关关闭不开），窗口内未喊名字的话提交前过 addressed，不像在跟它说就丢弃并关窗，谢谢/退下/好的结束本轮；voiceDebug.follows/followRejects/oneShots/conversationOpen。收尾播报先念问题，念完开 8 秒免唤醒回答窗口（播报静音结束后才算、锁屏不开、重喊名字作废），回答经 continueTask 接回原任务，voiceDebug.replies 计数；累计转写只更新正文，新唤醒先保留旧半句再开新轮；豆包接管正文（只喊名字那一声交给输入法系统 ASR，只能用系统默认输入设备，本地识别并行听同一段作兜底；豆包是按住说话，本地按停顿替它松手再走窗关+文字稳定收尾，失败/无字/超时回落本地那份（两份转写进正文前都剥句首唤醒名，名字留在正文里会认不出固定短口令、退回模型多轮），唤醒后无人开口8秒收回），关掉则为纯本机模式（键盘优先、断开超2秒换电脑麦克风兜底、键盘恢复即切回且说话中途不换源，播报静音余量按源放宽）；播报期间仅新唤醒可打断；分别跟踪后台任务，收音中延后结果播报；恢复复用TaskService，锁屏照常派任务（设备开关仍走零模型快路，需解锁屏幕的工具在工具层逐条拒绝），不再整句静默封存；锁屏语音直接复用任务提交，不采集或校验声纹；锁屏这一段单独调过：豆包接管在锁屏时直接返回 false（输入法要有前台焦点），因此锁屏优先走系统云端识别、失败一次退回本机直到解锁重试（voiceDebug.asr 显示 cloud/on-device），唤醒应答改成极短提示音不念句子（念了会把紧接着的正文按回声丢掉，voiceDebug.mutedDrops 记这个数）。
   - 补充：口播（2026-11-02）：speakEarly 在流式口播行写完时先念语音自己提交的任务（收音中、看得见的动作不念），收尾同一句不再念；没提前念的收尾时念 task.spoken 总括而不是截正文第一句；voiceDebug.previews 计数。
 DesktopVoiceHTTP.swift: 复用Server严格本机同源边界，主线程管理语音配置（唤醒词/应答/音色）/状态/重连/试听和当前与较早未发送输入，无远程音频或转写注入接口。
 DesktopVoiceSettings.swift: 连续对话开关默认开启；唤醒/音色/锁屏和精确设备配置；忽略旧声纹字段；当前草稿与旧输入队列携稳定票据，旧单槽迁移，先持久入队再清当前正文。
 DesktopVoiceSpeech.swift: 异步神经合成与取消代际；64项逐项淘汰缓存保留预渲染短句，迟到结果只缓存不播，失败用本机音色。
 DesktopVoiceTTS.swift: 本机回环的音色服务边界（46390，不与46387/46388/46389共用）；按需拉起 scripts/tts-say.py 并复用已在跑的实例，失败退避30秒；只按「给我这句话的音频」办事，不把云端协议与令牌搬进客户端。
-DesktopVoiceTurn.swift: 一句话唤醒延迟、免唤醒窗口与说话意图判定；对话感纯策略——spokenQuestion 把追问及两三个短候选念成一句、多则指屏幕，spokenReason/conversational 念失败第一句人话原因（错误码/英文/未知错误不念，已发出未核实不编话），spokenGist 长回答念首句结论并指屏幕，闲聊 greet/identity/praise/okay 就地回应且在回答问题时让给任务；唤醒片段与累计转写去重、正文边界、豆包与本地兜底转入正文前剥句首唤醒名、避免播报自唤醒、停顿与简短应答的纯策略。
+DesktopVoiceTurn.swift: receipt/lateLead/progress/slow/lockDeferred/unlockResume/recentAcks 等回执与进度话术；一句话唤醒延迟、免唤醒窗口与说话意图判定；对话感纯策略——spokenQuestion 把追问及两三个短候选念成一句、多则指屏幕，spokenReason/conversational 念失败第一句人话原因（错误码/英文/未知错误不念，已发出未核实不编话），spokenGist 长回答念首句结论并指屏幕，闲聊 greet/identity/praise/okay 就地回应且在回答问题时让给任务；唤醒片段与累计转写去重、正文边界、豆包与本地兜底转入正文前剥句首唤醒名、避免播报自唤醒、停顿与简短应答的纯策略。
   - 补充：summary 洗掉括号/机器时间后照念模型总括，空或超长交回挑句规则；receiptDelay 延到 2.5 秒，不抢在快速结果前。
 EasyInputAudio.swift: 只读0003固件版本/布尔能力白名单诊断，不披露键位/Wi-Fi/身份；仅连接指定EasyInput音频服务，绑定唯一设备、订阅/启停/保活并提供PCM；超时/零声音/断流按1/2/4/8→15秒退避自动重连，只在蓝牙授权被拒、多只同名设备、固件缺音频通道、绑定落盘失败时放弃；不改固件/键位/Wi-Fi。
 EasyInputAudioWire.swift: EIBC控制及EIBA/IMA ADPCM严格解码、会话/序号校验；纯协议不发现设备或执行任务。

@@ -13,6 +13,21 @@ final class DesktopVoice: NSObject {
     private static let lockedSession = UUID().uuidString
     private static let permissionLock = NSLock()
     private static var lockedPermits = Set<String>()
+    /// 锁屏时被拒掉桌面类工具的任务：收尾时改说“解锁后我接着办”，解锁后自动续上。
+    private static var lockBlocked = Set<String>()
+    /// 已在解锁后续上的任务：屏幕确实开着时，桌面类工具对它放行。
+    private static var resumed = Set<String>()
+    static func noteLockBlocked(_ taskId: String) {
+        permissionLock.lock(); lockBlocked.insert(taskId); permissionLock.unlock()
+    }
+    private static func takeLockBlocked(_ taskId: String) -> Bool {
+        permissionLock.lock(); defer { permissionLock.unlock() }
+        return lockBlocked.remove(taskId) != nil
+    }
+    static func resumedAfterUnlock(_ task: AgentTask) -> Bool {
+        permissionLock.lock(); defer { permissionLock.unlock() }
+        return resumed.contains(task.id) && !LockScreenInput.locked
+    }
     static func authorizes(_ task: AgentTask) -> Bool {
         permissionLock.lock(); defer { permissionLock.unlock() }
         return task.controlSession == lockedSession && lockedPermits.contains(task.requestId)
@@ -120,6 +135,14 @@ final class DesktopVoice: NSObject {
     /// 这一轮是在连续对话窗口里、没喊名字开始的；提交前要先过“是不是在跟我说”这一关。
     private var following = false
     private var followCount = 0, followRejects = 0, oneShotCount = 0
+    /// 回执与进度：这一件要念的回执（提交时就算好并预先合成）、每件事的开始时刻、是否念过回执、进度报到第几次。
+    private var pendingReceipt: String?
+    private var taskStarted: [String: TimeInterval] = [:]
+    private var receiptSpoken = Set<String>()
+    private var progressStage: [String: Int] = [:]
+    /// 锁屏时没做成、等解锁后接着做的任务（taskId → 记下的时刻）。
+    private var unlockDeferred: [String: TimeInterval] = [:]
+    private var resumeCount = 0
     /// 流式口播已经提前念过的任务：收尾时同一句就不再念第二遍。
     private var previewed: [String: String] = [:]
     private var previewCount = 0
@@ -160,6 +183,8 @@ final class DesktopVoice: NSObject {
     var testMutedDrops: Int { mutedDrops }
     var testASR: String { asrMode }
     func testSegment() { segmentWakeCount = 0 }
+    func testUnlocked() { unlocked() }
+    func testLocked() { locked() }
     var testParked: String { parked }
     #endif
     private var now: TimeInterval {
@@ -230,6 +255,8 @@ final class DesktopVoice: NSObject {
         for pool in DesktopVoiceTurn.outcomes.values { for phrase in pool { warm(phrase) } }
         for pool in DesktopVoiceTurn.replies.values { for phrase in pool { warm(phrase) } }
         for phrase in Self.previewLines { warm(phrase) }
+        for pool in [DesktopVoiceTurn.progress, DesktopVoiceTurn.slow, DesktopVoiceTurn.lockDeferred,
+                     DesktopVoiceTurn.unlockResume, DesktopVoiceTurn.recentAcks] { for phrase in pool { warm(phrase) } }
         // 开关答案带设备名，值也简单，先合成好，别让"开灯"等一句合成。
         for phrase in ["灯开了", "灯关了", "开好了", "关好了", "插座开了", "插座关了"] { warm(phrase) }
     }
@@ -248,7 +275,7 @@ final class DesktopVoice: NSObject {
          "voiceDebug": ["running": running, "capturing": capturing, "finishing": finishing,
              "bodyCharacters": body.count, "committedCharacters": prefix.count, "partialCharacters": partial.count,
              "quickSubmissions": quickCount, "rewakes": rewakeCount, "replies": replyCount, "previews": previewCount,
-             "follows": followCount, "followRejects": followRejects, "oneShots": oneShotCount, "conversationOpen": conversationOpen, "recoveries": recoverCount,
+             "follows": followCount, "resumes": resumeCount, "unlockDeferred": unlockDeferred.count, "followRejects": followRejects, "oneShots": oneShotCount, "conversationOpen": conversationOpen, "recoveries": recoverCount,
              "wakes": wakeCount, "finals": finalCount, "emptyFinals": emptyFinalCount, "submitted": submittedCount, "lastTaskId": lastTaskID,
              "mutedDrops": mutedDrops, "asr": asrMode], "receivingAudio": receivedAudio && running, "draft": draft, "parked": parked,
             "parkedCount": (try? DesktopVoiceSettings.parkedRecords().count) ?? 0,
@@ -589,7 +616,10 @@ final class DesktopVoice: NSObject {
             muteUntil = max(muteUntil, now + 0.25)
             return
         }
-        let phrase = DesktopVoiceTurn.ack(settings.ackPhrase, avoiding: lastAck, roll: Int.random(in: 0..<64))
+        // 一分钟内刚聊过：不再“我在”，换成接着聊的口气。
+        let recent = lastTaskAt > 0 && now - lastTaskAt < 60 && !DesktopVoiceSettings.pool(settings.ackPhrase).isEmpty
+        let phrase = recent ? DesktopVoiceTurn.pick(DesktopVoiceTurn.recentAcks, avoiding: lastAck, roll: Int.random(in: 0..<64))
+            : DesktopVoiceTurn.ack(settings.ackPhrase, avoiding: lastAck, roll: Int.random(in: 0..<64))
         lastAck = phrase
         guard !phrase.isEmpty else { return }
         stopSpeaking()
@@ -652,10 +682,11 @@ final class DesktopVoice: NSObject {
         for id in pendingTasks {
             if let task = TaskStore.task(id: id) {
                 if !capturing && id == taskID { presentTask(task) }
+                if id == taskID, [TaskStatus.accepted, .running, .verifying].contains(task.status) { reportProgress(id) }
                 if ![TaskStatus.accepted, .running, .verifying].contains(task.status) {
                     pendingTasks.remove(id)
                     if id == taskID { taskID = nil; receiptPending = false }
-                    Self.permissionLock.lock(); Self.lockedPermits.remove(task.requestId); Self.permissionLock.unlock()
+                    Self.permissionLock.lock(); Self.lockedPermits.remove(task.requestId); Self.resumed.remove(task.id); Self.permissionLock.unlock()
                     if capturing || speaking() { deferredTasks.append(task) }
                     else { presentTask(task); announce(task) }
                     if draft.isEmpty && !capturing { status = waiting }
@@ -800,6 +831,11 @@ final class DesktopVoice: NSObject {
             // 多数任务不会一提交就完；一秒多还没结果就先说一声，不让人干等。
             receiptPending = settings.ackEnabled
             receiptAt = now + DesktopVoiceTurn.receiptDelay
+            taskStarted[task.id] = now; progressStage[task.id] = 0
+            // 回执复述他的话（“好，打开微信”）；现在就合成好，2.5 秒后真要念时就是设定的音色、没有等待。
+            let receipt = DesktopVoiceTurn.receipt(for: text, roll: Int.random(in: 0..<64))
+            pendingReceipt = receipt
+            if settings.ackEnabled { warm(receipt) }
             do { try keep(""); status = "执行中" }
             catch { draft = text; status = "任务已接收，草稿清理失败；请核对结果，不会重复发送。" }
             presentTask(task)
@@ -807,8 +843,10 @@ final class DesktopVoice: NSObject {
     }
     /// 任务还在跑：先把“这就去办”说出去，完成时再报结果。
     private func speakReceipt() {
-        let phrase = DesktopVoiceTurn.outcome(.receipt, avoiding: lastOutcome, roll: Int.random(in: 0..<64))
+        let phrase = pendingReceipt ?? DesktopVoiceTurn.outcome(.receipt, avoiding: lastOutcome, roll: Int.random(in: 0..<64))
+        pendingReceipt = nil
         guard !phrase.isEmpty else { return }
+        if let id = taskID { receiptSpoken.insert(id) }
         lastOutcome = phrase
         stopSpeaking()
         let duration = feedback(phrase)
@@ -829,11 +867,67 @@ final class DesktopVoice: NSObject {
         muteUntil = max(muteUntil, now + max(said + echoTail, Double(phrase.count) / 4.6 + 0.6 + (source == .system ? 0.4 : 0)))
         extendConversation(from: muteUntil)
     }
+    /// 慢的事中途报一次进度，再慢就说清楚放后台；收音中、播报中、已经先念过口播的都不插话。
+    private func reportProgress(_ id: String) {
+        guard settings.ackEnabled, !capturing, !speaking(), now >= muteUntil, previewed[id] == nil,
+              let started = taskStarted[id], let stage = progressStage[id], stage < 2 else { return }
+        let due = stage == 0 ? DesktopVoiceTurn.progressAfter : DesktopVoiceTurn.slowAfter
+        guard now - started >= due else { return }
+        progressStage[id] = stage + 1
+        receiptPending = false
+        receiptSpoken.insert(id)
+        speakLine(DesktopVoiceTurn.pick(stage == 0 ? DesktopVoiceTurn.progress : DesktopVoiceTurn.slow,
+                                        avoiding: lastOutcome, roll: Int.random(in: 0..<64)))
+    }
+    /// 说一句固定短句并留出回声余量。
+    private func speakLine(_ phrase: String) {
+        guard !phrase.isEmpty else { return }
+        lastOutcome = phrase
+        stopSpeaking()
+        let said = feedback(phrase)
+        muteUntil = max(muteUntil, now + max(said + echoTail, Double(phrase.count) / 4.6 + 0.6 + (source == .system ? 0.4 : 0)))
+    }
+    /// 解锁了：把最近一件因为锁屏没做完的事接着做（同一任务，模型看得到已经做过什么，不重复）。
+    /// 只接 15 分钟内的那一件；更早的、更多的不自动冒出来。
+    private func resumeAfterUnlock() {
+        let fresh = unlockDeferred.filter { now - $0.value <= DesktopVoiceTurn.unlockResumeWindow }
+        unlockDeferred.removeAll()
+        guard let target = fresh.max(by: { $0.value < $1.value })?.key,
+              let task = TaskStore.task(id: target), task.status.acceptsFollowUp else { return }
+        Self.permissionLock.lock()
+        Self.lockedPermits.insert(task.requestId); Self.resumed.insert(task.id)
+        Self.permissionLock.unlock()
+        do {
+            let next = try continueTask(target, DesktopVoiceTurn.unlockResumeText)
+            taskID = next.id; pendingTasks.insert(next.id); lastTaskID = next.id; lastTaskAt = now
+            taskStarted[next.id] = now; progressStage[next.id] = 0; receiptSpoken.insert(next.id)
+            resumeCount += 1
+            if settings.ackEnabled {
+                speakLine(DesktopVoiceTurn.pick(DesktopVoiceTurn.unlockResume, avoiding: lastOutcome, roll: Int.random(in: 0..<64)))
+            }
+            presentTask(next)
+        } catch {
+            Self.permissionLock.lock()
+            Self.lockedPermits.remove(task.requestId); Self.resumed.remove(task.id)
+            Self.permissionLock.unlock()
+        }
+    }
     /// 任务收尾时一句话反馈，像有人应了一声；有总括念总括，要他定夺就把问题问出来，没办成就说卡在哪。
     private func announce(_ task: AgentTask) {
         let early = previewed.removeValue(forKey: task.id)
+        let started = taskStarted.removeValue(forKey: task.id)
+        let receipted = receiptSpoken.remove(task.id) != nil
+        progressStage.removeValue(forKey: task.id)
         // 刚用语音说的那件事有了结果（念完或安静收尾）：从这句说完起再留几秒，接着说下一件不用重喊名字。
         defer { if task.id == lastTaskID { extendConversation(from: max(now, muteUntil)) } }
+        // 锁屏时有一步做不了：记下来，解锁后自动接着做；这句用固定说法，始终是设定的音色。
+        if Self.takeLockBlocked(task.id) {
+            unlockDeferred[task.id] = now
+            if !LockScreenInput.locked { resumeAfterUnlock(); return }
+            guard settings.ackEnabled else { return }
+            speakLine(DesktopVoiceTurn.pick(DesktopVoiceTurn.lockDeferred, avoiding: lastOutcome, roll: Int.random(in: 0..<64)))
+            return
+        }
         guard settings.ackEnabled else { return }
         receiptPending = false
         // “已请求但还没确认”不是失败：用户看到应用关了，我却在报“没办成”，比不说还糟。
@@ -858,13 +952,18 @@ final class DesktopVoice: NSObject {
             spoken = DesktopVoiceTurn.speakable(task.result)
         }
         // 他能立刻看见的事，办成了就不吭声；只有失败或要他定夺时才说话。
-        if DesktopVoiceTurn.perceivable(task.text), outcome == .succeeded || outcome == .unconfirmed { return }
+        // 但先说过“好，打开微信”的，结尾必须收个口，不然那句回执就像说了句空话。
+        if DesktopVoiceTurn.perceivable(task.text), outcome == .succeeded || outcome == .unconfirmed, !receipted { return }
         // 还是没有可念的：失败念原因、长回答念第一句结论，都挑不出才用固定短句。
         if spoken == nil {
             spoken = DesktopVoiceTurn.conversational(outcome, recovery: recovery,
                                                                  result: task.status == .failed ? (task.error ?? task.result) : task.result)
         }
-        let phrase = spoken ?? DesktopVoiceTurn.outcome(outcome, avoiding: lastOutcome, roll: Int.random(in: 0..<64))
+        var phrase = spoken ?? DesktopVoiceTurn.outcome(outcome, avoiding: lastOutcome, roll: Int.random(in: 0..<64))
+        // 隔了一阵才有结果，又只剩一句“办好了”：先点一下是哪件事。
+        if spoken == nil, let started, now - started >= DesktopVoiceTurn.lateAfter {
+            phrase = DesktopVoiceTurn.lateLead(task.text) + phrase
+        }
         lastOutcome = phrase
         stopSpeaking()
         let said = feedback(phrase)
@@ -922,7 +1021,14 @@ final class DesktopVoice: NSObject {
     func discardDraft() throws { guard taskID == nil else { throw CocoaError(.userCancelled) }; try keep(""); if settings.enabled { retry() } }
     @objc private func willSleep() { stop(preserve: true); status = "电脑睡眠期间已暂停" }
     @objc private func didWake() { if settings.enabled { start(requestPermission: false) } }
-    @objc private func locked() { closeConversation(); closeReplyWindow(); if !settings.allowLocked { stop(preserve: true); status = "锁屏期间已暂停" } }
-    @objc private func unlocked() { if !running && settings.enabled { start(requestPermission: false) } }
+    @objc private func locked() {
+        closeConversation(); closeReplyWindow()
+        // 又锁上了：解锁后续上的任务不再放行桌面类工具。
+        Self.permissionLock.lock(); Self.resumed.removeAll(); Self.permissionLock.unlock()
+        if !settings.allowLocked { stop(preserve: true); status = "锁屏期间已暂停" } }
+    @objc private func unlocked() {
+        if !running && settings.enabled { start(requestPermission: false) }
+        if !unlockDeferred.isEmpty { resumeAfterUnlock() }
+    }
     @objc private func willTerminate() { stop(preserve: true) }
 }

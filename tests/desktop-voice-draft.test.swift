@@ -302,6 +302,51 @@ func accept(_ text: String) -> Bool { TaskService.lockedSubmissions.contains(tex
         off.testAdvance(to:1107.1);off.testAdvance(to:1109.7)
         precondition(offIDs==1,"关掉连续对话就每次都要喊名字")
         try local.save()
+        // 回执复述原话；慢事中途报进度；说过回执的看得见的事结尾收口，隔了一阵先点名是哪件事。
+        let paced=DesktopVoice()
+        var pacedHeard:[String]=[],pacedIDs:[String]=[]
+        paced.say={t in pacedHeard.append(t);return 0.3}
+        paced.submitUnlocked={_,request in
+            var t=AgentTask(id:UUID().uuidString,requestId:request,controlSession:"native",text:"打开微信")
+            t.status = .running;TaskStore.tasks[t.id]=t;pacedIDs.append(t.id);return t
+        }
+        paced.testReceive("小E，打开微信",at:1300)
+        paced.testAdvance(to:1302.1);paced.testAdvance(to:1304.7)
+        precondition(pacedIDs.count==1,"打开微信派单")
+        paced.testAdvance(to:1307.3)
+        precondition(pacedHeard.last?.hasSuffix("打开微信")==true,"回执复述原话而不是每次“这就去办”")
+        paced.testAdvance(to:1316.8)
+        precondition(DesktopVoiceTurn.progress.contains(pacedHeard.last ?? ""),"十几秒还没好就报一次进度")
+        TaskStore.tasks[pacedIDs[0]]!.status = .succeeded
+        paced.testAdvance(to:1330)
+        precondition(pacedHeard.last?.hasPrefix("打开微信那件，")==true,"说过回执的看得见的事也要收口，隔了一阵先点名")
+
+        // 锁屏做不了的那一步：收尾说固定句（预先合成的设定音色），解锁后自动接回原任务、桌面工具放行；又锁上就收回。
+        LockScreenInput.locked=true
+        let lockFlow=DesktopVoice()
+        var lockHeard:[String]=[],resumedWith:[(String,String)]=[]
+        lockFlow.say={t in lockHeard.append(t);return 0.3}
+        lockFlow.continueTask={id,text in
+            resumedWith.append((id,text));var t=TaskStore.tasks[id]!;t.status = .running;TaskStore.tasks[id]=t;return t
+        }
+        lockFlow.testReceive("小E，打开微信",at:1400)
+        lockFlow.testAdvance(to:1402.1);lockFlow.testAdvance(to:1404.7)
+        let lockedID=((lockFlow.snapshot()["voiceDebug"] as! [String:Any])["lastTaskId"] as! String)
+        precondition(!lockedID.isEmpty,"锁屏语音照常派单")
+        DesktopVoice.noteLockBlocked(lockedID)
+        TaskStore.tasks[lockedID]=AgentTask(id:lockedID,requestId:"lock-resume",controlSession:nil,status:.needsInput,
+                                             result:"屏幕锁着，解锁后再打开微信",text:"打开微信")
+        lockFlow.testAdvance(to:1404.8)
+        precondition(DesktopVoiceTurn.lockDeferred.contains(lockHeard.last ?? ""),"锁屏做不了时说解锁后接着办")
+        LockScreenInput.locked=false
+        lockFlow.testUnlocked()
+        precondition(resumedWith.count==1 && resumedWith[0].0==lockedID && resumedWith[0].1==DesktopVoiceTurn.unlockResumeText,"解锁后自动接回原任务")
+        precondition(DesktopVoiceTurn.unlockResume.contains(lockHeard.last ?? ""),"解锁时说一声接着办")
+        precondition(DesktopVoice.resumedAfterUnlock(TaskStore.tasks[lockedID]!),"续上的任务在解锁状态下放行桌面工具")
+        lockFlow.testLocked()
+        precondition(!DesktopVoice.resumedAfterUnlock(TaskStore.tasks[lockedID]!),"又锁上就收回放行")
+        lockFlow.testUnlocked()
+        precondition(resumedWith.count==1,"同一件事只自动接一次")
         print("Desktop voice lifecycle: short command submitted once without native final; negation, rewake recovery and finalize timeout handled")
         #endif
         // ---------- 唤醒后的正文交给豆包：本地只做并行兜底 ----------

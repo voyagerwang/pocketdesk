@@ -513,6 +513,52 @@ enum DesktopVoiceTurn {
     /// 事情没这么快办完时，多久之后先说一句“这就去办”。
     /// 1.2 秒太早：零模型快路与流式口播常在一两秒内就到，先说“这就去办”紧接着又报结果，听起来像连珠炮。
     static let receiptDelay: TimeInterval = 2.5
+
+    // MARK: - 回执、进度与“解锁后接着办”：让人一直知道它在干什么
+    //
+    // 以前每次都是同一句“这就去办”，然后看得见的事办成了就不吭声——听起来像说了句空话。
+    // 通行做法：回执复述用户要做的事（隐式确认）；慢的事中途报一次进度（Alexa Progressive Response）；
+    // 说过“这就去办”的，结尾一定要收口；隔了一阵才出结果时先点一下是哪件事。
+
+    /// 能直接复述的指令开头：复述“打开微信”这类动作，听着就是在接话，而不是念模板。
+    static let receiptVerbs = ["打开", "关", "开", "记", "发", "提醒", "设", "定", "叫", "放", "播放", "新建", "创建", "安排", "整理", "锁", "退出", "切", "派", "让", "给", "搜"]
+    static let receiptAsks = ["查", "看看", "看一下", "有没有", "什么", "几点", "多少", "吗", "呢", "怎么", "哪"]
+    /// 回执：问句说“我查一下”，短动作复述原话（“好，打开微信”），长句或说不清的才用通用短句。
+    static func receipt(for command: String, roll: Int = 0) -> String {
+        var core = bare(command).trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、 "))
+        for lead in ["帮我把", "帮我", "麻烦你", "麻烦", "请你", "请", "你"] where core.hasPrefix(lead) {
+            core = String(core.dropFirst(lead.count)); break
+        }
+        let pick = abs(roll)
+        if receiptAsks.contains(where: { core.contains($0) }) {
+            return ["我查一下", "我看看哦", "稍等，我查查"][pick % 3]
+        }
+        if (2...10).contains(core.count), receiptVerbs.contains(where: { core.hasPrefix($0) }) {
+            return ["好，", "行，", "嗯，"][pick % 3] + core
+        }
+        return ["好的，这就去办", "行，我去弄", "收到，马上"][pick % 3]
+    }
+    /// 慢的事中途报一次进度、再慢就说清楚放后台：不让人对着安静的电脑干等。
+    static let progressAfter: TimeInterval = 12
+    static let slowAfter: TimeInterval = 40
+    static let progress = ["还在弄，稍等一下", "有点慢，我还在处理", "快好了，再等我一下"]
+    static let slow = ["这件事比较慢，我先放后台，好了告诉你", "还要一会儿，好了我叫你"]
+    /// 隔了一阵才出结果：先点一下是哪件事，再说结论。短指令直接点名，长的说“刚才那件事”。
+    static let lateAfter: TimeInterval = 15
+    static func lateLead(_ command: String) -> String {
+        var core = bare(command).trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、 "))
+        for lead in ["帮我把", "帮我", "麻烦你", "请"] where core.hasPrefix(lead) { core = String(core.dropFirst(lead.count)); break }
+        return (2...8).contains(core.count) ? core + "那件，" : "刚才那件事，"
+    }
+    /// 锁屏做不了的那一步：固定说法（可预先合成，始终是设定的音色），并告诉他解锁后会自动接着做。
+    static let lockDeferred = ["屏幕锁着，这一步得解锁才能做，解锁后我接着办", "电脑锁着呢，你解锁了我马上接着做"]
+    static let unlockResume = ["解锁了，我接着办", "好，接着刚才那件做"]
+    /// 解锁后续接原任务时交给模型的话：只补没做的，已经做完的不重复。
+    static let unlockResumeText = "电脑已经解锁了。请接着完成刚才因为锁屏没做的那一步；已经做完的部分不要重复。"
+    /// 解锁后多久之内还算“刚才那件事”，过了就不自动接着做，免得解锁时冒出一件早忘了的事。
+    static let unlockResumeWindow: TimeInterval = 15 * 60
+    /// 刚聊过一会儿又喊名字：不再说“我在”，换成接着聊的口气。
+    static let recentAcks = ["嗯？", "你说", "还有什么？"]
     /// 豆包接管正文的硬闸：这么久没有任何结果就交回本地已经并行听到的那份。
     /// 真正的“它没起来”由接收框那层几秒内就判定，这里只防一条链路卡死。
     static let dictationBudget: TimeInterval = 60

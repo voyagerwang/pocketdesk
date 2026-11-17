@@ -275,3 +275,7 @@ desktop-voice-speech.test.swift: 真实发声器异步合成不阻塞、取消�
 model-stream.test.swift: 替身 URLProtocol 驱动真实 ModelClient：SSE 半行跨块、增量拼出 content 与分块工具参数、末块用量与缓存命中、口播行写完只通知一次、服务端拒收流式参数时退回整段一次、请求体键排序逐字节稳定；SpokenSummary 拆分边界；AgentRunner 系统提示词逐字静态、事实在独立消息、口播拆出与缓存命中累计。不联网、不调真实模型。
 自动测试（2026-11-02）：.github/workflows/tests.yml 每次推送运行；scripts/run-script-tests.sh 在 Linux 跑全部 Node 回归与不依赖浏览器/SDK 的 Python 回归，scripts/run-swift-tests.sh 在 macOS 先整包编译，再把 Sources 编成可测试静态库供不自带替身的测试 @testable 链接，自带替身的测试由 scripts/swift-test-deps.py 现算依赖闭包单独编译；需要图形会话/辅助功能/冻结协议包的测试列为非阻塞。Playwright 浏览器回归与需要 miservice SDK 的小爱测试暂不在 CI。
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+
+tts-say.test.py: 注入假 edge_tts 驱动真实 scripts/tts-say.py：系统代理失败换直连重试一次、直连成功后优先直连、两条都失败报错带两条原因、no_proxy 只在直连那一句期间设置并恢复用户原值；不联网、不出声。
+desktop-voice-draft 补充（2026-11-17）：回执复述原话、12 秒报进度、说过回执的看得见的事收口并先点名迟到的那件；锁屏被拒收尾说固定句、解锁后自动接回原任务一次、续上任务解锁时放行再锁收回。desktop-voice-policy 补充回执/迟到点名纯规则；desktop-voice-authority 补充锁屏被拒记账与续上放行。
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md

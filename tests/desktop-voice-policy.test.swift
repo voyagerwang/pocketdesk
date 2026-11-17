@@ -173,6 +173,14 @@ import Darwin
         check(DesktopVoiceTurn.summary("明天两个日程（11月3日），下午的撞了。") == "明天两个日程，下午的撞了", "口播总括洗掉括号与句末标点照念")
         check(DesktopVoiceTurn.summary(String(repeating: "长", count: 90)) == nil && DesktopVoiceTurn.summary(nil) == nil && DesktopVoiceTurn.summary("  ") == nil, "空的或过长的总括不念")
         check(DesktopVoiceTurn.receiptDelay >= 2, "“这就去办”不抢在快速结果前面")
+        // 回执复述他的话，不再每次都是“这就去办”；问句说“我查一下”，长句才用通用短句。
+        check(DesktopVoiceTurn.receipt(for: "小E，帮我打开微信", roll: 0) == "好，打开微信", "短动作复述原话")
+        check(DesktopVoiceTurn.receipt(for: "明天有什么日程", roll: 0) == "我查一下", "问句说我查一下")
+        check(DesktopVoiceTurn.receipt(for: "给张三发消息说我今天晚上晚点到家", roll: 0) == "好的，这就去办", "长句用通用短句")
+        check(DesktopVoiceTurn.receipt(for: "空调关了", roll: 0) == "好的，这就去办", "不以动作开头的不复述，免得听成已经办完")
+        check(DesktopVoiceTurn.lateLead("帮我打开微信") == "打开微信那件，" && DesktopVoiceTurn.lateLead("给张三发消息说我晚点到") == "刚才那件事，", "迟到的结果先点名是哪件事")
+        check(DesktopVoiceTurn.progressAfter < DesktopVoiceTurn.slowAfter && !DesktopVoiceTurn.progress.isEmpty, "先报进度再说放后台")
+        check(DesktopVoiceTurn.lockDeferred.allSatisfy { $0.contains("解锁") } && DesktopVoiceTurn.unlockResumeText.contains("不要重复"), "锁屏说法告诉他解锁后接着做，续接不重复已做的")
         // 连续对话窗口里“是不是在跟我说”：指令、追问、问句、对助手本人的话接；应声、闲聊、太短不接。
         for text in ["再帮我查一下天气", "关灯", "打开微信", "那后天呢", "明天有什么日程", "北京明天会下雨吗", "谢谢", "退下", "把空调关了", "给张三发消息说我晚点到", "提醒我五点开会"] {
             check(DesktopVoiceTurn.addressed(text), "连续对话接住：" + text)

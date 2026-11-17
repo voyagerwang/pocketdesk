@@ -48,18 +48,58 @@ def cache_path(text: str, voice: str, rate: str, pitch: str) -> Path:
     return CACHE / f"{digest}.mp3"
 
 
-def synth(text: str, voice: str, rate: str, pitch: str) -> bytes:
+# 走哪条路：默认跟系统代理；系统代理把 TLS 掐断时（代理节点挂了），换直连再试一次，
+# 直连成功就记住 10 分钟，免得每句都先白撞一次握手。和模型请求的换路逻辑一致。
+DIRECT_FOR = 600
+ROUTE = {"direct_until": 0.0}
+# 换直连要临时改进程环境（aiohttp 的 trust_env 从环境与系统设置读代理），同一时刻只许一个合成在跑。
+SYNTH_LOCK = threading.Lock()
+
+
+def synth_once(text: str, voice: str, rate: str, pitch: str, direct: bool) -> bytes:
     import edge_tts
 
     async def run() -> bytes:
-        communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+        try:
+            # 第一条路给短一点的连接期限，挂住的代理不至于把整句拖过 Swift 侧 10 秒的等待。
+            communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch, connect_timeout=4)
+        except TypeError:  # 旧版 edge-tts 没有 connect_timeout
+            communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
         chunks = bytearray()
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 chunks += chunk["data"]
         return bytes(chunks)
 
-    return asyncio.run(run())
+    saved = {key: os.environ.get(key) for key in ("no_proxy", "NO_PROXY")}
+    try:
+        if direct:
+            # 环境里只要有 no_proxy，urllib 就不再去读 macOS 系统代理设置，于是这一句走直连。
+            os.environ["no_proxy"] = os.environ["NO_PROXY"] = "*"
+        return asyncio.run(run())
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def synth(text: str, voice: str, rate: str, pitch: str) -> bytes:
+    with SYNTH_LOCK:
+        prefer_direct = time.time() < ROUTE["direct_until"]
+        errors = []
+        for direct in ([True, False] if prefer_direct else [False, True]):
+            try:
+                audio = synth_once(text, voice, rate, pitch, direct)
+            except Exception as error:  # 网络、TLS、服务端：换另一条路再试一次
+                errors.append(("直连" if direct else "系统代理") + "：" + str(error)[:120])
+                continue
+            if audio:
+                ROUTE["direct_until"] = time.time() + DIRECT_FOR if direct else 0.0
+                return audio
+            errors.append(("直连" if direct else "系统代理") + "：没有音频")
+        raise RuntimeError("；".join(errors))
 
 
 def speak(text: str, voice: str, rate: str, pitch: str, use_cache: bool = True) -> bytes:

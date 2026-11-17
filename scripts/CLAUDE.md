@@ -17,7 +17,7 @@ setup-mijia.sh: 米家可选依赖安装与电脑扫码入口；固定 SDK 5.0.0
 install-headset-services.py: 安装脚本的用户级服务交接；自测与映射核验通过后部署 launchd，保留旧服务和旧 App 备份，恢复 PocketDesk 登录启动。
 sync-orb-svg.js: 比对 Web 球体引擎与 orb.svg 静态帧的几何、渐变和来源契约；仅检查，不重新生成或手改素材。
 
-tts-say.py: 小E神经音色的回环合成桥（46390，避开 46387/46388/46389）；固定音色名/语速/音高参数与200字上限，同一句同参数只向云端要一次并写磁盘缓存，失败回502让Swift退化到本机音色；协议与令牌留在Python侧，升级靠pip而不是改客户端。
+tts-say.py: 系统代理失败时直连重试一次、直连成功记住 10 分钟（换直连期间临时设 no_proxy 并串行合成）；小E神经音色的回环合成桥（46390，避开 46387/46388/46389）；固定音色名/语速/音高参数与200字上限，同一句同参数只向云端要一次并写磁盘缓存，失败回502让Swift退化到本机音色；协议与令牌留在Python侧，升级靠pip而不是改客户端。
 
 build-session-probe.sh: 构建独立本机会话验证应用和临时 Aqua LaunchAgent；RUN.txt 明确先注册 Launch Services 再启动，确保 TCC 能定位应用；prelogin/baseline 只改变 Mach-O 预登录标记，保留相同签名身份；不自动启动、不安装 root 服务、不改正式应用。
 

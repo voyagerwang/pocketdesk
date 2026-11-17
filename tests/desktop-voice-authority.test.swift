@@ -12,6 +12,10 @@ enum DesktopVoice {
     static var permitted = false
     static func authorizes(_ t: AgentTask) -> Bool { permitted && lockedTask(t) }
     static func lockedTask(_ t: AgentTask) -> Bool { t.controlSession == "voice-private" }
+    static var resumed = Set<String>()
+    static var blocked: [String] = []
+    static func resumedAfterUnlock(_ t: AgentTask) -> Bool { resumed.contains(t.id) }
+    static func noteLockBlocked(_ id: String) { blocked.append(id) }
 }
 enum AgentRunner {
     enum Usage { case zero }
@@ -55,6 +59,11 @@ enum AgentRunner {
             check(AgentControlAuthority.lockedToolRefusal(taskId:"t1",tool:allowed) == nil,"锁屏放行：\(allowed)")
         }
         check(AgentControlAuthority.lockedToolRefusal(taskId:"missing",tool:"open_app") == nil,"未知任务不冒充锁屏拒绝")
+        check(DesktopVoice.blocked.contains("t1"),"被锁屏拒掉的任务记下来，解锁后才能接着做")
+        DesktopVoice.resumed.insert("t1")
+        check(AgentControlAuthority.lockedToolRefusal(taskId:"t1",tool:"open_app") == nil,"解锁后续上的同一任务放行桌面工具")
+        DesktopVoice.resumed.remove("t1")
+        check(AgentControlAuthority.lockedToolRefusal(taskId:"t1",tool:"open_app")?.contains("自动接着做") == true,"没续上的仍然拒绝，并告诉模型解锁后会接着做")
 
         // 非锁屏来源不受这套限制，也不留桌面工具的拒绝。
         var unlocked = AgentTask(controlSession:"ws-active")

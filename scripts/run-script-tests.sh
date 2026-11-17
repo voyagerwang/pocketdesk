@@ -16,6 +16,7 @@ PYTHON_TESTS=(
   tests/mijia-sensor.test.py
   tests/xiaoai-intent.test.py
   tests/xiaoai-audio.test.py
+  tests/tts-say.test.py
 )
 
 passed=0; failed=()
